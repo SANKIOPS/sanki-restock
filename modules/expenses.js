@@ -52,6 +52,15 @@ const expenseRefunds = require('./expense-refunds');
 const expenseLoans = require('./expense-loans');
 const expenseRefundRoutes = require('./expense-refunds-routes');
 const { expenseFinancialLock } = require('./expense-financial-lock');
+const bankAmountAuthority = require('./bank-amount-authority');
+const bankAmountAuthorityPolicy = require('./bank-amount-authority-policy')(bankAmountAuthority, {
+  accountEligible: draft => isBankLedgerName(draft.account) && !creditCardByAccount(draft.account) && draft.summary?.accountType !== 'credit_card' && !/cash|wallet|clearing|services|^paytm$|^velocity$/i.test(String(draft.account || '')),
+  reference: reconciliationReference,
+  identity: reconciliationIdentityMatches,
+  knownCharge: (bank, movement, draft) => !!reconciliationCandidate(bank,movement,draft.matchingPolicy,draft.account)?.axisTransferCharge,
+  movements: (store, draft) => appBankMovements(store, draft.account, draft.nature),
+  options: bankAmountAuthorityOptions
+});
 const { LINK_TOLERANCE_CENTS, transactionSuffix, isOriginalPaymentOrder, reviewedUnpostedSettlements, matchPayoutBank } = require('./paytm-accounting');
 const { roundingReview, approvedBaseAmount } = require('./paytm-rounding');
 const { returnResolutionView } = require('./paytm-refund-resolutions');
@@ -2243,11 +2252,12 @@ router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{
   if(!isOwner(req)){
     if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot request finalization for this reconciliation.'});
     const view=draftReconciliation(s,draft);if(view.unresolved)return res.status(409).json({success:false,error:view.unresolved+' difference(s) still need a decision.'});
-    const request=pending||{id:'BRA-'+Date.now(),draftId:draft.id,nature:draft.nature,account:draft.account,from:draft.summary&&draft.summary.from||'',to:draft.summary&&draft.summary.to||'',status:'pending',requestedBy:req.user.username,requestedAt:new Date().toISOString()};request.gokwikFingerprint=view.gokwik.fingerprint;request.ownerPersonalTransferFingerprint=ownerPersonalTransferApprovalFingerprint(draft);s.bankReconciliationApprovals[request.id]=request;
+    const request=pending||{id:'BRA-'+Date.now(),draftId:draft.id,nature:draft.nature,account:draft.account,from:draft.summary&&draft.summary.from||'',to:draft.summary&&draft.summary.to||'',status:'pending',requestedBy:req.user.username,requestedAt:new Date().toISOString()};request.gokwikFingerprint=view.gokwik.fingerprint;request.ownerPersonalTransferFingerprint=ownerPersonalTransferApprovalFingerprint(draft);request.bankAmountAuthorityFingerprint=view.bankAmountAuthorityFingerprint;s.bankReconciliationApprovals[request.id]=request;
     if(!pending)audit(s,req,'BANK_RECONCILIATION_FINALIZATION_REQUESTED','bank_reconciliation',draft.id,{nature:draft.nature,account:draft.account,after:request,note:'Owner approval required before final reconciliation'});saveStore(s);
     return res.status(202).json({success:true,approvalPending:true,approval:request,error:'Final approval has been sent to the Owner.'});
   }
   const transferFingerprint=ownerPersonalTransferApprovalFingerprint(draft);
+  if(pending){const currentAmounts=draftReconciliation(s,draft).bankAmountAuthorityFingerprint;if((pending.bankAmountAuthorityFingerprint||currentAmounts)&&pending.bankAmountAuthorityFingerprint!==currentAmounts)return res.status(409).json({success:false,error:'The bank amount, linked expense or payment changed since review was submitted. Admin must resubmit the current reconciliation; nothing was posted.'});}
   if(pending&&(pending.ownerPersonalTransferFingerprint||transferFingerprint)&&pending.ownerPersonalTransferFingerprint!==transferFingerprint)return res.status(409).json({success:false,error:'The Owner personal transfer counterpart or bank evidence changed since review was submitted. Admin must resubmit the current reconciliation; nothing was posted.'});
   if(pending){if(String(b.approveRequestId||'')!==pending.id)return res.status(409).json({success:false,approvalRequired:true,approval:pending,error:'Confirm the pending Owner approval before finalizing.'});const currentGoKwik=gokwikBank.plan(s,draft,gokwikOrderList());if((currentGoKwik.items.length||pending.gokwikFingerprint)&&pending.gokwikFingerprint!==currentGoKwik.fingerprint)return res.status(409).json({success:false,error:'GoKwik report, order funding or bank evidence changed since this 0437 review was submitted. Admin must resubmit the current bank reconciliation; nothing was posted.'});const original=res.json.bind(res),beforeApproval=JSON.parse(JSON.stringify(pending));res.json=payload=>{const latest=loadStore(),approval=(latest.bankReconciliationApprovals||{})[pending.id];if(approval){approval.status=payload&&payload.success?'approved':'pending';if(payload&&payload.success){approval.approvedBy=req.user.username;approval.approvedAt=new Date().toISOString();audit(latest,req,'BANK_RECONCILIATION_FINALIZATION_APPROVED','bank_reconciliation',draft.id,{nature:draft.nature,account:draft.account,before:beforeApproval,after:approval,note:'Owner approved final reconciliation'});}saveStore(latest);}return original(payload);};}
   next();
@@ -2273,6 +2283,7 @@ router.use((req,res,next)=>{
           const reportRows=draft.reconstructedFromFinalized&&draft.reconstructedFromFinalized.importIds&&draft.reconstructedFromFinalized.importIds.length?snapshot.rows:snapshot.rows.filter(x=>x.status!=='already_reconciled');
           record.statementSummary=Object.assign({},draft.summary);record.reconciliationSummary=Object.assign({},snapshot.summary);record.ledgerClosingBalance=snapshot.ledgerClosing;record.openingResolution=draft.openingResolution||null;
           record.reconciliationRows=reportRows.map(x=>{
+            if(x.bankAmountAuthority&&(after.bankAmountAuthorityApplications||{})[x.bankAmountAuthority.fingerprint]&&x.bank&&x.app)x={...x,app:{...x.app,originalAmount:x.bankAmountAuthority.originalAmount,debit:num(x.bank.debit),credit:num(x.bank.credit),date:x.bank.date,bankAmountAuthority:x.bankAmountAuthority}};
             if(x.gokwikSettlementId){const posting=(after.gokwikPostings||{})[x.gokwikSettlementId];if(posting)x={...x,app:{...x.app,id:posting.transferId,pendingPosting:false,description:'Transfer from '+gokwikAccounting.CLEARING},resolution:{action:'gokwik_settlement',reason:'GoKwik settlement and charges finalized with 0437',by:posting.postedBy,at:posting.postedAt}};}
             const r=x.resolution||{},tx=bankTransaction(x),adjustment=x.bank&&adjustments.find(a=>a.date===x.bank.date&&Math.abs(num(a.amount)-(num(x.bank.credit)-num(x.bank.debit)))<.01),settlement=x.bank&&settlements.find(a=>a.date===x.bank.date&&Math.abs(num(a.netAmount)-num(x.bank.credit))<.01);
             let decision='Reviewed',linked=[];
@@ -2285,6 +2296,7 @@ router.use((req,res,next)=>{
             else if(r.action==='timing_difference')decision='Timing difference';
             else if(r.action==='exclude')decision='Excluded';
             else if(r.action==='bank_reversal_pair')decision='Failed payment + bank reversal (net ₹0)';
+            if(x.app&&x.app.bankAmountAuthority)decision='Matched using bank amount and date · original values retained in audit';
             if(x.app&&x.app.id&&!linked.includes(x.app.id))linked.push(x.app.id);
             return{id:x.id,originalStatus:x.originalStatus||x.status,bank:x.bank?Object.assign({},x.bank,{transactionId:tx&&tx.id||''}):null,ledger:x.app?Object.assign({},x.app):null,entityTag:x.entityTag?JSON.parse(JSON.stringify(x.entityTag)):null,transactionNature:reconciliationOwnershipNature(x.entityTag&&x.entityTag.nature),decision,reason:r.reason||'',category:r.category||'',resolvedBy:r.by||record.finalizedBy,resolvedAt:r.at||record.finalizedAt,linkedRecordIds:linked,orderIds:r.orderIds||[],...(r.action==='bank_reversal_pair'?{resolutionAction:r.action,groupId:r.groupId,bankRowIds:(r.bankRowIds||[]).slice(),reversalReference:r.reference,reversalAmount:r.amount}: {})};
           });
@@ -3645,7 +3657,7 @@ router.get('/api/expenses/spending-dashboard', (req, res) => {
     if(categoryFilter&&String(e.ledger||'').trim().toLowerCase()!==categoryFilter)return;
     (e.payments || []).filter(p => !p.accountingExcluded&&paymentIsPosted(e) && inRange(String(p.date || ''))).forEach(p => {
       const account = p.account || e.account;
-      const paymentMoney=e.gokwikPostingId?roundMoney:round0;
+      const paymentMoney=e.gokwikPostingId||e.bankAmountAuthority||p.bankAmountAuthority?roundMoney:round0;
       if (!accountFilter || String(account).toLowerCase() === accountFilter) payments.push({ id:e.id, paymentId:p.id||'', reference:e.id+'/'+(p.id||'PAYMENT'), date:p.date||'', entity, kind:p.personalFunds?'Paid personally':'Vendor payment', vendor:e.vendor||'', claimant:e.claimant||e.createdBy||'', particulars:e.particulars||'', category:e.ledger||'', type:e.type||'', expenseAmount:paymentMoney(e.amount), amount:paymentMoney(p.grossPaymentAmount||p.amount),expenseAllocationAmount:paymentMoney(p.expenseAllocationAmount||p.amount),vendorAdvanceAmount:paymentMoney(p.vendorAdvanceAmount), account, paymentType:p.paymentType||e.paymentType||'', proof:p.proof||e.paymentProof||'', proofs:proofList(p.proofs,p.proof||e.paymentProof), billPhoto:e.billPhoto||'',billPhotos:proofList(e.billPhotos,e.billPhoto), qrPhoto:e.qrPhoto||'', approvedAt:e.approvedAt||'', approvedBy:e.approvedBy||'', paidBy:p.paidBy||'', contractTotal:e.isInstallment?paymentMoney(e.amount):0, contractBalance:e.isInstallment?paymentMoney(Math.max(0,num(e.amount)-num(e.paidAmount))):0 });
     });
   });
@@ -4974,7 +4986,22 @@ function reconciliationOpeningBalance(s,draft){
   if(!isSharedBankReconciliationAccount(draft&&draft.account)){const map=draft.nature==='SANKI'?(s.openingBalances||{}):(((s.openingBalancesByNature||{})[draft.nature])||{});return num(map[draft.account]);}
   const saved=s.physicalBankOpeningBalances&&s.physicalBankOpeningBalances[draft.account];if(saved!=null)return num(saved);const byNature=s.openingBalancesByNature||{};return roundMoney(num((byNature.SAMAST||{})[draft.account])+num((byNature.PERSONAL||{})[draft.account]));
 }
+function bankAmountAuthorityOptions(s,draft){
+  // The matching decision may authorize a correction within THIS unfinished
+  // draft. It never unlocks a different active draft or finalized evidence.
+  const lockStore={...s,bankReconciliationDrafts:{...(s.bankReconciliationDrafts||{})}};
+  delete lockStore.bankReconciliationDrafts[draft.id];
+  for(const field of ['bankDateOverrides','bankReconciliationLinks'])lockStore[field]=Object.fromEntries(Object.entries(s[field]||{}).filter(([,value])=>!(value&&value.provisional&&value.reconciliationDraft===draft.id)));
+  const blockedReferences=unpayBlockedReferences(lockStore);
+  return{
+    isLocked:expense=>expenseFinancialLock(lockStore,expense,{blockedReferences}),
+    isProtected:(id,record)=>transferReimbursements.protectsMovement(s,id)||gokwikAccounting.protectsMovement(s,id)||expenseLoans.protectsMovement(s,id)||expenseRefunds.protectsMovement(s,id)||!!(record&&(record.manualSaleId||record.paytmTransactionId||record.confirmedBankSplit||record.bankReconciliationEvidence))
+  };
+}
 function draftReconciliation(s,draft,options={}){
+  const view=draftReconciliationBase(s,draft,options);return view.success?bankAmountAuthorityPolicy.decorate(s,draft,view):view;
+}
+function draftReconciliationBase(s,draft,options={}){
   if(!draft.originalStatementPeriod&&repairScreenshotDraftDates(draft)&&!options.readOnly)saveStore(s);
   if(!draft.originalStatementPeriod&&stagePaytmSettlementsFromAxisDraft(s,draft)&&!options.readOnly)saveStore(s);
   const statement=draft.summary||(draft.summary={}),bank=draft.transactions||[],book=(s.bankStatements||{})[bankStatementBookKey(draft.nature,draft.account)]||{},continuityCutoff=String(book.reconciledThrough||''),effectiveFrom=continuityCutoff&&(!statement.to||continuityCutoff<statement.to)?continuityCutoff:'',priorLinkedIds=new Set();
@@ -5496,6 +5523,23 @@ router.post('/api/expenses/bank-statements/retag',(req,res)=>{
   const after=targetNature?Object.assign({},draft.transactionOwnership[rowId]):{nature:'',reason,by:req.user.username,at,source:'manual_clear'};draft.decisionAudit=Array.isArray(draft.decisionAudit)?draft.decisionAudit:[];draft.decisionAudit.push({action:'retag_transaction_ownership',rowId,before:previous,after,reason,by:req.user.username,at});
   audit(s,req,'BANK_RECONCILIATION_TRANSACTION_RETAGGED','bank_reconciliation',draft.id,{nature:targetNature||draft.nature,account:draft.account,before:previous,after,sourceCorrections:sourceCorrection?sourceCorrection.changes.map(change=>({type:change.kind,id:change.id,before:change.before,after:change.after})):[],note:reason,bankRowId:rowId,bankMovementPreserved:true});saveStore(s);res.json(draftReconciliation(s,draft));
 });
+router.post('/api/expenses/bank-statements/amount-authority-preview',(req,res)=>{
+  const s=loadStore(),b=req.body||{},draft=(s.bankReconciliationDrafts||{})[String(b.draftId||'')];
+  if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});
+  if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot review this bank reconciliation.'});
+  try{
+    const view=draftReconciliation(s,draft),bankRowId=String(b.bankRowId||b.rowId||''),row=view.rows.find(value=>value.id===bankRowId&&value.bank),appId=String(b.appId||row&&row.app&&row.app.id||''),movement=appBankMovements(s,draft.account,draft.nature).find(value=>value.id===appId);
+    if(!row||!movement||row.status==='already_reconciled'||row.resolution||row.reversalReviewRequired)throw new Error('Choose an available one-to-one bank transaction and ledger entry.');
+    if(!view.rows.some(value=>value.app&&value.app.id===appId)&&!(view.linkCandidates||[]).some(value=>value.id===appId))throw new Error('This ledger entry is outside the available reconciliation candidates. Select an available entry.');
+    const claims=otherDraftClaimedAppIds(s,draft,appBankMovements(s,draft.account,draft.nature));
+    if(claims.has(appId)||view.rows.some(value=>value.bank&&value.id!==bankRowId&&([value.app].concat(value.app&&value.app.linkedEntries||[]).filter(Boolean).some(item=>item.id===appId||(item.sourceIds||[]).includes(appId))||resolutionLinkedAppIds(value.resolution).includes(appId))))throw new Error('This ledger entry is already matched elsewhere. Undo the incorrect decision first.');
+    const originalAmount=roundMoney(num(movement.debit)+num(movement.credit)),bankAmount=roundMoney(num(row.bank.debit)+num(row.bank.credit));
+    if(Math.sign(num(movement.credit)-num(movement.debit))!==Math.sign(num(row.bank.credit)-num(row.bank.debit)))return res.status(400).json({success:false,error:'Bank and ledger movements must have the same money direction.'});
+    if(reconciliationCandidate(row.bank,movement,draft.matchingPolicy,draft.account)?.axisTransferCharge)throw new Error('This bank amount includes a recognized Axis transfer charge. Keep the separate principal and Bank Charges allocation instead of replacing the principal.');
+    const plan=originalAmount===bankAmount?null:bankAmountAuthorityPolicy.prepare(s,draft,row.bank,movement,bankRowId,'manual');
+    return res.json({success:true,bankAmountAuthority:plan?bankAmountAuthorityPolicy.publicPlan(plan):null,bankAmountAuthorityBlocked:'',bankDate:row.bank.date,originalAmount,bankAmount});
+  }catch(error){return res.status(error.status||409).json({success:false,error:error.message,bankAmountAuthorityBlocked:error.message});}
+});
 router.get('/api/expenses/salary-advance-transfer-candidates',(req,res)=>{
   if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});
   const sal=loadSalaryStore(),amount=num(req.query.amount),source=String(req.query.sourceAccount||'').trim().toLowerCase();
@@ -5659,6 +5703,7 @@ router.post('/api/expenses/bank-statements/create-loan-repayment',(req,res)=>{
 });
 router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];
+  let preparedBankAmountAuthorityPlan=null;
   if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});
   if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot resolve this bank reconciliation.'});
   const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId),allowed=['bank_reversal_pair','accept_match','unmatch_suggestion','link_existing','link_multiple_existing','link_multiple_bank_entries','link_with_rounding','vendor_advance_split','create_adjustment','create_split_adjustment','create_internal_transfer','paytm_settlement','split_allocation','opening_vendor_payable_split','timing_difference','exclude'];
@@ -5718,12 +5763,19 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
     const targetIds=new Set([appId].concat(target&&target.sourceIds||[])),claimedElsewhere=view.rows.some(x=>x.bank&&bankRow&&x.id!==bankRow.id&&([x.app].concat(x.app&&x.app.linkedEntries||[]).filter(Boolean).some(m=>targetIds.has(m.id)||(m.sourceIds||[]).some(id=>targetIds.has(id)))||resolutionLinkedAppIds(x.resolution).some(id=>targetIds.has(id))));
     const otherClaims=otherDraftClaimedAppIds(s,draft,appBankMovements(s,draft.account,draft.nature));
     if(claimedElsewhere||Array.from(targetIds).some(id=>otherClaims.has(id))||bankRow&&(bankRow.status==='already_reconciled'||bankRow.resolution)||targetRow&&targetRow.id!==bankRow?.id&&(targetRow.bank||targetRow.resolution)||!targetRow&&!targetMovement)return res.status(409).json({success:false,error:'This ledger entry or bank transaction is already matched or resolved. Undo the incorrect decision before linking it again.'});
-    if(!target||!bankRow||!bankRow.bank||Math.abs((num(target.debit)||num(target.credit))-(num(bankRow.bank.debit)||num(bankRow.bank.credit)))>.01||Math.sign(num(target.credit)-num(target.debit))!==Math.sign(num(bankRow.bank.credit)-num(bankRow.bank.debit)))return res.status(400).json({success:false,error:'Choose an available bank row and ledger reference with the same amount and direction.'});
+    if(!target||!bankRow||!bankRow.bank||Math.sign(num(target.credit)-num(target.debit))!==Math.sign(num(bankRow.bank.credit)-num(bankRow.bank.debit)))return res.status(400).json({success:false,error:'Choose an available bank row and ledger reference with the same money direction.'});
+    if(roundMoney(num(target.debit)+num(target.credit))!==roundMoney(num(bankRow.bank.debit)+num(bankRow.bank.credit))){
+      try{const plan=bankAmountAuthorityPolicy.prepare(s,draft,bankRow.bank,target,bankRow.id,'manual');if(b.confirmBankAmount===true&&String(b.bankAmountAuthorityFingerprint||'')!==plan.id)return res.status(409).json({success:false,error:'The bank or ledger evidence changed. Review the amount correction again.'});if(b.confirmBankAmount!==true)return res.status(400).json({success:false,error:'Review and explicitly confirm the bank amount and expense correction before saving this manual match.'});preparedBankAmountAuthorityPlan=plan;}catch(error){return res.status(error.status||409).json({success:false,error:error.message});}
+    }
     if(isSharedBankReconciliationAccount(draft.account)){const targetNature=reconciliationOwnershipNature(target.entity),manualNature=reconciliationOwnershipNature(draft.transactionOwnership&&draft.transactionOwnership[bankRow.id]&&draft.transactionOwnership[bankRow.id].nature);if(!targetNature)return res.status(409).json({success:false,error:'The selected ledger entry has no reliable SAMAST or PERSONAL entity.'});if(manualNature&&manualNature!==targetNature)return res.status(409).json({success:false,error:'The manual transaction tag conflicts with the selected '+targetNature+' ledger entry.'});postingNature=targetNature;}
-    if(targetRow&&!targetRow.bank){draft.resolutions[targetRow.id]={action:'linked_existing_counterpart',reason:String(b.reason||'Linked to bank transaction'),appId,linkedRowId:bankRow.id,remark:String(b.remark||''),by:req.user.username,at:new Date().toISOString()};b.linkedRowId=targetRow.id;}b.rowId=bankRow.id;row.id=bankRow.id;row.bank=bankRow.bank;b.appId=appId;
+    if(targetRow&&!targetRow.bank){draft.resolutions[targetRow.id]={action:'linked_existing_counterpart',reason:String(b.reason||'Linked to bank transaction'),appId,linkedRowId:bankRow.id,remark:String(b.remark||''),by:req.user.username,at:new Date().toISOString()};b.linkedRowId=targetRow.id;}b.rowId=bankRow.id;row.id=bankRow.id;row.bank=bankRow.bank;row.app=target;b.appId=appId;
   }
   if(b.action==='accept_match'&&(!row.app||!row.bank))return res.status(400).json({success:false,error:'There is no displayed ledger and bank pair to confirm.'});
-  if(b.action==='accept_match'){b.reason=String(b.reason||'Confirmed displayed ledger and bank match; bank date is authoritative');b.remark=String(b.remark||'Confirmed displayed match');}
+  if(b.action==='accept_match'&&row.axisTransferCharge){b.action='split_allocation';b.appId=row.app.id;b.principalAmount=num(row.app.debit);b.chargeAmount=num(row.chargeAmount);b.chargeCategory='BANK CHARGES';b.reason=String(b.reason||'Confirmed matched principal and recognized Axis transfer charge; bank total and date retained');b.remark=String(b.remark||'Matched principal plus separate Axis bank charge');}
+  if(b.action==='accept_match'){
+    if(roundMoney(num(row.app.debit)+num(row.app.credit))!==roundMoney(num(row.bank.debit)+num(row.bank.credit))){try{const plan=bankAmountAuthorityPolicy.prepare(s,draft,row.bank,row.app,row.id,'manual');if(b.confirmBankAmount===true&&String(b.bankAmountAuthorityFingerprint||'')!==plan.id)return res.status(409).json({success:false,error:'The bank or ledger evidence changed. Review the amount correction again.'});if(b.confirmBankAmount!==true)return res.status(400).json({success:false,error:'Review and explicitly confirm the bank amount and expense correction before saving this match.'});preparedBankAmountAuthorityPlan=plan;}catch(error){return res.status(error.status||409).json({success:false,error:error.message});}}
+    b.reason=String(b.reason||'Confirmed displayed ledger and bank match; bank amount and date are authoritative');b.remark=String(b.remark||'Confirmed displayed match');
+  }
   if(['link_multiple_existing','link_with_rounding','vendor_advance_split'].includes(b.action)){
     const appIds=Array.from(new Set((Array.isArray(b.appIds)?b.appIds:String(b.appIds||b.appId||'').split(',')).map(x=>String(x).trim()).filter(Boolean))),movements=appBankMovements(s,draft.account,draft.nature),linked=appIds.map(id=>movements.find(x=>x.id===id)).filter(Boolean),bankNet=num(row.bank&&row.bank.credit)-num(row.bank&&row.bank.debit),appNet=linked.reduce((n,x)=>n+num(x.credit)-num(x.debit),0);
     const selectableIds=new Set(view.rows.filter(x=>x.app&&x.app.id&&!x.resolution&&x.status!=='matched').map(x=>x.app.id)),unavailable=appIds.filter(id=>!selectableIds.has(id));
@@ -5804,6 +5856,7 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   if(b.action==='exclude'&&row.app&&row.app.id){if(!setLedgerMovementExcluded(s,row.app.id,true,b.reason,req.user.username))return res.status(400).json({success:false,error:'This ledger entry cannot be excluded automatically. Move it to the correct account instead.'});audit(s,req,'LEDGER_ENTRY_EXCLUDED','ledger',row.app.id,{nature:postingNature||draft.nature,account:draft.account,before:{counted:true},after:{counted:false},note:String(b.reason||'')});}
   draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:b.action,reason:String(b.reason||'').trim(),category,chargeCategory,postingNature:postingNature||undefined,appId:['opening_vendor_payable_split','link_existing','split_allocation'].includes(b.action)?String(b.appId||'').trim():row.app&&row.app.id,excludedEntry:b.action==='exclude'&&row.app?Object.assign({},row.app):null,appIds:Array.isArray(b.appIds)?b.appIds:[],appNet:num(b.appNet),roundingAmount:num(b.roundingAmount),advanceAmount:num(b.advanceAmount),advanceExpenseIds:Array.isArray(b.advanceExpenseIds)?b.advanceExpenseIds:[],advanceApplications:Array.isArray(b.advanceApplications)?b.advanceApplications:[],otherAccount:String(b.otherAccount||'').trim(),grossAmount:num(b.grossAmount),chargeAmount:num(b.chargeAmount),paytmChargeAmount:num(b.paytmChargeAmount),hiddenChargeAmount:num(b.hiddenChargeAmount),orderIds:Array.isArray(b.orderIds)?b.orderIds.map(String).filter(Boolean):[],transferIds:Array.isArray(b.transferIds)?b.transferIds.map(String).filter(Boolean):[],paytmOrderTargets:Array.isArray(b.paytmOrderTargets)?b.paytmOrderTargets:[],paytmTransferTargets:Array.isArray(b.paytmTransferTargets)?b.paytmTransferTargets:[],otherReceipts:Array.isArray(b.otherReceipts)?b.otherReceipts:[],principalAmount:num(b.principalAmount),openingPayableAmount:num(b.openingPayableAmount),openingNature:normalizedNature(b.openingNature||postingNature||draft.nature),vendor:String(b.vendor||'').trim(),preSystemDates:String(b.preSystemDates||'').trim(),linkedRowId:b.action==='opening_vendor_payable_split'?(view.rows.find(x=>x.app&&x.app.id===String(b.appId||'').trim())||{}).id||'':String(b.linkedRowId||''),remark:String(b.remark||''),linkedTransferAmount:(Array.isArray(b.transferIds)?b.transferIds:[]).reduce((n,id)=>{const t=(s.transfers||[]).find(x=>x.id===id);return n+num(t&&t.amount);},0),by:req.user.username,at:new Date().toISOString()};
   draft.resolutions[b.rowId].bankTruth=b.action==='exclude'&&!!row.bank;
+  if(preparedBankAmountAuthorityPlan){s.bankAmountAuthorityProposals=s.bankAmountAuthorityProposals||{};s.bankAmountAuthorityProposals[preparedBankAmountAuthorityPlan.id]=preparedBankAmountAuthorityPlan;draft.resolutions[b.rowId].bankAmountAuthority={planId:preparedBankAmountAuthorityPlan.id};}
   if(b.action==='create_internal_transfer')Object.assign(draft.resolutions[b.rowId],{otherNature:b.otherNature,classification:b.classification});
   applyReviewedBankDates(s,draft);saveStore(s);res.json(draftReconciliation(s,draft));
 });
@@ -6001,6 +6054,15 @@ router.post('/api/expenses/bank-statements/finalize',(req,res)=>{
   const gokwikPlan=gokwikBank.plan(s,draft,gokwikOrderList());
   if(gokwikPlan.errors.length||gokwikPlan.fingerprint!==view.gokwik.fingerprint)return res.status(409).json({success:false,error:'GoKwik evidence changed or needs review. Nothing was posted.',reconciliation:view});
   if(gokwikPlan.items.some(item=>!importPlan.rows.some(row=>'bank-'+row.index===item.rowId)))return res.status(409).json({success:false,error:'GoKwik bank evidence overlaps finalized history. Review the existing link; nothing was posted.'});
+  try{
+    const corrections=bankAmountAuthority.applyAll(s,view._bankAmountAuthorityPlans||[],{...bankAmountAuthorityOptions(s,draft),at:new Date().toISOString()});
+    for(const correction of corrections.audits){
+      const reason=(correction.mode==='auto'?'Verified bank difference of ₹1 or less':'Explicitly confirmed manual match')+'; bank amount and transaction date are authoritative';
+      audit(s,req,'BANK_AMOUNT_AUTHORITY_APPLIED',correction.sourceType,correction.movementId,{nature:correction.sourceNature||draft.nature,account:draft.account,draftId:draft.id,bankRowId:correction.bankRowId,mode:correction.mode,before:correction.before,after:correction.after,bankDate:correction.bankDate,bankReference:correction.bankReference,note:reason});
+      const expense=(s.expenses||{})[correction.sourceId];
+      if(correction.sourceType==='expense_payment'&&expense){expense.auditHistory=Array.isArray(expense.auditHistory)?expense.auditHistory:[];expense.auditHistory.push({id:'EDIT-'+String(expense.auditHistory.length+1).padStart(3,'0'),reason,changes:[{field:'amount',before:correction.before.expense.amount,after:correction.after.expense.amount},{field:'payment '+correction.movementId,before:correction.originalAmount,after:correction.bankAmount}],editedBy:req.user.username,editedAt:new Date().toISOString(),bankAmountAuthorityPlan:correction.planId});}
+    }
+  }catch(error){return res.status(error.status||409).json({success:false,error:error.message+' Nothing was posted.'});}
   if(importPlan.rebuildImportIds.size)Object.keys(book.transactions||{}).forEach(key=>{const transaction=book.transactions[key];if(importPlan.rebuildImportIds.has(transaction.firstSeenImport))delete book.transactions[key];});
   const importId='BST-'+Date.now(),seen={},storeIndexes=new Set(importPlan.rows.map(item=>item.index)),storedByRow=new Map();
   try{

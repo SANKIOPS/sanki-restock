@@ -285,7 +285,7 @@ test('owner can bulk classify historical PERSONAL statement rows only for the th
 test('historical PERSONAL bulk controls expose the five credit choices and approved account scope',()=>{
   const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   ['Rental income','Personal income','Transfer from other account','Home received','Other personal received'].forEach(label=>assert.match(html,new RegExp(label)));
-  assert.match(html,/personal-historical-bulk/);assert.match(html,/0993, 0992 and 7883/);assert.match(html,/cfg&&cfg\.canManagePersonalAccounting&&bankNature==='PERSONAL'/);assert.match(html,/Suggested groups:/);assert.match(html,/Possible:/);assert.match(html,/Confirm or correct the suggested vendor/);
+  assert.match(html,/personal-historical-bulk/);assert.match(html,/0993, 0992 and 7883/);assert.match(html,/cfg&&cfg\.canManagePersonalAccounting&&\(bankNature==='PERSONAL'\|\|bankEntityTaggingActive\(\)\)/);assert.match(html,/Suggested groups:/);assert.match(html,/Possible:/);assert.match(html,/Confirm or correct the suggested vendor/);
 });
 
 test('Prashant personal funding is linked to repayments without creating income or an expense',()=>{
@@ -2079,7 +2079,7 @@ test('unmatching a suggested pair separates both entries and remembers the requi
 
 test('matched and suggested reviews expose an Unmatch action with a reason form',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/\['possible_match','amount_mismatch','matched'\]\.includes\(row\.status\).*?>Unmatch transactions<\/button>/);assert.match(html,/resolution\.action==='accept_match'/);assert.match(html,/Unmatch transactions/);assert.match(html,/Neither entry will be deleted or excluded/);});
 
-test('small reimbursement differences can be matched while recording the excess as bank charges',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/smallCharge>0&&smallCharge<=5/);assert.match(html,/Match \+ record.*bank charge/);assert.match(html,/action:'split_allocation'.*chargeCategory:'BANK CHARGES'/);assert.match(html,/difference recorded as bank charge/);});
+test('reimbursement differences above ₹1 can use a separate bank charge while smaller differences cannot',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/smallCharge>1&&smallCharge<=5/);assert.match(html,/if\(charge>0&&charge<=1\)/);assert.match(html,/Match \+ record.*bank charge/);assert.match(html,/action:'split_allocation'.*chargeCategory:'BANK CHARGES'/);assert.match(html,/difference recorded as bank charge/);});
 
 test('a split bank-charge resolution consumes its reimbursement instead of leaving it missing in bank',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(expenseFile,'utf8');
@@ -2278,10 +2278,11 @@ test('Prashant admin can create a bank-confirmed transfer to Paytm clearing',()=
 test('reconciliation supports multiple links, rounding, and reusable vendor advances',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='Prashant Axis 3645',paid=(id,date,vendor,amount)=>({id,date,nature:'SANKI',status:'paid',approvedAt:date+'T10:00:00Z',vendor,particulars:vendor,amount,paidAmount:amount,payments:[{id:'PAY-001',date,amount,account}]});
   stored.expenses['EX-MULTI-A']=paid('EX-MULTI-A','2026-09-01','Alok',600);stored.expenses['EX-MULTI-B']=paid('EX-MULTI-B','2026-09-01','Alok',600);stored.expenses['EX-ROUND']=paid('EX-ROUND','2026-09-02','Recharge',652);stored.expenses['EX-ADV-BASE']=paid('EX-ADV-BASE','2026-09-03','Kalu',200);stored.expenses['EX-ADV-NEXT']={id:'EX-ADV-NEXT',date:'2026-09-04',nature:'SANKI',status:'approved',approvedAt:'2026-09-04T10:00:00Z',vendor:'Kalu',particulars:'Fruit',amount:100,paidAmount:0,payments:[]};
-  const drafts=[['BRD-MULTI',1200,'2026-09-01'],['BRD-ROUND',651.90,'2026-09-02'],['BRD-ADV',418,'2026-09-03']];stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};drafts.forEach(([id,debit,date])=>{stored.bankReconciliationDrafts[id]={id,account,nature:'SANKI',transactions:[{date,description:'Official bank debit',reference:id,debit,credit:0,balance:-debit}],summary:{from:date,to:date,openingBalance:0,closingBalance:-debit,totalDebits:debit,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'strict_identity_v2',temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};});fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  // Keep explicit rounding outside the new inclusive ₹1 bank-authority rule.
+  const drafts=[['BRD-MULTI',1200,'2026-09-01'],['BRD-ROUND',650.90,'2026-09-02'],['BRD-ADV',418,'2026-09-03']];stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};drafts.forEach(([id,debit,date])=>{stored.bankReconciliationDrafts[id]={id,account,nature:'SANKI',transactions:[{date,description:'Official bank debit',reference:id,debit,credit:0,balance:-debit}],summary:{from:date,to:date,openingBalance:0,closingBalance:-debit,totalDebits:debit,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'strict_identity_v2',temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};});fs.writeFileSync(expenseFile,JSON.stringify(stored));
   let out=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-MULTI',rowId:'bank-0',action:'link_multiple_existing',appIds:['EX-MULTI-A/PAY-001','EX-MULTI-B/PAY-001'],reason:'One payment covers two expenses'}});assert.equal(out.status,200,JSON.stringify(out.body));assert.equal(out.body.rows.find(x=>x.id==='bank-0').resolution.appIds.length,2);
-  out=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-ROUND',rowId:'bank-0',action:'link_with_rounding',appIds:['EX-ROUND/PAY-001'],reason:'Bank settled ten paise lower'}});assert.equal(out.status,200,JSON.stringify(out.body));assert.equal(out.body.rows.find(x=>x.id==='bank-0').resolution.roundingAmount,.10);
-  out=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-ADV',rowId:'bank-0',action:'vendor_advance_split',appIds:['EX-ADV-BASE/PAY-001'],vendor:'Kalu',advanceAmount:218,advanceExpenseIds:['EX-ADV-NEXT'],reason:'Overpayment retained by vendor'}});assert.equal(out.status,200,JSON.stringify(out.body));const snapshot=JSON.parse(fs.readFileSync(expenseFile,'utf8'));applyFinalizedCompositeLinks(snapshot.bankReconciliationDrafts['BRD-ROUND'],'prashant');applyFinalizedCompositeLinks(snapshot.bankReconciliationDrafts['BRD-ADV'],'prashant');const after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),advance=after.vendorAdvances.find(x=>x.reconciliationDraft==='BRD-ADV');assert.equal(after.adjustments.find(x=>x.reconciliationDraft==='BRD-ROUND').amount,.10);assert.equal(advance.amount,218);assert.equal(advance.remainingAmount,118);assert.equal(after.expenses['EX-ADV-NEXT'].paidAmount,100);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+  out=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-ROUND',rowId:'bank-0',action:'link_with_rounding',appIds:['EX-ROUND/PAY-001'],reason:'Reviewed separate rounding allocation of one rupee ten paise'}});assert.equal(out.status,200,JSON.stringify(out.body));assert.equal(out.body.rows.find(x=>x.id==='bank-0').resolution.roundingAmount,1.10);
+  out=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-ADV',rowId:'bank-0',action:'vendor_advance_split',appIds:['EX-ADV-BASE/PAY-001'],vendor:'Kalu',advanceAmount:218,advanceExpenseIds:['EX-ADV-NEXT'],reason:'Overpayment retained by vendor'}});assert.equal(out.status,200,JSON.stringify(out.body));const snapshot=JSON.parse(fs.readFileSync(expenseFile,'utf8'));applyFinalizedCompositeLinks(snapshot.bankReconciliationDrafts['BRD-ROUND'],'prashant');applyFinalizedCompositeLinks(snapshot.bankReconciliationDrafts['BRD-ADV'],'prashant');const after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),advance=after.vendorAdvances.find(x=>x.reconciliationDraft==='BRD-ADV');assert.equal(after.adjustments.find(x=>x.reconciliationDraft==='BRD-ROUND').amount,1.10);assert.equal(advance.amount,218);assert.equal(advance.remainingAmount,118);assert.equal(after.expenses['EX-ADV-NEXT'].paidAmount,100);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
 test('amount-mismatch rows can correct an editable ledger entry with an audit trail',()=>{
@@ -2447,7 +2448,7 @@ test('discarding a temporary bank preview removes only that draft and its tempor
   const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.bankReconciliationDrafts['BRD-DISCARD'],undefined);assert.ok(after.bankStatements['Axis Bank 3448'].transactions.official);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
-test('personal bank reconciliation is Owner-only and stored separately from business books',()=>{
+test('shared 7883 has one physical bank book while private 0993 reconciliation remains Owner-only',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
   stored.bankStatements=stored.bankStatements||{};
   stored.bankStatements['IndusInd Bank 7883']={transactions:{business:{id:'BTX-BUSINESS',date:'2026-08-20',debit:10,credit:0,balance:90}},imports:[],reconciledThrough:'2026-08-20'};
@@ -2456,15 +2457,28 @@ test('personal bank reconciliation is Owner-only and stored separately from busi
   const denied=invoke('GET','/api/expenses/bank-statements',{role:'admin',query:{nature:'PERSONAL',account:'IndusInd Bank 7883'}});
   assert.equal(denied.status,403);
   const personal=invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'PERSONAL',account:'IndusInd Bank 7883'}});
-  assert.equal(personal.status,200);assert.deepEqual(personal.body.transactions.map(x=>x.id),['BTX-PERSONAL']);
+  assert.equal(personal.status,403,'7883 must not expose a second PERSONAL reconciliation book');
   const business=invoke('GET','/api/expenses/bank-statements',{role:'admin',query:{nature:'SAMAST',account:'IndusInd Bank 7883'}});
-  assert.equal(business.status,200);assert.deepEqual(business.body.transactions.map(x=>x.id),['BTX-BUSINESS']);
+  assert.equal(business.status,200);assert.deepEqual(new Set(business.body.transactions.map(x=>x.id)),new Set(['BTX-BUSINESS','BTX-PERSONAL']));
+  const migrated=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+  assert.equal(migrated.bankStatements['PERSONAL|IndusInd Bank 7883'],undefined);
+  assert.equal(migrated.bankStatements['IndusInd Bank 7883'].transactions.business.entityTag.nature,'SAMAST');
+  assert.equal(migrated.bankStatements['IndusInd Bank 7883'].transactions.personal.entityTag.nature,'PERSONAL');
+  migrated.bankStatements['PERSONAL|ICICI Bank 0993']={transactions:{private:{id:'BTX-PRIVATE-0993',date:'2026-08-21',debit:25,credit:0,balance:75}},imports:[],reconciledThrough:'2026-08-21'};
+  fs.writeFileSync(expenseFile,JSON.stringify(migrated));
+  const privateDenied=invoke('GET','/api/expenses/bank-statements',{role:'admin',query:{nature:'PERSONAL',account:'ICICI Bank 0993'}});
+  assert.equal(privateDenied.status,403,'shared-bank access never grants private 0993 access');
+  const privateOwner=invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'PERSONAL',account:'ICICI Bank 0993'}});
+  assert.equal(privateOwner.status,200);assert.deepEqual(privateOwner.body.transactions.map(x=>x.id),['BTX-PRIVATE-0993']);
   const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;
   assert.deepEqual(adminConfig.accountsByNature.PERSONAL,[]);
   assert.deepEqual(adminConfig.bankAccountsByNature.PERSONAL,[]);
   assert.deepEqual(adminConfig.ledgerAccountsByNature.PERSONAL,[]);
   const ownerConfig=invoke('GET','/api/expenses/config',{role:'owner'}).body;
-  assert.deepEqual(ownerConfig.bankAccountsByNature.PERSONAL,['ICICI Bank 0992','ICICI Bank 0993','IndusInd Bank 7883','Namita 5464']);
+  assert.equal(ownerConfig.reconciliationAccountsByNature.PERSONAL.includes('IndusInd Bank 7883'),false);
+  assert.ok(ownerConfig.reconciliationAccountsByNature.SAMAST.includes('IndusInd Bank 7883'));
+  for(const account of ['ICICI Bank 0992','ICICI Bank 0993','Namita 5464'])assert.ok(ownerConfig.reconciliationAccountsByNature.PERSONAL.includes(account));
+  assert.ok(ownerConfig.ledgerAccountsByNature.PERSONAL.includes('IndusInd Bank 7883'));
   assert.ok(ownerConfig.ledgerAccountsByNature.PERSONAL.includes('Namita 5464'));
   assert.ok(ownerConfig.ledgerAccountsByNature.PERSONAL.includes('Namita Cash'));
 });

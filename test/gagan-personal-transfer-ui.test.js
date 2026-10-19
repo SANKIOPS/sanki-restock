@@ -22,7 +22,7 @@ function harness(overrides = {}) {
   const nodes = {}, storage = new Map(), calls = [];
   const context = {
     cfg: { me: 'prashant', isAdmin: true, isOwner: false, natures: ['SANKI', 'SAMAST'], approvalNatures: ['SANKI', 'SAMAST'], accountsByNature: { SANKI: ['Business Bank', 'ICICI Bank 0992'], SAMAST: ['Samast Bank'] }, transferAccountsByNature: { SANKI: ['Business Bank', 'ICICI Bank 0992'] }, ownerPersonalTransferAccounts: descriptors() },
-    bankNature: 'SANKI', bankDraftId: 'TEST-DRAFT', bankIncomingRowId: 'bank-1', bankReconForm: null,
+    bankNature: 'SANKI', bankDraftId: 'TEST-DRAFT', bankIncomingRowId: 'bank-1', bankIncomingNature: '', bankReconForm: null,
     bankReconView: { account: 'Business Bank', rows: [{ id: 'bank-1', bank: { debit: 100, date: '2099-01-01' } }] },
     el(id) { return nodes[id] ||= { value: '', innerHTML: '', style: {}, files: [], listeners: {}, open: false, addEventListener(event, fn, capture) { (this.listeners[event] ||= []).push({ fn, capture }); }, querySelector() { return {}; }, showModal() { this.open = true; }, close() { this.open = false; } }; },
     sessionStorage: { setItem(key, value) { storage.set(key, value); }, getItem(key) { return storage.get(key) || null; } },
@@ -36,6 +36,7 @@ function harness(overrides = {}) {
   context.window = context;
   vm.createContext(context);
   vm.runInContext(section('    function opts(', '    function payingAccountsForNature('), context);
+  vm.runInContext(line('function bankRowNature('), context);
   return { context, nodes, storage, calls, run: code => vm.runInContext(code, context) };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -134,7 +135,7 @@ test('reconciliation transfer save sends explicit PERSONAL entity and canonical 
   h.context.el('brRemark').value = 'Verified owner withdrawal';
   h.context.el('brPrincipal').value = '100';
   h.context.el('brCharge').value = '0';
-  h.run(line("var other=transferCounterpart(el('brOtherAccount').value"));
+  h.run(line("other=transferCounterpart(el('brOtherAccount').value"));
   const listener = h.nodes.brSave.listeners.click[0];
   assert.equal(listener.capture, true);
   const event = { preventDefault() {}, stopImmediatePropagation() {} };
@@ -163,7 +164,8 @@ test('incoming transfer selects PERSONAL source and defaults to owner contributi
   h.context.syncBankIncomingAccount();
   for (const account of personal) assert.ok(h.nodes.biFromAccount.innerHTML.includes(account));
   assert.equal(h.nodes.biClassification.value, 'owner_contribution');
-  assert.match(line('window.openBankIncoming=function'), /biFromNature'\)\.innerHTML=transferNatureOptions\(bankNature,bankNature\)/);
+  assert.match(line('window.openBankIncoming=function'), /bankIncomingNature=bankRowNature\(row\)/);
+  assert.match(line('window.openBankIncoming=function'), /biFromNature'\)\.innerHTML=transferNatureOptions\(bankIncomingNature,bankIncomingNature\)/);
   assert.match(line("el('biSave').addEventListener"), /fromNature:ownerSource\?ownerSource\.nature:el\('biFromNature'\)\.value/);
 });
 
