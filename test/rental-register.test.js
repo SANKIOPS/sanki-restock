@@ -29,3 +29,38 @@ test('rent changes preserve previously created charges and Fraganote stops after
   assert.deepEqual(h.get().invoices.map(i=>i.baseRent),[83790,90000]);assert.equal(h.get().invoices[1].dueDate,'2026-10-05');
   assert.equal(h.call({action:'invoice',tenancyId:'fraganote-3',month:'2026-09'}).status,400);
 });
+test('SAMAST tenant-linked rent is available without including unrelated business money or security as rent',()=>{
+  const h=harness(),tenancyId='amty-4',otherTenancyId='lujo-2',receipt={id:'SAMAST-RENT',nature:'SAMAST',receiptType:'rental_income',tenancyId,amount:1000,date:'2026-09-01',account:'IndusInd Bank 7883'};
+  h.store().receipts.push(receipt,
+    {...receipt,id:'SAMAST-OTHER',receiptType:'other_income'},
+    {...receipt,id:'SAMAST-UNASSIGNED',tenancyId:''},
+    {...receipt,id:'SAMAST-UNKNOWN-TENANT',tenancyId:'missing'},
+    {...receipt,id:'SAMAST-EXCLUDED',accountingExcluded:true},
+    {...receipt,id:'SAMAST-SECURITY',receiptType:'rental_security'});
+  const view=h.get();assert.ok(view.receipts.some(x=>x.id===receipt.id));
+  for(const id of ['SAMAST-OTHER','SAMAST-UNASSIGNED','SAMAST-UNKNOWN-TENANT','SAMAST-EXCLUDED'])assert.equal(view.receipts.some(x=>x.id===id),false);
+  const advance=id=>({action:'advance',tenancyId,receiptId:id,amount:1000,reason:'Tenant rent paid in advance'});
+  assert.equal(h.call(advance('SAMAST-OTHER')).status,400);
+  assert.equal(h.call(advance('SAMAST-SECURITY')).status,400,'held security cannot be allocated again as fresh rent');
+  assert.equal(h.call({...advance(receipt.id),tenancyId:otherTenancyId}).status,400,'a linked rent receipt cannot be assigned to another tenant');
+  assert.equal(h.call(advance(receipt.id)).status,200);assert.deepEqual(h.get().integrity,[]);
+});
+test('tenant-linked SAMAST rent cannot be split into another tenant invoice',()=>{
+  const h=harness(),tenancyId='amty-4',otherTenancyId='lujo-2';
+  h.store().receipts.push({id:'SAMAST-SPLIT',nature:'SAMAST',receiptType:'rental_income',tenancyId,amount:1000,date:'2026-09-01',account:'IndusInd Bank 7883'});
+  h.call({action:'invoice',tenancyId,month:'2026-09'});h.call({action:'invoice',tenancyId:otherTenancyId,month:'2026-09'});
+  const own=h.get().invoices.find(x=>x.tenancyId===tenancyId),other=h.get().invoices.find(x=>x.tenancyId===otherTenancyId);
+  const body={action:'split_receipt',tenancyId,receiptId:'SAMAST-SPLIT',date:'2026-09-01',reason:'Tenant receipt allocation',splits:[{invoiceId:other.id,amount:1000}]};
+  assert.equal(h.call(body).status,400);
+  assert.equal(h.call({...body,splits:[{invoiceId:own.id,amount:1000}]}).status,200);
+  assert.deepEqual(h.get().integrity,[]);
+});
+test('bank security receipt undo checks the dated security balance rather than a later replacement deposit',()=>{
+  const {receiptRemovalError}=require('../modules/rental-register'),r={tenancies:[{id:'tenant',securityOpening:0,securityOpeningDate:'2026-09-01'}],credits:[],allocations:[],deposits:[
+    {id:'SEC-ORIGINAL',tenancyId:'tenant',receiptId:'REC-ORIGINAL',date:'2026-09-01',amount:1000},
+    {id:'REFUND',tenancyId:'tenant',date:'2026-09-02',amount:-1000},
+    {id:'SEC-LATER',tenancyId:'tenant',date:'2026-09-03',amount:1000}
+  ]};
+  const before=JSON.stringify(r);assert.match(receiptRemovalError(r,'REC-ORIGINAL',['SEC-ORIGINAL']),/security settlements or refunds/);assert.equal(JSON.stringify(r),before);
+  r.deposits[1].reversedAt='2026-09-04';assert.equal(receiptRemovalError(r,'REC-ORIGINAL',['SEC-ORIGINAL']),'');
+});
