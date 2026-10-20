@@ -2511,11 +2511,11 @@ test('bank interest received records the party and income category in the receiv
 });
 
 test('PERSONAL bank reconciliation records rent or security against a Rental Income floor',()=>{
-  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(expenseFile,'utf8'),stored=JSON.parse(baseline),account='IndusInd Bank 7883',now=new Date().toISOString();
+  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(expenseFile,'utf8'),stored=JSON.parse(baseline),account='ICICI Bank 0993',now=new Date().toISOString();
   const rentals=invoke('GET','/api/expenses/rentals',{role:'owner'});assert.equal(rentals.status,200,JSON.stringify(rentals.body));const tenancy=rentals.body.tenancies[0];assert.ok(tenancy&&tenancy.id);
   stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};
   stored.bankReconciliationDrafts['BRD-RENT-INCOME']={id:'BRD-RENT-INCOME',account,nature:'PERSONAL',transactions:[{date:'2026-09-20',description:'TENANT RENT RECEIVED',reference:'RENT20000',debit:0,credit:20000,balance:20000}],summary:{from:'2026-09-20',to:'2026-09-20',openingBalance:0,closingBalance:20000,totalDebits:0,totalCredits:20000,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};
-  stored.bankReconciliationDrafts['BRD-RENT-SECURITY']={id:'BRD-RENT-SECURITY',account,nature:'PERSONAL',transactions:[{date:'2026-09-21',description:'TENANT SECURITY RECEIVED',reference:'SECURITY200000',debit:0,credit:200000,balance:220000}],summary:{from:'2026-09-21',to:'2026-09-21',openingBalance:20000,closingBalance:220000,totalDebits:0,totalCredits:200000,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  stored.bankReconciliationDrafts['BRD-RENT-SECURITY']={id:'BRD-RENT-SECURITY',account,nature:'PERSONAL',transactions:[{date:'2026-10-21',description:'TENANT SECURITY RECEIVED',reference:'SECURITY200000',debit:0,credit:200000,balance:220000}],summary:{from:'2026-10-21',to:'2026-10-21',openingBalance:20000,closingBalance:220000,totalDebits:0,totalCredits:200000,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
   const rent=invoke('POST','/api/expenses/bank-statements/create-rental',{role:'owner',body:{draftId:'BRD-RENT-INCOME',rowId:'bank-0',tenancyId:tenancy.id,kind:'rent',note:'September rent received'}});assert.equal(rent.status,200,JSON.stringify(rent.body));assert.equal(rent.body.receipt.receiptType,'rental_income');assert.equal(rent.body.receipt.category,'Rental Income');assert.equal(rent.body.receipt.tenancyId,tenancy.id);
   const security=invoke('POST','/api/expenses/bank-statements/create-rental',{role:'owner',body:{draftId:'BRD-RENT-SECURITY',rowId:'bank-0',tenancyId:tenancy.id,kind:'security',note:'Security deposit received'}});assert.equal(security.status,200,JSON.stringify(security.body));assert.equal(security.body.receipt.receiptType,'rental_security');assert.equal(security.body.receipt.category,'Rental Security Deposit');
   const saved=JSON.parse(fs.readFileSync(expenseFile,'utf8')),deposit=saved.rentals.deposits.find(x=>x.receiptId===security.body.receipt.id);assert.ok(deposit);assert.equal(deposit.amount,200000);assert.equal(deposit.tenancyId,tenancy.id);
@@ -2523,6 +2523,74 @@ test('PERSONAL bank reconciliation records rent or security against a Rental Inc
   const undone=invoke('POST','/api/expenses/bank-statements/undo',{role:'owner',body:{draftId:'BRD-RENT-SECURITY',rowId:'bank-0'}});assert.equal(undone.status,200,JSON.stringify(undone.body));const afterUndo=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(afterUndo.receipts.some(x=>x.id===security.body.receipt.id),false);assert.equal(afterUndo.rentals.deposits.some(x=>x.receiptId===security.body.receipt.id),false);
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Record rental/);assert.match(html,/id="rentalReconTenancy"/);assert.match(html,/Security deposit received/);
   fs.writeFileSync(expenseFile,baseline);
+});
+
+test('7883 rental and security receipts honor the reviewed entity and remain linked to the rental register',()=>{
+  const file=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(file,'utf8'),account='IndusInd Bank 7883',draftId='BRD-RENT-SHARED',date='2098-07-04';
+  try{
+    for(const nature of ['SAMAST','PERSONAL'])for(const kind of ['rent','security']){
+      const stored=JSON.parse(baseline),rental=require('../modules/rental-register'),register=rental.state(stored),tenancy=register.tenancies[0],amount=20000;
+      tenancy.securityOpening=0;tenancy.securityOpeningDate='2098-07-03';
+      register.invoices=[{id:'INV-RENT-SHARED',tenancyId:tenancy.id,month:'2098-07',dueDate:'2098-07-01',bankDue:10000}];register.allocations=[];register.credits=[];register.deposits=[];stored.rentals=register;
+      stored.bankStatements={};stored.bankReconciliationDrafts={[draftId]:{id:draftId,nature:'SAMAST',account,transactions:[{date,description:'Tenant '+kind,reference:'RENT-SHARED-'+nature+'-'+kind,debit:0,credit:amount,balance:amount}],summary:{from:date,to:date,openingBalance:0,closingBalance:amount,totalCredits:amount,totalDebits:0,validated:true},resolutions:{},transactionOwnership:{'bank-0':{nature,reason:'Reviewed tenant receipt'}},createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'}};
+      fs.writeFileSync(file,JSON.stringify(stored));
+      const body={draftId,rowId:'bank-0',tenancyId:tenancy.id,kind,note:'Reviewed '+nature+' '+kind};
+      const response=invoke('POST','/api/expenses/bank-statements/create-rental',{role:'admin',body});
+      assert.equal(response.status,200,JSON.stringify(response.body));
+      const receipt=response.body.receipt,after=JSON.parse(fs.readFileSync(file,'utf8')),resolution=after.bankReconciliationDrafts[draftId].resolutions['bank-0'];
+      assert.deepEqual([receipt.nature,receipt.account,receipt.amount,receipt.tenancyId],[nature,account,amount,tenancy.id]);
+      assert.equal(resolution.postingNature,nature);assert.equal(after.bankReconciliationDrafts[draftId].transactionOwnership['bank-0'].nature,nature);
+      assert.equal(receipt.receiptType,kind==='security'?'rental_security':'rental_income');
+      assert.ok(after.auditLog.some(x=>x.action==='RENTAL_RECEIPT_FROM_BANK_RECONCILIATION'&&x.subjectId===receipt.id&&x.nature===nature));
+      if(kind==='security'){
+        assert.equal(after.rentals.deposits.find(x=>x.receiptId===receipt.id).amount,amount);
+        assert.equal(after.rentals.allocations.length,0);assert.equal(after.rentals.credits.length,0);
+        assert.equal(rental.outstanding(after.rentals,after.rentals.invoices[0]),10000,'security is not rent income or a rent settlement');
+      }else{
+        assert.equal(after.rentals.allocations.find(x=>x.receiptId===receipt.id).amount,10000);
+        assert.equal(after.rentals.credits.find(x=>x.receiptId===receipt.id).amount,10000);
+        assert.equal(after.rentals.deposits.length,0);
+      }
+      const rentalView=invoke('GET','/api/expenses/rentals',{role:'owner'});
+      assert.ok(rentalView.body.receipts.some(x=>x.id===receipt.id));assert.deepEqual(rentalView.body.integrity,[]);
+      const duplicate=invoke('POST','/api/expenses/bank-statements/create-rental',{role:'admin',body});assert.equal(duplicate.status,409);
+      assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).receipts.filter(x=>x.id===receipt.id).length,1);
+      const beforeDependency=fs.readFileSync(file,'utf8'),dependent=JSON.parse(beforeDependency);
+      dependent.rentals.allocations.push({id:'RA-LATER-DEPENDENCY',tenancyId:tenancy.id,invoiceId:'INV-RENT-SHARED',kind:kind==='security'?'security':'credit',creditId:kind==='rent'?dependent.rentals.credits.find(x=>x.receiptId===receipt.id).id:'',amount:10000,date,reason:'Later rental settlement'});
+      fs.writeFileSync(file,JSON.stringify(dependent));const held=fs.readFileSync(file,'utf8');
+      const blockedUndo=invoke('POST','/api/expenses/bank-statements/undo',{role:'admin',body:{draftId,rowId:'bank-0'}});
+      assert.equal(blockedUndo.status,409,JSON.stringify(blockedUndo.body));assert.match(blockedUndo.body.error,/Reverse/);assert.equal(fs.readFileSync(file,'utf8'),held,'blocked undo cannot change receipt, deposit or allocations');
+      if(kind==='security'){
+        const refunded=JSON.parse(beforeDependency);refunded.rentals.deposits.push({id:'SEC-LATER-REFUND',tenancyId:tenancy.id,amount:-10000,date,reason:'Later deposit refund'});fs.writeFileSync(file,JSON.stringify(refunded));const beforeRefundUndo=fs.readFileSync(file,'utf8');
+        assert.equal(invoke('POST','/api/expenses/bank-statements/undo',{role:'admin',body:{draftId,rowId:'bank-0'}}).status,409);
+        assert.equal(fs.readFileSync(file,'utf8'),beforeRefundUndo);
+      }
+      fs.writeFileSync(file,beforeDependency);
+      const undone=invoke('POST','/api/expenses/bank-statements/undo',{role:'admin',body:{draftId,rowId:'bank-0'}});
+      assert.equal(undone.status,200,JSON.stringify(undone.body));const clean=JSON.parse(fs.readFileSync(file,'utf8'));
+      assert.equal(clean.receipts.some(x=>x.id===receipt.id),false);
+      for(const key of ['allocations','credits','deposits'])assert.equal(clean.rentals[key].some(x=>x.receiptId===receipt.id),false);
+    }
+  }finally{fs.writeFileSync(file,baseline);}
+});
+
+test('7883 rental receipts require an explicit entity, reject bank reversals and respect rental permissions',()=>{
+  const file=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(file,'utf8'),account='IndusInd Bank 7883',draftId='BRD-RENT-GUARDS',date='2098-07-05';
+  try{
+    const stored=JSON.parse(baseline),tenancy=require('../modules/rental-register').state(stored).tenancies[0];
+    stored.bankStatements={};stored.bankReconciliationDrafts={[draftId]:{id:draftId,nature:'SAMAST',account,transactions:[{date,description:'Tenant security',reference:'SECURITY-GUARDS',debit:0,credit:1234,balance:1234}],summary:{from:date,to:date,openingBalance:0,closingBalance:1234,totalCredits:1234,totalDebits:0,validated:true},resolutions:{},createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'}};
+    fs.writeFileSync(file,JSON.stringify(stored));
+    const body={draftId,rowId:'bank-0',tenancyId:tenancy.id,kind:'security',note:'Reviewed deposit'};
+    const unknown=invoke('POST','/api/expenses/bank-statements/create-rental',{role:'owner',body});assert.equal(unknown.status,409);assert.match(unknown.body.error,/Tag this 7883/);
+    assert.equal(invoke('POST','/api/expenses/bank-statements/create-rental',{role:'admin',username:'finance-admin',permissions:{personalAccounting:true},body}).status,403);
+    for(const [role,username,expected] of [['owner','owner-user',true],['admin','prashant',true],['admin','finance-admin',false],['claimant','arshpreet',false]])assert.equal(invoke('GET','/api/expenses/config',{role,username}).body.canManageRentals,expected);
+    const covered=JSON.parse(fs.readFileSync(file,'utf8'));covered.bankReconciliationDrafts[draftId].transactionOwnership={'bank-0':{nature:'SAMAST',reason:'Reviewed'}};
+    const coveredRegister=require('../modules/rental-register').state(covered),coveredTenancy=coveredRegister.tenancies.find(x=>x.id===tenancy.id);coveredTenancy.securityOpening=1234;coveredTenancy.securityOpeningDate=date;covered.rentals=coveredRegister;fs.writeFileSync(file,JSON.stringify(covered));
+    const beforeCovered=fs.readFileSync(file,'utf8'),opening=invoke('POST','/api/expenses/bank-statements/create-rental',{role:'owner',body});assert.equal(opening.status,409);assert.match(opening.body.error,/opening security balance/);assert.equal(fs.readFileSync(file,'utf8'),beforeCovered);
+    const reversed=JSON.parse(fs.readFileSync(file,'utf8'));reversed.bankReconciliationDrafts[draftId].transactionOwnership={'bank-0':{nature:'SAMAST',reason:'Reviewed'}};reversed.bankReconciliationDrafts[draftId].transactions[0].reversal=true;reversed.bankReconciliationDrafts[draftId].transactions[0].description='REVERSED : Failed UPI';fs.writeFileSync(file,JSON.stringify(reversed));
+    const reversal=invoke('POST','/api/expenses/bank-statements/create-rental',{role:'owner',body});assert.equal(reversal.status,409);assert.match(reversal.body.error,/bank reversal/);
+    assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).receipts.length,(stored.receipts||[]).length);
+  }finally{fs.writeFileSync(file,baseline);}
 });
 
 test('salary advance funding links one internal transfer without double-counting the source debit',()=>{
