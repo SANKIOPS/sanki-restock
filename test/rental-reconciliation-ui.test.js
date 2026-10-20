@@ -26,7 +26,7 @@ const tenancy = { id: 'TEN-00001', property: 'SAMAST', floor: 'First floor', ten
 test('bank reconciliation reviews an imported security opening and does not create a duplicate receipt', async () => {
   const opening = { ...tenancy, securityOpening: 200000, securityOpeningDate: '2026-09-30', securityBalance: 200000 };
   const after = { ...opening, securityOpening: null, securityOpeningDate: '', securityBalance: 0 };
-  const ui = harness({ responses: [{ success: true, revision: 7, tenancies: [opening] }, { success: true, revision: 8, tenancies: [after] }], row: { bank: { date: '2026-08-25', credit: 200000, debit: 0, reference: 'SOURCE-SECURITY', description: 'Existing source deposit' } } });
+  const ui = harness({ responses: [{ success: true, revision: 7, tenancies: [opening] }, { success: true, revision: 8, tenancies: [opening] }, { success: true, revision: 9, tenancies: [after] }], row: { bank: { date: '2026-08-25', credit: 200000, debit: 0, reference: 'SOURCE-SECURITY', description: 'Existing source deposit' } } });
   ui.context.confirm = () => true;
   ui.clickRental('security'); await flush();
   ui.nodes.rentalReconTenancy.value = tenancy.id; ui.fire('rentalReconTenancy', 'change');
@@ -38,7 +38,8 @@ test('bank reconciliation reviews an imported security opening and does not crea
   ui.fire('bankRentalClearOpening'); ui.fire('bankRentalClearOpening'); await flush();
   const writes = ui.calls.filter(call => call.options?.method === 'POST'); assert.equal(writes.length, 1);
   assert.equal(writes[0].url, '/api/expenses/rentals');
-  assert.deepEqual(JSON.parse(writes[0].options.body), { action: 'clear_security_opening', tenancyId: tenancy.id, revision: 7, expectedSecurityOpening: 200000, expectedSecurityOpeningDate: '2026-09-30', reason: ui.nodes.bankRentalOpeningReason.value });
+  assert.deepEqual(JSON.parse(writes[0].options.body), { action: 'clear_security_opening', tenancyId: tenancy.id, revision: 8, expectedSecurityOpening: 200000, expectedSecurityOpeningDate: '2026-09-30', reason: ui.nodes.bankRentalOpeningReason.value });
+  assert.equal(ui.calls.filter(call => call.url === '/api/expenses/rentals' && call.options?.method !== 'POST').length, 2, 'fresh GET is required before confirmation');
   assert.equal(ui.nodes.bankRentalOpeningReview.style.display, 'none');
   assert.equal(ui.nodes.bankRentalSave.disabled, false);
   assert.match(ui.nodes.bankRentalMsg.textContent, /no receipt has been added/);
@@ -46,14 +47,15 @@ test('bank reconciliation reviews an imported security opening and does not crea
 
 test('canceling or failing a bank-form opening correction keeps the source receipt blocked and sends no refund', async () => {
   const opening = { ...tenancy, securityOpening: 200000, securityOpeningDate: '2026-09-30', securityBalance: 200000 };
-  const ui = harness({ responses: [{ success: true, revision: 7, tenancies: [opening] }, { success: false, error: 'The register changed. Refresh and try again.' }], row: { bank: { date: '2026-08-25', credit: 200000, debit: 0 } } });
+  const ui = harness({ responses: [{ success: true, revision: 7, tenancies: [opening] }, { success: true, revision: 8, tenancies: [opening] }, { success: true, revision: 9, tenancies: [opening] }, { success: false, error: 'The register changed. Refresh and try again.' }], row: { bank: { date: '2026-08-25', credit: 200000, debit: 0 } } });
   ui.context.confirm = () => false; ui.clickRental('security'); await flush();
   ui.nodes.rentalReconTenancy.value = tenancy.id; ui.fire('rentalReconTenancy', 'change');
-  ui.nodes.bankRentalOpeningReason.value = 'Replace the reviewed opening with exact bank source'; ui.fire('bankRentalClearOpening');
+  ui.nodes.bankRentalOpeningReason.value = 'Replace the reviewed opening with exact bank source'; ui.fire('bankRentalClearOpening'); await flush();
   assert.equal(ui.calls.filter(call => call.options?.method === 'POST').length, 0);
   ui.context.confirm = () => true; ui.fire('bankRentalClearOpening'); await flush();
   assert.equal(ui.nodes.bankRentalSave.disabled, true); assert.equal(ui.nodes.bankRentalClearOpening.disabled, false);
   assert.match(ui.nodes.bankRentalOpeningMsg.textContent, /register changed/);
+  assert.equal(ui.calls.filter(call => call.options?.method === 'POST').length, 1, 'a canceled confirmation never posts and a CAS failure is not retried');
   assert.ok(ui.calls.filter(call => call.options?.method === 'POST').every(call => JSON.parse(call.options.body).action === 'clear_security_opening'));
 });
 
