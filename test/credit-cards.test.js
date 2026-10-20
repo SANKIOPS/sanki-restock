@@ -145,24 +145,26 @@ test('finalized card expenses appear in search, vendor ledgers, spending and pro
 });
 test('unbilled transactions are replaced by billed rows without doubling reports and restored on reopening',()=>{
   const {summaryForPL}=require('../modules/expenses');
+  // Keep this lifecycle isolated from earlier tests that log expenses on today.
+  const day='2098-10-20';
   const card=invoke('POST','/api/expenses/credit-cards',{body:{name:'Unbilled card',last4:'8888',issuingBank:'HDFC'}}).body.card;
-  const provisional=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,kind:'unbilled',date:'2026-10-20',narration:'Facebook IndiaGurugram',amount:650,classification:'expense'}}).body.statement;
+  const provisional=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,kind:'unbilled',date:day,narration:'Facebook IndiaGurugram',amount:650,classification:'expense'}}).body.statement;
   assert.equal(provisional.kind,'unbilled');assert.equal(provisional.totals.debit,650);
   invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:provisional.id},body:{rows:[{id:provisional.rows[0].id,classification:'expense',category:'MARKETING EXPENSE',type:'marketing',nature:'SANKI',channel:'Website'}]}});
   assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:provisional.id}}).status,200);
-  assert.equal(summaryForPL('2026-10-20','2026-10-20').Website.marketing,650);
-  const billed=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-10-20',narration:'RAZ*Facebook IndiaGurugram (Ref# 12345)',amount:650,classification:'expense'}}).body.statement;
+  assert.equal(summaryForPL(day,day).Website.marketing,650);
+  const billed=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:day,narration:'RAZ*Facebook IndiaGurugram (Ref# 12345)',amount:650,classification:'expense'}}).body.statement;
   assert.equal(billed.rows[0].replaces.statementId,provisional.id);assert.equal(billed.rows[0].type,'marketing');
   assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:billed.id}}).status,200);
-  let rows=invokeExpense('GET','/api/expenses/list',{query:{from:'2026-10-20',to:'2026-10-20'}}).body.expenses;
+  let rows=invokeExpense('GET','/api/expenses/list',{query:{from:day,to:day}}).body.expenses;
   assert.equal(rows.length,1);assert.equal(rows[0].creditCardStatementId,billed.id);assert.equal(rows[0].unbilled,false);
-  assert.equal(summaryForPL('2026-10-20','2026-10-20').Website.marketing,650);
+  assert.equal(summaryForPL(day,day).Website.marketing,650);
   assert.equal(invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body.outstanding,650);
-  const repeat=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-10-20',narration:'RAZ*Facebook IndiaGurugram (Ref# 12345)',amount:650,classification:'expense'}}).body.statement;
+  const repeat=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:day,narration:'RAZ*Facebook IndiaGurugram (Ref# 12345)',amount:650,classification:'expense'}}).body.statement;
   assert.ok(repeat.rows[0].duplicateOf);assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:repeat.id}}).status,200);
-  assert.equal(summaryForPL('2026-10-20','2026-10-20').Website.marketing,650);
+  assert.equal(summaryForPL(day,day).Website.marketing,650);
   invoke('POST','/api/expenses/credit-cards/statements/:id/reopen',{params:{id:billed.id},body:{reason:'Correct generated statement'}});
-  rows=invokeExpense('GET','/api/expenses/list',{query:{from:'2026-10-20',to:'2026-10-20'}}).body.expenses;assert.equal(rows.length,1);assert.equal(rows[0].unbilled,true);
+  rows=invokeExpense('GET','/api/expenses/list',{query:{from:day,to:day}}).body.expenses;assert.equal(rows.length,1);assert.equal(rows[0].unbilled,true);
 });
 test('current-cycle screenshot text imports purchases and refunds without balance columns',()=>{
   const {parseUnbilledTransactions}=require('../modules/credit-card-accounting');

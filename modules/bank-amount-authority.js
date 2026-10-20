@@ -111,7 +111,7 @@ function sourceBefore(source) {
   return { amount: source.payment.amount, date: source.payment.date, expense: { amount: record.amount, paidAmount: record.paidAmount, status: record.status, requestedAmount: record.requestedAmount, date: record.date } };
 }
 function bodyId(body) { return 'BAA-' + fingerprint(body).slice(0, 32); }
-function plan(store, draft, bank, movement, options = {}) {
+function ordinaryPlan(store, draft, bank, movement, options = {}) {
   if (!draft || !text(draft.id) || !bank || !movement || !text(movement.id)) fail('A verified bank row, draft and source movement are required.', 400);
   const mode = options.mode || 'auto'; if (!['auto', 'manual'].includes(mode)) fail('Choose automatic or manually verified amount authority.', 400);
   const bankRowId = text(options.bankRowId), match = bankRowId.match(/^bank-(\d+)$/);
@@ -131,7 +131,7 @@ function plan(store, draft, bank, movement, options = {}) {
   const body = copy({ version: 1, mode, draftId: text(draft.id), bankRowId, nature: text(draft.nature || 'SANKI').toUpperCase(), sourceNature, account: text(draft.account), movementId: text(movement.id), sourceType: source.type, sourceId: text(source.id), paymentId: source.payment ? text(source.payment.id) : null, bankFingerprint: fingerprint(bank), bankSnapshot: bank, sourceFingerprint: fingerprint(source.record), originalAmount: money(movementSide.amount), bankAmount: money(bankSide.amount), amountDifference: money(delta), direction: bankSide.direction, before, after });
   return freeze({ ...body, id: bodyId(body) });
 }
-function validate(store, candidate, options = {}) {
+function ordinaryValidate(store, candidate, options = {}) {
   if (!candidate || candidate.version !== 1 || !candidate.id) fail('The bank correction plan is invalid.');
   const body = { ...candidate }; delete body.id;
   if (bodyId(body) !== candidate.id) fail('The bank correction plan changed. Review it again.');
@@ -142,15 +142,15 @@ function validate(store, candidate, options = {}) {
   const source = sources(store, candidate.movementId);
   if (source.type !== candidate.sourceType || text(source.id) !== candidate.sourceId || fingerprint(source.record) !== candidate.sourceFingerprint) fail('The original ledger source changed after review. Nothing was corrected.');
   const original = cents(candidate.originalAmount), movement = { id: candidate.movementId, debit: candidate.direction === 'debit' ? money(original) : 0, credit: candidate.direction === 'credit' ? money(original) : 0 };
-  const rebuilt = plan(store, draft, bank, movement, { ...options, mode: candidate.mode, bankRowId: candidate.bankRowId });
+  const rebuilt = ordinaryPlan(store, draft, bank, movement, { ...options, mode: candidate.mode, bankRowId: candidate.bankRowId });
   if (fingerprint(rebuilt) !== fingerprint(candidate)) fail('The correction no longer matches its verified bank and source evidence.');
   return { alreadyApplied: false, plan: candidate, source };
 }
-function applyAll(store, candidates, options = {}) {
+function ordinaryApplyAll(store, candidates, options = {}) {
   if (!Array.isArray(candidates)) fail('Supply the reviewed bank correction plans.', 400);
   const ids = new Set();
   for (const candidate of candidates) { if (!candidate || ids.has(candidate.movementId)) fail('A movement cannot be corrected twice in the same finalization.'); ids.add(candidate.movementId); }
-  const checked = candidates.map(candidate => validate(store, candidate, options)), pending = checked.filter(item => !item.alreadyApplied), groups = new Map();
+  const checked = candidates.map(candidate => ordinaryValidate(store, candidate, options)), pending = checked.filter(item => !item.alreadyApplied), groups = new Map();
   // Validate and project EVERY source before committing any object replacement.
   for (const item of pending) {
     const { source, plan: candidate } = item, key = source.type + '/' + source.id;
@@ -184,6 +184,7 @@ function applyAll(store, candidates, options = {}) {
   if (pending.length) store.bankAmountAuthorityApplications = journal;
   return { applied: pending.length, alreadyApplied: checked.length - pending.length, audits: audit, plans: candidates };
 }
-function apply(store, candidate, options = {}) { return applyAll(store, [candidate], options); }
+const universal = require('./bank-universal-authority')({ plan: ordinaryPlan, validate: ordinaryValidate, applyAll: ordinaryApplyAll, cents, fingerprint, date, side, assertUnclaimed });
+function apply(store, candidate, options = {}) { return universal.applyAll(store, [candidate], options); }
 
-module.exports = { plan, validate, apply, applyAll, cents, fingerprint };
+module.exports = { ...universal, apply, cents, fingerprint };
