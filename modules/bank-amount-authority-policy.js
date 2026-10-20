@@ -8,10 +8,10 @@ module.exports = function createPolicy(engine, deps) {
   const net = row => engine.cents(row.credit || 0) - engine.cents(row.debit || 0);
   const amount = row => Math.abs(net(row));
   const reference = row => deps.reference(row.reference || row.bankDateOverride && row.bankDateOverride.bankReference || '');
-  function prepare(store, draft, bank, movement, rowId, mode) {
+  function prepare(store, draft, bank, movement, rowId, mode, overrides = {}) {
     if (!deps.accountEligible(draft)) throw new Error('This amount rule is for bank accounts, not cash, credit cards, wallets or settlement clearing accounts.');
     if (deps.knownCharge && deps.knownCharge(bank, movement, draft)) throw new Error('This bank total includes a recognized transfer charge. Preserve the separate principal and Bank Charges allocation.');
-    return engine.plan(store, draft, bank, movement, { ...deps.options(store, draft), bankRowId: rowId, mode });
+    return engine.plan(store, draft, bank, movement, { ...deps.options(store, draft), bankRowId: rowId, mode, amountAuthorityAllocations: overrides.amountAuthorityAllocations });
   }
   function publicPlan(plan) {
     // Access to the physical bank does not grant access to a private invoice.
@@ -21,6 +21,9 @@ module.exports = function createPolicy(engine, deps) {
     return { eligible: true, fingerprint: plan.id, mode: plan.mode,
       originalAmount: plan.originalAmount, bankAmount: plan.bankAmount,
       amountDifference: plan.amountDifference, bankDate: plan.after.date,
+      sourceType: plan.sourceType, sourceLabel: plan.sourceLabel || (plan.sourceType === 'expense_payment' ? 'Expense payment' : 'Bank transfer or receipt'),
+      effect: plan.effect || (plan.sourceType === 'expense_payment' ? 'expense_and_payment' : 'linked_sources'),
+      sourceEffects: plan.sourceEffects || '', linkedCount: (plan.patches || []).length,
       ...(privateExpense ? { privacyRestricted: true } : {
         expenseAmountBefore: plan.before.expense && plan.before.expense.amount,
         expenseAmountAfter: plan.after.expense && plan.after.expense.amount }) };
