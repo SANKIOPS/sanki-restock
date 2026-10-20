@@ -128,7 +128,7 @@ function register(router,{loadStore,saveStore,isOwner,audit,clock=()=>new Date()
     if(!canManageRentals(req))return deny(res,'Owner or Prashant only.',403);
     const s=loadStore(),r=state(s),b=req.body||{},now=clock().toISOString(),today=indiaDate(clock());
     if(b.revision!=null&&b.revision!==r.revision)return deny(res,'The register changed. Refresh and try again.',409);
-    let t=r.tenancies.find(x=>x.id===b.tenancyId);
+    let t=r.tenancies.find(x=>x.id===b.tenancyId),openingCorrection=null;
     const amount=money(b.amount),reason=String(b.reason||'').trim(),actor=req.user.username,requireDate=()=>validDate(String(b.date||''))&&b.date<=today,receiptFor=rid=>(s.receipts||[]).find(x=>x.id===rid&&rentalReceipt(r,x)&&x.receiptType!=='rental_security'&&(!x.tenancyId||t&&x.tenancyId===t.id));
     if(b.action==='run'){generate(r,today,now);r.automation={lastCheckedDate:today,lastSuccessAt:now,error:null};}
     else if(b.action==='add_tenant'){
@@ -168,6 +168,19 @@ function register(router,{loadStore,saveStore,isOwner,audit,clock=()=>new Date()
         if(b.amount===''||b.amount==null||!Number.isFinite(amount)||amount<0||!requireDate()||!reason||b.date>=String(t.autoFrom||t.startMonth)+'-01')return deny(res,'Enter a confirmed nonnegative opening balance, date before tracking, and note.');
         if(active(r.invoices).some(i=>i.tenancyId===t.id&&i.opening)||(t.openingRecordedAt&&!r.invoices.some(i=>i.tenancyId===t.id&&i.opening&&i.voidedAt)))return deny(res,'Opening balance already recorded. Correct its charge rather than entering twice.');
         if(amount)r.invoices.push({id:id('OPEN'),tenancyId:t.id,month:b.date.slice(0,7),dueDate:b.date,bankDue:amount,opening:true,reason,createdAt:now});t.openingConfirmed=true;t.openingRecordedAt=now;t.openingNote=reason;
+      }else if(b.action==='clear_security_opening'){
+        if(!Number.isSafeInteger(b.revision))return deny(res,'Refresh the register and confirm its current revision before removing an opening security balance.',409);
+        if(t.securityOpening==null)return deny(res,'This opening security balance is already removed or was never entered. Refresh the register.',409);
+        const expected=Number(b.expectedSecurityOpening),current=Number(t.securityOpening),expectedDate=String(b.expectedSecurityOpeningDate||''),currentDate=String(t.securityOpeningDate||'');
+        const precise=value=>Number.isFinite(value)&&Number.isSafeInteger(Math.round(value*100))&&Math.abs(value*100-Math.round(value*100))<.00001&&value>=0;
+        if(!Object.prototype.hasOwnProperty.call(b,'expectedSecurityOpening')||!['number','string'].includes(typeof b.expectedSecurityOpening)||!['number','string'].includes(typeof t.securityOpening)||String(b.expectedSecurityOpening).trim()===''||!precise(expected)||!precise(current)||expected!==current||typeof b.expectedSecurityOpeningDate!=='string'||expectedDate!==currentDate)return deny(res,'The opening security amount or date changed. Refresh and review the current balance before removing it.',409);
+        if(reason.length<10)return deny(res,'Explain why this opening security balance is duplicated or incorrect (at least 10 characters).');
+        if(t.securityOpeningCorrections!=null&&!Array.isArray(t.securityOpeningCorrections))return deny(res,'The prior opening correction history needs review. Nothing was removed.',409);
+        const before={securityOpening:t.securityOpening,securityOpeningDate:currentDate},after={securityOpening:null,securityOpeningDate:''};
+        const preview={...r,tenancies:r.tenancies.map(item=>item===t?{...item,...after}:item)};
+        if(!securityTimelineValid(preview,t.id))return deny(res,'Removing this opening would leave security negative on an earlier date. Resolve dependent security settlements or refunds first.',409);
+        openingCorrection={id:id('SEC-OPEN-CORRECTION'),at:now,by:actor,reason,before,after};
+        Object.assign(t,after,{securityOpeningCorrections:[...(t.securityOpeningCorrections||[]),openingCorrection]});
       }else if(['deposit','refund_deposit'].includes(b.action)){
         if(!positive(amount)||!requireDate()||!reason)return deny(res,'Enter a positive security amount, actual date and reference.');
         if(b.action==='refund_deposit'&&amount>depositBalance(r,t.id))return deny(res,'Refund exceeds security held.');
@@ -199,7 +212,7 @@ function register(router,{loadStore,saveStore,isOwner,audit,clock=()=>new Date()
       }else return deny(res,'Unknown rental action.');
     }
     if(t&&!securityTimelineValid(r,t.id))return deny(res,'This correction would leave security negative on an earlier date. Review dated deposits and settlements.');
-    r.activity.push({at:now,by:actor,action:b.action,tenancyId:t&&t.id,detail:reason||'Updated rental register.'});r.revision++;s.rentals=r;audit(s,req,'RENTAL_'+String(b.action).toUpperCase(),'rental',t?t.id:'register',{after:b});saveStore(s);res.json({success:true,tenancyId:t&&t.id,revision:r.revision});
+    r.activity.push({at:now,by:actor,action:b.action,tenancyId:t&&t.id,detail:reason||'Updated rental register.'});r.revision++;s.rentals=r;audit(s,req,'RENTAL_'+String(b.action).toUpperCase(),'rental',t?t.id:'register',openingCorrection?{before:openingCorrection.before,after:openingCorrection.after,note:reason,correctionId:openingCorrection.id}:{after:b});saveStore(s);res.json(openingCorrection?{...snapshot(s,today),tenancyId:t.id}:{success:true,tenancyId:t&&t.id,revision:r.revision});
   });return {tick,start};
 }
 module.exports={register,state,depositBalance,outstanding,creditBalance,receiptUsage,receiptRemovalError,snapshot,generate,termsAt,indiaDate,applySourceOverride};
