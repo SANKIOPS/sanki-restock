@@ -2241,7 +2241,7 @@ router.use('/api/expenses/bank-statements/finalize',async(req,res,next)=>{
     return res.status(409).json({success:false,error:'This reconciliation was affected by the earlier Owner-approval issue, and the retained statement could not be reopened safely. Discard this temporary preview and upload the original statement again; no ledger posting has been made.'});
   }
 });
-const approvalDamagedDraftMutationPaths=new Set(['/api/expenses/bank-statements/correct-ledger-entry','/api/expenses/bank-statements/create-incoming','/api/expenses/bank-statements/create-rental','/api/expenses/bank-statements/retag','/api/expenses/bank-statements/resolve','/api/expenses/bank-statements/create-expense','/api/expenses/bank-statements/undo','/api/expenses/bank-statements/resolve-balance']);
+const approvalDamagedDraftMutationPaths=new Set(['/api/expenses/bank-statements/correct-ledger-entry','/api/expenses/bank-statements/create-incoming','/api/expenses/bank-statements/create-rental','/api/expenses/bank-statements/retag','/api/expenses/bank-statements/retag-bulk','/api/expenses/bank-statements/resolve','/api/expenses/bank-statements/create-expense','/api/expenses/bank-statements/undo','/api/expenses/bank-statements/resolve-balance']);
 router.use((req,res,next)=>{
   if(req.method!=='POST'||!approvalDamagedDraftMutationPaths.has(req.path))return next();
   const s=loadStore(),draft=(s.bankReconciliationDrafts||{})[String(req.body&&req.body.draftId||'')];
@@ -5349,7 +5349,7 @@ function finalizedStoredBankTransaction(book,row){
 function reliableFinalizedEntityNature(row){
   const tag=row&&row.entityTag,nature=reconciliationOwnershipNature(tag&&tag.nature||row&&row.transactionNature);if(!nature||tag&&tag.sourceConflict)return'';
   if(!tag)return'';
-  if(tag.status==='manual'||tag.source==='manual'||tag.source==='finalized_link_correction'||tag.source==='restored_finalized_transfer')return nature;
+  if(tag.status==='manual'||tag.source==='manual'||tag.source==='finalized_link_correction'||tag.source==='restored_finalized_transfer'||tag.source==='finalized_entity_correction')return nature;
   if(tag.status==='finalized'&&/^legacy_(samast|personal)_book_migration$/.test(String(tag.source||'')))return nature;
   if(tag.source==='linked_ledger'&&tag.confidence==='exact'&&Array.isArray(tag.linkedRecordIds)&&tag.linkedRecordIds.length)return nature;
   return'';
@@ -5526,6 +5526,109 @@ function reconciliationSourceNatureCorrectionPlan(s,row,targetNature){
   return{success:true,changes:Array.from(plans.values()),apply(){this.changes.forEach(change=>change.apply());}};
 }
 router.post('/api/expenses/bank-statements/correct-ledger-entry',(req,res)=>{const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId],amount=num(b.amount),reason=String(b.reason||'').trim();if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot edit this reconciliation.'});if(!(amount>0)||!reason)return res.status(400).json({success:false,error:'A corrected amount and reason are required.'});const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId);if(!row||row.status!=='amount_mismatch'||!row.app||!row.bank)return res.status(400).json({success:false,error:'Choose an amount-mismatch row with both ledger and bank entries.'});const change=correctLedgerMovementAmount(s,row.app.id,amount);if(!change)return res.status(400).json({success:false,error:'This ledger source cannot be edited here. Link it or create an explicit adjustment instead.'});if(change.error)return res.status(409).json(Object.assign({success:false},change));audit(s,req,'BANK_RECONCILIATION_LEDGER_AMOUNT_CORRECTED','ledger_entry',row.app.id,{nature:draft.nature,account:draft.account,before:{amount:change.before},after:{amount:change.after},note:reason,draftId:draft.id,bankDate:row.bank.date});saveStore(s);res.json(draftReconciliation(s,draft));});
+router.post('/api/expenses/bank-statements/retag-bulk',(req,res)=>{
+  const b=req.body||{},account=String(b.account||'').trim(),requestedNature=typeof b.nature==='string'?b.nature.trim().toUpperCase():'',nature='SAMAST',targetNature=String(b.targetNature||'').trim().toUpperCase(),reason=String(b.reason||'').trim(),items=Array.isArray(b.items)?b.items:[];
+  const fail=(message,status=409)=>{const error=new Error(message);error.status=status;throw error;},copy=value=>JSON.parse(JSON.stringify(value)),same=(a,c)=>JSON.stringify(a)===JSON.stringify(c),idsOf=row=>Array.from(new Set(ledgerConnections.linkedIds(row).concat(row&&row.ledger&&row.ledger.id?String(row.ledger.id).split(/\s*,\s*/):[]).filter(Boolean))).sort();
+  try{
+    if(!isAdmin(req))fail('Only the Owner or an Admin can change reconciliation entities.',403);
+    if(!['SAMAST','PERSONAL'].includes(requestedNature)||!isSharedBankReconciliationAccount(account))fail('Bulk transaction ownership is available only in the shared IndusInd Bank 7883 reconciliation.',400);
+    if(typeof b.targetNature!=='string'||!['SAMAST','PERSONAL'].includes(targetNature))fail('Choose SAMAST or PERSONAL.',400);
+    if(reason.length<10)fail('Enter a correction reason of at least 10 characters.',400);
+    if(!items.length||items.length>200)fail('Select between 1 and 200 bank transactions.',400);
+    const s=loadStore();if(!canAccessBankReconciliation(req,s,nature,account)||requestedNature==='PERSONAL'&&!canManagePersonalAccounting(req))fail('You cannot edit this bank reconciliation.',403);
+    if(!approvalNatures(req).includes(targetNature)||targetNature==='PERSONAL'&&!canManagePersonalAccounting(req))fail('You cannot assign transactions to this accounting entity.',403);
+    const raw=fs.readFileSync(EXP_PATH,'utf8'),work=copy(s),book=work.bankStatements&&work.bankStatements[bankStatementBookKey(nature,account)],allHistory=(book&&book.imports||[]).flatMap(record=>[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).map(row=>({record,row}))),groups=new Map(),requestedRefs=new Set(),draftViews=new Map(),requestedDrafts=new Set(),movementPool=appBankMovements(work,account,nature);
+    const pending=draft=>Object.values(work.bankReconciliationApprovals||{}).some(value=>value.draftId===draft.id&&value.status==='pending');
+    const draftView=draft=>{if(draft.originalStatementPeriod)fail('This reconciliation is locked while its original statement is being restored.');if(pending(draft))fail('This reconciliation is awaiting Owner approval. Withdraw that request and review the entity correction before resubmitting.');if(!draftViews.has(draft.id)){const candidate=copy(work),d=candidate.bankReconciliationDrafts[draft.id];draftViews.set(draft.id,draftReconciliation(candidate,d,{readOnly:true}));}return draftViews.get(draft.id);};
+    for(const item of items){
+      if(!item||typeof item!=='object'||typeof item.rowId!=='string'||!item.rowId||!!item.draftId===!!item.recordId)fail('Each selected row must identify exactly one draft or finalized reconciliation.',400);
+      const ref={...(item.draftId?{draftId:String(item.draftId)}:{recordId:String(item.recordId)}),rowId:item.rowId},refKey=JSON.stringify(ref);if(requestedRefs.has(refKey))fail('The selection contains the same reconciliation row more than once.',400);requestedRefs.add(refKey);
+      let row,record=null,draft=null,viewRow=null;
+      if(ref.draftId){
+        draft=work.bankReconciliationDrafts&&work.bankReconciliationDrafts[ref.draftId];if(!draft||draft.account!==account||!canAccessBankDraft(req,work,draft))fail('A selected draft does not belong to this accessible bank account.',403);
+        requestedDrafts.add(draft.id);viewRow=draftView(draft).rows.find(value=>value.id===ref.rowId&&value.bank);if(!viewRow)fail('A selected bank transaction is no longer in this draft.',404);
+        const index=Number(ref.rowId.replace(/^bank-/,'')),bank=draft.transactions&&draft.transactions[index];if(!bank||reconciliationBankStrongSignature(bank)!==reconciliationBankStrongSignature(viewRow.bank))fail('The original statement row changed. Refresh before reviewing an entity correction.');
+        if(viewRow.reversalReviewRequired||viewRow.resolution&&viewRow.resolution.action==='bank_reversal_pair')fail('Bank reversals require their dedicated review and cannot be bulk-retagged.');
+        if(viewRow.status==='already_reconciled'){
+          const matches=allHistory.filter(value=>value.row.bank&&reconciliationBankStrongSignature(value.row.bank)===reconciliationBankStrongSignature(bank));if(!matches.length)fail('This previously reconciled transaction has no exact finalized history row. Review its history first.');
+          ({row,record}=matches[0]);
+        }else{
+          const linked=resolutionLinkedAppIds((draft.resolutions||{})[ref.rowId]);
+          if(!linked.length&&viewRow.app&&!viewRow.referenceVerified)fail('Confirm or unmatch this suggested source before bulk-changing its entity.');
+          const ids=linked.length?linked:viewRow.referenceVerified&&viewRow.app?[viewRow.app.id]:[];
+          row={id:ref.rowId,bank:copy(bank),linkedRecordIds:ids,ledger:viewRow.app||null,entityTag:viewRow.entityTag||null};
+        }
+      }else{
+        const records=(book&&book.imports||[]).filter(value=>value.id===ref.recordId);if(records.length!==1)fail('The selected finalized reconciliation is missing or duplicated.',404);record=records[0];
+        const rows=[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).filter(value=>value.id===ref.rowId);if(rows.length!==1||!rows[0].bank)fail('The selected finalized bank row is missing or ambiguous.',404);row=rows[0];
+      }
+      if(record&&!isOwner(req))fail('Only the Owner can change the entity of an already finalized bank transaction.',403);
+      if(record&&!record.finalizedAt)fail('The selected history record has not been finalized.');
+      if(row.resolutionAction==='bank_reversal_pair'||row.bank.reversal)fail('Bank reversal evidence cannot be bulk-retagged.');
+      const signature=reconciliationBankStrongSignature(row.bank),key=(record?'final:':'draft:'+draft.id+':')+signature;
+      if(Object.values(book&&book.transactions||{}).filter(value=>reconciliationBankStrongSignature(value)===signature).length>1||Object.values(work.bankReconciliationDrafts||{}).some(value=>value.account===account&&(value.transactions||[]).filter(bank=>reconciliationBankStrongSignature(bank)===signature).length>1))fail('Multiple physical bank transactions have indistinguishable evidence. Review these duplicate-looking rows individually; no unselected transaction can be bulk-retagged.');
+      if(groups.has(key)){groups.get(key).refs.push(ref);continue;}
+      const copies=record?allHistory.filter(value=>value.row.bank&&reconciliationBankStrongSignature(value.row.bank)===signature):[];
+      const ids=idsOf(row),lookup=record?finalizedStoredBankTransaction(book,row):null;if(record&&(lookup.error||!lookup.transaction))fail(lookup.error||'The finalized bank row has no unique stored bank transaction. Correct that history first.');
+      for(const evidence of copies){const copyLookup=finalizedStoredBankTransaction(book,evidence.row);if(copyLookup.error||!copyLookup.transaction||copyLookup.transaction.id!==lookup.transaction.id)fail('Duplicate-looking finalized rows do not identify the same unique physical bank transaction. Review their bank evidence individually.');if(!evidence.record.finalizedAt)fail('An overlapping history copy is not finalized. Review that record first.');if(!same(idsOf(evidence.row),ids))fail('Overlapping finalized copies disagree about their linked source records. Correct the history conflict first.');if(evidence.row.entityTag&&evidence.row.entityTag.sourceConflict)fail('A finalized copy has conflicting source ownership. Review that conflict individually.');}
+      const linked=[];
+      for(const id of ids){const matches=movementPool.filter(value=>value.id===id||(value.sourceIds||[]).includes(id));if(matches.length!==1)fail('Linked source '+id+' is missing or does not resolve uniquely in this bank account.');if(!linked.some(value=>value.id===matches[0].id))linked.push(matches[0]);}
+      const sourceNatures=Array.from(new Set(linked.map(value=>reconciliationOwnershipNature(value.entity)).filter(Boolean)));if(sourceNatures.length>1)fail('This transaction links mixed accounting entities. Split or correct its source workflow individually.');
+      const tagNature=reconciliationOwnershipNature(row.entityTag&&row.entityTag.nature||row.transactionNature),sourceNature=sourceNatures[0]||tagNature;
+      if(row.entityTag&&row.entityTag.sourceConflict||tagNature&&sourceNatures.length&&tagNature!==sourceNature)fail('The saved ownership and linked accounting source disagree. Review that conflict individually.');
+      if(copies.some(value=>{const known=reconciliationOwnershipNature(value.row.entityTag&&value.row.entityTag.nature||value.row.transactionNature);return known&&sourceNature&&known!==sourceNature;})||lookup&&lookup.transaction&&(lookup.transaction.entityTag&&lookup.transaction.entityTag.sourceConflict||reconciliationOwnershipNature(lookup.transaction.entityTag&&lookup.transaction.entityTag.nature||lookup.transaction.transactionNature)&&sourceNature&&reconciliationOwnershipNature(lookup.transaction.entityTag&&lookup.transaction.entityTag.nature||lookup.transaction.transactionNature)!==sourceNature))fail('The stored bank transaction, finalized copies and linked source disagree about ownership. Review that conflict individually.');
+      if((sourceNature==='PERSONAL'||copies.some(value=>reconciliationOwnershipNature(value.row.entityTag&&value.row.entityTag.nature||value.row.transactionNature)==='PERSONAL'))&&!canManagePersonalAccounting(req))fail('The Owner must review PERSONAL source transactions before their entity is changed.',403);
+      if(linked.length){const debit=roundMoney(linked.reduce((n,value)=>n+num(value.debit),0)),credit=roundMoney(linked.reduce((n,value)=>n+num(value.credit),0));if(Math.abs(debit-num(row.bank.debit))>.001||Math.abs(credit-num(row.bank.credit))>.001)fail('The linked accounting amount does not equal the finalized bank amount. Resolve the amount or split workflow first.');}
+      let correction={success:true,changes:[],apply(){}};
+      if(linked.length&&sourceNature!==targetNature){
+        correction=reconciliationSourceNatureCorrectionPlan(work,{app:{linkedEntries:linked}},targetNature);if(!correction.success)fail(correction.error);
+        for(const change of correction.changes){
+          if(!['expense','receipt','adjustment','vendor_advance','receivable','bank_truth'].includes(change.kind))fail('This linked '+change.kind+' workflow requires an individual source correction.');
+          if([change.id].concat(ids).some(id=>transferReimbursements.protectsMovement(work,id)||gokwikAccounting.protectsMovement(work,id)||expenseLoans.protectsMovement(work,id)||expenseRefunds.protectsMovement(work,id)))fail('This linked source participates in a loan, refund, reimbursement or settlement workflow. Correct that workflow individually.');
+          if(change.kind==='receipt'){const source=(work.receipts||[]).find(value=>value.id===change.id);if(source&&(expenseLoans.isLoan(source)||(work.loanRepayments||[]).some(value=>value.loanId===source.id)||source.expenseRefundId||source.refundRecoveryExpenseId||source.manualSaleId||source.paytmTransactionId||source.paytmRoundingTransactionId||source.tenancyId||source.rentalKind||['rental_income','rental_security'].includes(source.receiptType)))fail('Loan, rental, sale, refund and settlement receipts require their dedicated source workflow.');}
+          if(change.kind==='receivable'){const source=(work.receivables||{})[change.id],collections=source&&(source.collections||[]).filter(value=>!value.accountingExcluded)||[];if(!source||collections.length!==1||Math.abs(num(collections[0].amount)-num(source.amount))>.001)fail('A partially unpaid receivable or one with multiple collections requires an individual source correction.');}
+          if(change.kind==='vendor_advance'){const source=(work.vendorAdvances||[]).find(value=>value.id===change.id);if(!source||num(source.grossPaymentAmount)>0||(source.reclassifiedPayments||[]).length)fail('A gross vendor payment or one covering other expense allocations requires an individual source correction.');}
+        }
+      }
+      groups.set(key,{key,row,record,draft,viewRow,copies,lookup,signature,ids,linked,correction,fromNature:sourceNature,refs:[ref]});
+    }
+    const selected=Array.from(groups.values()),selectedIds=new Set(selected.flatMap(group=>group.ids.concat(group.linked.flatMap(row=>[row.id].concat(row.sourceIds||[])))));
+    for(const group of selected){
+      for(const [bookKey,otherBook]of Object.entries(work.bankStatements||{}))for(const otherRecord of otherBook.imports||[])for(const otherRow of [].concat(otherRecord.reconciliationRows||[],otherRecord.carriedReconciliationRows||[])){
+        if(!idsOf(otherRow).some(id=>group.ids.includes(id)))continue;
+        if(bookKey!==bankStatementBookKey(nature,account)||!otherRow.bank||reconciliationBankStrongSignature(otherRow.bank)!==group.signature)fail('A selected source is also linked to a different finalized bank transaction. Correct that source relationship individually.');
+      }
+      for(const otherDraft of Object.values(work.bankReconciliationDrafts||{})){
+        const touches=Object.values(otherDraft.resolutions||{}).some(resolution=>resolutionLinkedAppIds(resolution).some(id=>group.ids.includes(id)))||otherDraft.account===account&&(otherDraft.transactions||[]).some(bank=>reconciliationBankStrongSignature(bank)===group.signature);
+        if(touches&&(otherDraft.originalStatementPeriod||pending(otherDraft)))fail('A selected source is part of a locked or pending Owner-approval reconciliation. Withdraw and review that request first.');
+        if(!touches)continue;
+        for(const [rowId,resolution]of Object.entries(otherDraft.resolutions||{}))if(resolutionLinkedAppIds(resolution).some(id=>group.ids.includes(id))){const bank=otherDraft.transactions&&otherDraft.transactions[Number(rowId.replace(/^bank-/,''))];if(otherDraft.account!==account||!bank||reconciliationBankStrongSignature(bank)!==group.signature)fail('A selected source is claimed by another active bank decision. Review that conflicting link first.');}
+      }
+    }
+    const intent={account,nature,targetNature,reason,items:items.map(item=>({...(item.draftId?{draftId:String(item.draftId)}:{recordId:String(item.recordId)}),rowId:item.rowId}))},fingerprint=crypto.createHash('sha256').update(JSON.stringify({intent,store:raw})).digest('hex'),changes=selected.map(group=>({...group.refs[0],references:group.refs,fromNature:group.fromNature||'',toNature:targetNature,sourceKinds:Array.from(new Set(group.correction.changes.map(change=>change.kind))),linkedRecordIds:group.ids.slice(),date:group.row.bank.date,amount:roundMoney(num(group.row.bank.debit)+num(group.row.bank.credit)),finalized:!!group.record}));
+    if(b.dryRun===true)return res.json({success:true,preview:true,updated:selected.length,changes,fingerprint});
+    if(typeof b.fingerprint!=='string'||b.fingerprint!==fingerprint)fail('This bulk correction was not reviewed or its bank/source records changed. Refresh the preview; nothing was saved.');
+    const at=new Date().toISOString(),actor=req.user.username,physicalRows=store=>appBankMovements(store,account,nature).map(row=>({id:row.id,date:row.date,debit:num(row.debit),credit:num(row.credit)})).sort((a,c)=>a.id.localeCompare(c.id)),beforeCash=physicalRows(work),beforeApprovals=copy(work.bankReconciliationApprovals||{}),beforeDateLinks=copy({dates:work.bankDateOverrides||{},links:work.bankReconciliationLinks||{}}),sourceChanges=new Map();
+    for(const group of selected)for(const change of group.correction.changes)sourceChanges.set(change.kind+'|'+change.id,change);
+    for(const change of sourceChanges.values()){change.apply();audit(work,req,'BANK_RECONCILIATION_SOURCE_ENTITY_CORRECTED',change.kind,change.id,{nature:targetNature,account,before:change.before,after:change.after,note:reason,bulk:true,bankMovementPreserved:true});}
+    const setLedgerEntity=row=>{if(!row||typeof row!=='object')return;row.entity=targetNature;if(row.entityCandidates)row.entityCandidates=[targetNature];(row.linkedEntries||[]).forEach(setLedgerEntity);};
+    for(const group of selected){
+      if(group.record){
+        const tag=finalizedEntityProvenance(targetNature,'finalized_entity_correction',group.ids,reason,actor,at);
+        for(const evidence of group.copies){const previous={entityTag:copy(evidence.row.entityTag||null),transactionNature:evidence.row.transactionNature||'',ledgerEntity:evidence.row.ledger&&evidence.row.ledger.entity||''};const applied=applyFinalizedEntityProvenance(book,evidence.record,evidence.row,account,tag);if(applied.error)fail(applied.error);if(evidence.row.ledger)setLedgerEntity(evidence.row.ledger);evidence.row.correctionHistory=Array.isArray(evidence.row.correctionHistory)?evidence.row.correctionHistory:[];evidence.row.correctionHistory.push({type:'entity_correction',before:previous,after:{entityTag:copy(tag),transactionNature:targetNature},reason,by:actor,at,bankMovementPreserved:true});}
+      }
+      for(const otherDraft of Object.values(work.bankReconciliationDrafts||{})){
+        if(otherDraft.account!==account)continue;
+        (otherDraft.transactions||[]).forEach((bank,index)=>{if(reconciliationBankStrongSignature(bank)!==group.signature)return;const rowId='bank-'+index,previous=otherDraft.transactionOwnership&&otherDraft.transactionOwnership[rowId]||null;otherDraft.transactionOwnership=otherDraft.transactionOwnership||{};otherDraft.transactionOwnership[rowId]={nature:targetNature,reason,by:actor,at,source:'manual'};if(otherDraft.resolutions&&otherDraft.resolutions[rowId]&&otherDraft.resolutions[rowId].action!=='already_reconciled')otherDraft.resolutions[rowId].postingNature=targetNature;otherDraft.decisionAudit=Array.isArray(otherDraft.decisionAudit)?otherDraft.decisionAudit:[];otherDraft.decisionAudit.push({action:'bulk_retag_transaction_ownership',rowId,before:previous,after:copy(otherDraft.transactionOwnership[rowId]),reason,by:actor,at});});
+      }
+    }
+    for(const record of Object.values(work.bankMovementAuthority||{}))if(record.account===account&&(selectedIds.has(record.movementId)||(record.sourceIds||[]).some(id=>selectedIds.has(id)))){record.sourceNature=targetNature;record.entity=targetNature;}
+    if(!same(beforeCash,physicalRows(work))||!same(beforeApprovals,work.bankReconciliationApprovals||{})||!same(beforeDateLinks,{dates:work.bankDateOverrides||{},links:work.bankReconciliationLinks||{}}))fail('Accounting conservation check failed. No entity correction was saved.');
+    audit(work,req,'BANK_RECONCILIATION_ENTITIES_BULK_CORRECTED','bank_reconciliation',account,{nature:targetNature,account,before:changes.map(change=>({recordId:change.recordId,draftId:change.draftId,rowId:change.rowId,nature:change.fromNature})),after:{count:selected.length,nature:targetNature},note:reason,bankMovementPreserved:true});saveStore(work);
+    const draft=requestedDrafts.size===1?work.bankReconciliationDrafts[Array.from(requestedDrafts)[0]]:null;
+    res.json({success:true,updated:selected.length,changes,...(draft?{draft:draftReconciliation(work,draft)}:{})});
+  }catch(error){res.status(error.status||409).json({success:false,error:error.message||'This bulk correction could not be saved safely.'});}
+});
 router.post('/api/expenses/bank-statements/retag',(req,res)=>{
   const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[String(b.draftId||'')],rowId=String(b.rowId||''),reason=String(b.reason||'').trim(),requested=String(b.nature||'').trim().toUpperCase();
   if(!isAdmin(req))return res.status(403).json({success:false,error:'Only the Owner or an Admin can change a reconciliation transaction entity.'});
@@ -5661,7 +5764,7 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
   if(!row||!bank||!(amount>0))return res.status(400).json({success:false,error:'Choose an incoming bank transaction that is missing in the app.'});
   if(!note)return res.status(400).json({success:false,error:'Enter a note explaining the incoming money.'});
   const now=new Date().toISOString(),user=req.user&&req.user.username||'system',toNature=reconciliationPostingNature(draft,b.rowId,row);
-  if(!toNature)return res.status(409).json({success:false,error:'Tag this 7883 bank transaction as SAMAST or PERSONAL before recording the incoming money.'});
+  if(!toNature)return res.status(409).json({success:false,error:sourceKind==='internal'?'This shared-bank receipt has no reliable bank-side entity. The source account alone cannot prove whether it belongs to SAMAST or PERSONAL. Link an existing verified transaction or review the bank-side ownership evidence; nothing has been recorded.':'This shared-bank receipt has no reliable SAMAST or PERSONAL ownership. Review the receipt evidence before recording it; nothing has been recorded.'});
   const toAccount=allowedTransferAccount(toNature,draft.account);
   if(!toAccount)return res.status(400).json({success:false,error:'The receiving account is not valid for this entity.'});
   let transfer=null,receipt=null;
@@ -5744,7 +5847,24 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId),allowed=['bank_reversal_pair','accept_match','unmatch_suggestion','link_existing','link_multiple_existing','link_multiple_bank_entries','link_with_rounding','vendor_advance_split','create_adjustment','create_split_adjustment','create_internal_transfer','paytm_settlement','split_allocation','opening_vendor_payable_split','timing_difference','exclude'];
   if(!row)return res.status(404).json({success:false,error:'Difference was not found.'});
   if(!allowed.includes(b.action))return res.status(400).json({success:false,error:'Choose a valid resolution.'});
-  let postingNature=reconciliationPostingNature(draft,b.rowId,row);const postingActions=['link_with_rounding','vendor_advance_split','create_adjustment','create_split_adjustment','create_internal_transfer','split_allocation','opening_vendor_payable_split','exclude'];
+  let postingNature=reconciliationPostingNature(draft,b.rowId,row),expenseOwnershipChange=null;const postingActions=['link_with_rounding','vendor_advance_split','create_adjustment','create_split_adjustment','create_internal_transfer','split_allocation','opening_vendor_payable_split','exclude'];
+  const categoryExpenseAction=['create_adjustment','create_split_adjustment'].includes(b.action),hasExpenseNature=categoryExpenseAction&&Object.prototype.hasOwnProperty.call(b,'nature');
+  if(hasExpenseNature){
+    const requestedNature=typeof b.nature==='string'?b.nature.trim().toUpperCase():'',shared=isSharedBankReconciliationAccount(draft.account);
+    if(!NATURES.includes(requestedNature)||shared&&!['SAMAST','PERSONAL'].includes(requestedNature))return res.status(400).json({success:false,error:shared?'Choose SAMAST or PERSONAL for this shared-bank expense.':'Choose a valid expense entity.'});
+    if(!String(b.category||'').trim())return res.status(400).json({success:false,error:'The expense entity applies only when recording an expense category, not a bank-balance or transfer entry.'});
+    if(!row.bank||row.app||row.status!=='missing_in_app'||row.resolution)return res.status(409).json({success:false,error:'Choose an unmatched bank transaction before recording a new expense; an existing source cannot be replaced with an expense entity choice.'});
+    if(!approvalNatures(req).includes(requestedNature)||requestedNature==='PERSONAL'&&!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'You cannot record expenses for the selected accounting entity.'});
+    if(!canManagePersonalAccounting(req)&&(postingNature==='PERSONAL'||row.entityTag&&(row.entityTag.nature==='PERSONAL'||row.entityTag.sourceNature==='PERSONAL')))return res.status(403).json({success:false,error:'The Owner must review this PERSONAL transaction before its expense entity can be changed.'});
+    if(shared&&row.entityTag&&(row.entityTag.sourceConflict||row.entityTag.source==='mixed_linked_entries'||row.entityTag.source==='linked_ledger'&&row.entityTag.sourceNature&&row.entityTag.sourceNature!==requestedNature))return res.status(409).json({success:false,error:'This transaction has conflicting linked-source ownership. Review or unmatch the existing source before recording an expense.'});
+    const retainedSharedTag=shared&&row.entityTag&&row.entityTag.nature===requestedNature&&!row.entityTag.sourceConflict&&postingNature===requestedNature;
+    if(shared&&!retainedSharedTag){
+      if(!isAdmin(req))return res.status(403).json({success:false,error:'Only the Owner or an Admin can choose the transaction entity for this shared-bank expense.'});
+      expenseOwnershipChange={previous:draft.transactionOwnership&&draft.transactionOwnership[b.rowId]||row.entityTag||null,nature:requestedNature};
+    }
+    postingNature=requestedNature;
+  }
+  if(categoryExpenseAction&&postingNature&&(!approvalNatures(req).includes(postingNature)||postingNature==='PERSONAL'&&!canManagePersonalAccounting(req)))return res.status(403).json({success:false,error:'You cannot record expenses for the selected accounting entity.'});
   if(['accept_match','link_existing','link_multiple_existing','link_multiple_bank_entries','link_with_rounding','vendor_advance_split','split_allocation','opening_vendor_payable_split','exclude','paytm_settlement'].includes(b.action)){
     const movements=appBankMovements(s,draft.account,draft.nature),otherClaims=otherDraftClaimedAppIds(s,draft,movements),ids=Array.from(new Set([b.appId].concat(Array.isArray(b.appIds)?b.appIds:String(b.appIds||'').split(','),b.transferIds||[],['accept_match','exclude','link_multiple_bank_entries'].includes(b.action)&&row.app?[row.app.id]:[]).map(id=>String(id||'').trim()).filter(Boolean)));
     if(ids.some(id=>{const movement=movements.find(x=>x.id===id||(x.sourceIds||[]).includes(id));return [id].concat(movement&&movement.sourceIds||[]).some(identity=>otherClaims.has(identity));}))return res.status(409).json({success:false,error:'An existing ledger entry is already claimed in another saved reconciliation for this account. Review and undo that conflicting decision before using it here.'});
@@ -5846,7 +5966,7 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
     b.paytmTransferTargets=transferTargets;b.paytmOrderTargets=orderTargets;
   }
   if(b.action==='create_internal_transfer'){
-    if(isSharedBankReconciliationAccount(draft.account)&&!postingNature)return res.status(409).json({success:false,error:'Tag this 7883 bank transaction as SAMAST or PERSONAL before creating the transfer.'});
+    if(isSharedBankReconciliationAccount(draft.account)&&!postingNature)return res.status(409).json({success:false,error:'This shared-bank transfer has no reliable bank-side entity. The other account alone cannot prove whether this side belongs to SAMAST or PERSONAL. Link an existing verified transfer or review the bank-side ownership evidence; nothing has been recorded.'});
     if(b.otherNature!=null&&!NATURES.includes(String(b.otherNature).trim().toUpperCase()))return res.status(400).json({success:false,error:'Choose a valid transfer counterpart entity.'});
     const reconciledNature=postingNature||normalizedNature(draft.nature),otherNature=String(b.otherNature||reconciledNature).trim().toUpperCase(),otherAccount=allowedTransferAccount(otherNature,b.otherAccount),amount=num(row.bank&&row.bank.debit||row.bank&&row.bank.credit);
     if(!row.bank||!(amount>0)||!otherAccount||(otherNature===reconciledNature&&otherAccount===draft.account))return res.status(400).json({success:false,error:'Choose the other account for this bank-confirmed internal transfer.'});
@@ -5881,7 +6001,7 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
     draft.resolutions[linked.id]={action:'linked_opening_payable',reason:'Linked as current-period component of '+b.rowId,appId,linkedRowId:b.rowId,by:req.user.username,at:new Date().toISOString()};
   }
   if(isSharedBankReconciliationAccount(draft.account)&&['accept_match','link_existing','exclude'].includes(b.action)&&row.app){const linkedNature=reconciliationOwnershipNature(row.app.entity),manualNature=reconciliationOwnershipNature(draft.transactionOwnership&&draft.transactionOwnership[b.rowId]&&draft.transactionOwnership[b.rowId].nature);if(!linkedNature)return res.status(409).json({success:false,error:'The linked ledger entry has no reliable SAMAST or PERSONAL entity.'});if(manualNature&&manualNature!==linkedNature)return res.status(409).json({success:false,error:'The manual transaction tag conflicts with the selected '+linkedNature+' ledger entry.'});if(!postingNature)postingNature=linkedNature;}
-  if(isSharedBankReconciliationAccount(draft.account)&&postingActions.includes(b.action)&&!postingNature)return res.status(409).json({success:false,error:'Tag this 7883 bank transaction as SAMAST or PERSONAL before choosing this resolution.'});
+  if(isSharedBankReconciliationAccount(draft.account)&&postingActions.includes(b.action)&&!postingNature)return res.status(409).json({success:false,error:categoryExpenseAction?'Choose the expense entity in this expense form; a separate bank transaction tag is not required.':'This shared-bank transaction has no reliable SAMAST or PERSONAL ownership. Link a verified existing source or review the bank-side ownership evidence before resolving it.'});
   const category=String(b.category||'').trim();
   if(['create_adjustment','create_split_adjustment'].includes(b.action)&&category&&!pickableLedgers(s,postingNature||draft.nature).some(x=>x.name.toLowerCase()===category.toLowerCase()))return res.status(400).json({success:false,error:'Choose a valid expense category for '+(postingNature||draft.nature)+'.'});
   if(b.action==='create_split_adjustment'){
@@ -5889,6 +6009,12 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
     if(!row.bank||!(total>0)||!(principal>0)||!(charge>0)||Math.abs(principal+charge-total)>.01)return res.status(400).json({success:false,error:'Main ledger amount plus charges must exactly equal the bank debit.'});
   }
   if(b.action==='exclude'&&row.app&&row.app.id){if(!setLedgerMovementExcluded(s,row.app.id,true,b.reason,req.user.username))return res.status(400).json({success:false,error:'This ledger entry cannot be excluded automatically. Move it to the correct account instead.'});audit(s,req,'LEDGER_ENTRY_EXCLUDED','ledger',row.app.id,{nature:postingNature||draft.nature,account:draft.account,before:{counted:true},after:{counted:false},note:String(b.reason||'')});}
+  if(expenseOwnershipChange){
+    const now=new Date().toISOString(),user=req.user&&req.user.username||'system',reason=String(b.reason||'').trim(),tag={nature:expenseOwnershipChange.nature,reason,by:user,at:now,source:'manual'};
+    draft.transactionOwnership=draft.transactionOwnership||{};draft.transactionOwnership[b.rowId]=tag;
+    draft.decisionAudit=Array.isArray(draft.decisionAudit)?draft.decisionAudit:[];draft.decisionAudit.push({action:'retag_transaction_ownership',rowId:b.rowId,before:expenseOwnershipChange.previous,after:Object.assign({},tag),reason,by:user,at:now});
+    audit(s,req,'BANK_RECONCILIATION_TRANSACTION_RETAGGED','bank_reconciliation',draft.id,{nature:postingNature,account:draft.account,before:expenseOwnershipChange.previous,after:tag,sourceCorrections:[],note:reason,bankRowId:b.rowId,bankMovementPreserved:true});
+  }
   draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:b.action,reason:String(b.reason||'').trim(),category,chargeCategory,postingNature:postingNature||undefined,appId:['opening_vendor_payable_split','link_existing','split_allocation'].includes(b.action)?String(b.appId||'').trim():row.app&&row.app.id,excludedEntry:b.action==='exclude'&&row.app?Object.assign({},row.app):null,appIds:Array.isArray(b.appIds)?b.appIds:[],appNet:num(b.appNet),roundingAmount:num(b.roundingAmount),advanceAmount:num(b.advanceAmount),advanceExpenseIds:Array.isArray(b.advanceExpenseIds)?b.advanceExpenseIds:[],advanceApplications:Array.isArray(b.advanceApplications)?b.advanceApplications:[],otherAccount:String(b.otherAccount||'').trim(),grossAmount:num(b.grossAmount),chargeAmount:num(b.chargeAmount),paytmChargeAmount:num(b.paytmChargeAmount),hiddenChargeAmount:num(b.hiddenChargeAmount),orderIds:Array.isArray(b.orderIds)?b.orderIds.map(String).filter(Boolean):[],transferIds:Array.isArray(b.transferIds)?b.transferIds.map(String).filter(Boolean):[],paytmOrderTargets:Array.isArray(b.paytmOrderTargets)?b.paytmOrderTargets:[],paytmTransferTargets:Array.isArray(b.paytmTransferTargets)?b.paytmTransferTargets:[],otherReceipts:Array.isArray(b.otherReceipts)?b.otherReceipts:[],principalAmount:num(b.principalAmount),openingPayableAmount:num(b.openingPayableAmount),openingNature:normalizedNature(b.openingNature||postingNature||draft.nature),vendor:String(b.vendor||'').trim(),preSystemDates:String(b.preSystemDates||'').trim(),linkedRowId:b.action==='opening_vendor_payable_split'?(view.rows.find(x=>x.app&&x.app.id===String(b.appId||'').trim())||{}).id||'':String(b.linkedRowId||''),remark:String(b.remark||''),linkedTransferAmount:(Array.isArray(b.transferIds)?b.transferIds:[]).reduce((n,id)=>{const t=(s.transfers||[]).find(x=>x.id===id);return n+num(t&&t.amount);},0),by:req.user.username,at:new Date().toISOString()};
   draft.resolutions[b.rowId].bankTruth=b.action==='exclude'&&!!row.bank;
   if(preparedBankAmountAuthorityPlan){s.bankAmountAuthorityProposals=s.bankAmountAuthorityProposals||{};s.bankAmountAuthorityProposals[preparedBankAmountAuthorityPlan.id]=preparedBankAmountAuthorityPlan;draft.resolutions[b.rowId].bankAmountAuthority={planId:preparedBankAmountAuthorityPlan.id};}

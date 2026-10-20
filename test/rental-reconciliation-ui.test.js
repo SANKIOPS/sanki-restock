@@ -23,6 +23,40 @@ const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({
 }[char]));
 const tenancy = { id: 'TEN-00001', property: 'SAMAST', floor: 'First floor', tenant: 'Existing tenant' };
 
+test('bank reconciliation reviews an imported security opening and does not create a duplicate receipt', async () => {
+  const opening = { ...tenancy, securityOpening: 200000, securityOpeningDate: '2026-09-30', securityBalance: 200000 };
+  const after = { ...opening, securityOpening: null, securityOpeningDate: '', securityBalance: 0 };
+  const ui = harness({ responses: [{ success: true, revision: 7, tenancies: [opening] }, { success: true, revision: 8, tenancies: [after] }], row: { bank: { date: '2026-08-25', credit: 200000, debit: 0, reference: 'SOURCE-SECURITY', description: 'Existing source deposit' } } });
+  ui.context.confirm = () => true;
+  ui.clickRental('security'); await flush();
+  ui.nodes.rentalReconTenancy.value = tenancy.id; ui.fire('rentalReconTenancy', 'change');
+  assert.equal(ui.nodes.bankRentalOpeningReview.style.display, 'block');
+  assert.match(ui.nodes.bankRentalOpeningSummary.textContent, /200000/);
+  assert.equal(ui.nodes.bankRentalSave.disabled, true, 'earlier source cannot be double counted while opening exists');
+  assert.equal(ui.calls.filter(call => call.options?.method === 'POST').length, 0);
+  ui.nodes.bankRentalOpeningReason.value = 'Replace imported opening with exact bank source SOURCE-SECURITY';
+  ui.fire('bankRentalClearOpening'); ui.fire('bankRentalClearOpening'); await flush();
+  const writes = ui.calls.filter(call => call.options?.method === 'POST'); assert.equal(writes.length, 1);
+  assert.equal(writes[0].url, '/api/expenses/rentals');
+  assert.deepEqual(JSON.parse(writes[0].options.body), { action: 'clear_security_opening', tenancyId: tenancy.id, revision: 7, expectedSecurityOpening: 200000, expectedSecurityOpeningDate: '2026-09-30', reason: ui.nodes.bankRentalOpeningReason.value });
+  assert.equal(ui.nodes.bankRentalOpeningReview.style.display, 'none');
+  assert.equal(ui.nodes.bankRentalSave.disabled, false);
+  assert.match(ui.nodes.bankRentalMsg.textContent, /no receipt has been added/);
+});
+
+test('canceling or failing a bank-form opening correction keeps the source receipt blocked and sends no refund', async () => {
+  const opening = { ...tenancy, securityOpening: 200000, securityOpeningDate: '2026-09-30', securityBalance: 200000 };
+  const ui = harness({ responses: [{ success: true, revision: 7, tenancies: [opening] }, { success: false, error: 'The register changed. Refresh and try again.' }], row: { bank: { date: '2026-08-25', credit: 200000, debit: 0 } } });
+  ui.context.confirm = () => false; ui.clickRental('security'); await flush();
+  ui.nodes.rentalReconTenancy.value = tenancy.id; ui.fire('rentalReconTenancy', 'change');
+  ui.nodes.bankRentalOpeningReason.value = 'Replace the reviewed opening with exact bank source'; ui.fire('bankRentalClearOpening');
+  assert.equal(ui.calls.filter(call => call.options?.method === 'POST').length, 0);
+  ui.context.confirm = () => true; ui.fire('bankRentalClearOpening'); await flush();
+  assert.equal(ui.nodes.bankRentalSave.disabled, true); assert.equal(ui.nodes.bankRentalClearOpening.disabled, false);
+  assert.match(ui.nodes.bankRentalOpeningMsg.textContent, /register changed/);
+  assert.ok(ui.calls.filter(call => call.options?.method === 'POST').every(call => JSON.parse(call.options.body).action === 'clear_security_opening'));
+});
+
 function harness({ nature = 'SAMAST', account = 'IndusInd Bank 7883', tag = 'SAMAST', canManageRentals = true, row: rowPatch = {}, responses = [] } = {}) {
   const nodes = {}, calls = [], rendered = [], refreshes = [];
   function node(id) {
@@ -155,7 +189,7 @@ for (const [name, options] of disallowed) test(`${name} cannot open or submit re
   assert.doesNotMatch(ui.nodes.bankReviewActions.innerHTML, />Record rent</);
   assert.doesNotMatch(ui.nodes.bankReviewActions.innerHTML, />Record security deposit</);
   ui.context.openBankRental(ui.row.id, 'security');
-  assert.equal(ui.nodes.bankRentalDlg, undefined, 'direct invocation must not open the form');
+  assert.notEqual(ui.nodes.bankRentalDlg&&ui.nodes.bankRentalDlg.open, true, 'direct invocation must not open the form');
   ui.fire('bankRentalSave');
   await flush();
   assert.equal(ui.calls.length, 0);
