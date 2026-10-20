@@ -495,6 +495,19 @@
     <div class="row-actions"><button class="btn ghost" id="bankReviewClose">Close</button></div>
   </div></dialog>
 
+  <dialog id="bankEntityBulkDlg" style="max-width:820px" aria-labelledby="bankEntityBulkTitle"><div class="dlg">
+    <h3 id="bankEntityBulkTitle">Change entity for selected transactions</h3>
+    <p id="bankEntityBulkSummary" class="sub"></p>
+    <p class="hint">This corrects accounting attribution only. Bank amounts, dates, references, payments and reconciliation links stay unchanged. Finalized entries require the Owner. Protected or conflicting records stop the whole batch; nothing is partially changed.</p>
+    <div class="grid">
+      <div class="fld"><label for="bankEntityBulkNature">Final entity</label><select id="bankEntityBulkNature"></select></div>
+      <div class="fld full"><label for="bankEntityBulkReason">Reason — required</label><textarea id="bankEntityBulkReason" rows="2" placeholder="Explain why the selected transactions belong to this entity (at least 10 characters)"></textarea></div>
+    </div>
+    <div id="bankEntityBulkRows" style="overflow:auto;max-height:360px"></div>
+    <div id="bankEntityBulkMsg" class="msg" role="status" aria-live="polite"></div>
+    <div class="row-actions"><button type="button" class="btn ghost" id="bankEntityBulkPreview">Review changes</button><button type="button" class="btn primary" id="bankEntityBulkSave" disabled>Save reviewed entity changes</button><button type="button" class="btn ghost" id="bankEntityBulkCancel">Cancel</button></div>
+  </div></dialog>
+
   <dialog id="bankRentalDlg"><div class="dlg">
     <h3>Record rental receipt / security deposit</h3>
     <div id="bankRentalSummary" class="sub" style="margin-bottom:12px"></div>
@@ -504,6 +517,13 @@
       <div class="fld full"><label>Record this money as</label><select id="rentalReconKind"><option value="rent">Rent received</option><option value="security">Security deposit received</option></select></div>
       <div class="fld full"><label>Reconciliation remark — required</label><textarea id="rentalReconNote" rows="3" placeholder="Reference or explanation for this rental receipt"></textarea></div>
     </div>
+    <section id="bankRentalOpeningReview" class="card" style="display:none;padding:12px" aria-labelledby="bankRentalOpeningHeading">
+      <h4 id="bankRentalOpeningHeading" style="margin:0 0 8px">Review opening security</h4>
+      <p id="bankRentalOpeningSummary" class="hint"></p>
+      <div class="fld"><label for="bankRentalOpeningReason">Reason for removing the opening security — required</label><textarea id="bankRentalOpeningReason" rows="2" placeholder="Explain which exact source receipt replaces this opening (at least 10 characters)"></textarea></div>
+      <div class="row-actions"><button type="button" class="btn ghost" id="bankRentalClearOpening">Remove reviewed opening security</button></div>
+      <div id="bankRentalOpeningMsg" class="msg" role="status" aria-live="polite"></div>
+    </section>
     <div class="hint">Rent is applied to that floor's oldest outstanding rent first; any balance becomes tenant advance. Security is held separately and is not treated as rent income. Deposits already included in the rental opening security must not be entered again; earlier deposits need an opening-balance review first.</div>
     <div class="msg" id="bankRentalMsg"></div>
     <div class="row-actions"><button class="btn primary" id="bankRentalSave">Record rental & resolve</button><button class="btn ghost" id="bankRentalCancel">Cancel</button></div>
@@ -2420,11 +2440,71 @@
         if(marker&&marker.parentElement&&!marker.parentElement.querySelector('[aria-label^="Transaction belongs to"]'))marker.insertAdjacentHTML('afterend',bankEntityTagMarkup(row));
       });
     }
+    // Entity-only bulk corrections are deliberately separate from payment matching and posting.
+    var bankEntityBulkState=null;
+    function bankEntityBulkAllowed(account,finalized){return !!(cfg&&(cfg.isOwner||cfg.isAdmin)&&(!finalized||cfg.isOwner)&&String(account||'').replace(/\D/g,'').slice(-4)==='7883');}
+    function bankEntityBulkTargets(){return (cfg.approvalNatures||cfg.natures||[]).filter(function(n){return n==='SAMAST'||n==='PERSONAL'&&(cfg.isOwner||cfg.canManagePersonalAccounting);});}
+    function bankEntityBulkCheckbox(item,finalized){return '<label style="display:flex;gap:6px;align-items:center;text-transform:none;letter-spacing:0"><input type="checkbox" class="bank-entity-bulk-row" data-item="'+esc(JSON.stringify(item))+'" data-finalized="'+(finalized?'true':'false')+'" onchange="updateBankEntityBulkToolbar()" style="width:auto"><span>Select entity</span></label>';}
+    function bankEntityBulkToolbar(scope){return '<section class="card" id="bankEntityBulkToolbar_'+scope+'" style="padding:12px;margin:10px 0;background:#f8fafc"><b>Bulk entity correction'+(scope==='history'?' — reconciled entries':'')+'</b><div class="row-actions"><span id="bankEntityBulkCount_'+scope+'" class="muted">0 selected</span><button type="button" class="btn mini ghost" onclick="selectBankEntityBulkRows(\''+scope+'\',true)">Select all visible</button><button type="button" class="btn mini ghost" onclick="selectBankEntityBulkRows(\''+scope+'\',false)">Clear selection</button><button type="button" class="btn mini primary" id="bankEntityBulkOpen_'+scope+'" disabled onclick="openBankEntityBulk(\''+scope+'\')">Change selected entity</button></div><div class="hint">Includes reconciled entries. Only entity attribution can change; bank figures and links stay locked.'+(scope==='history'?' Finalized corrections are Owner-only.':'')+'</div></section>';}
+    function bankEntityBulkHost(scope){return el(scope==='history'?'bs_history':'bs_table');}
+    function bankEntityBulkBoxes(scope){var host=bankEntityBulkHost(scope);return host?Array.from(host.querySelectorAll('.bank-entity-bulk-row')):[];}
+    function bankEntityBulkVisible(box){var row=box.closest('tr');return !row||row.style.display!=='none';}
+    window.updateBankEntityBulkToolbar=function(){['draft','history'].forEach(function(scope){var selected=bankEntityBulkBoxes(scope).filter(function(box){return box.checked;}),count=el('bankEntityBulkCount_'+scope),button=el('bankEntityBulkOpen_'+scope);if(count)count.textContent=selected.length+' selected';if(button)button.disabled=!selected.length;});};
+    window.selectBankEntityBulkRows=function(scope,checked){bankEntityBulkBoxes(scope).forEach(function(box){if(!checked||bankEntityBulkVisible(box))box.checked=!!checked;});updateBankEntityBulkToolbar();};
+    function renderBankEntityBulkTools(){
+      if(!bankReconView||!bankEntityBulkAllowed(bankReconView.account,false))return;
+      var table=el('bs_table').querySelector('table');if(!table)return;
+      (bankReconView.rows||[]).forEach(function(row){
+        if(!row.bank||!bankEntityBulkAllowed(bankReconView.account,row.status==='already_reconciled'))return;
+        var marker=Array.from(table.querySelectorAll('td .muted')).find(function(node){return node.textContent.trim()===String(row.id||'');}),cell=marker&&marker.parentElement;
+        if(cell&&!cell.querySelector('.bank-entity-bulk-row'))cell.insertAdjacentHTML('afterbegin',bankEntityBulkCheckbox({draftId:bankDraftId,rowId:row.id},row.status==='already_reconciled'));
+      });
+      if(table.querySelector('.bank-entity-bulk-row')&&!el('bankEntityBulkToolbar_draft'))table.insertAdjacentHTML('beforebegin',bankEntityBulkToolbar('draft'));
+      updateBankEntityBulkToolbar();
+    }
+    function invalidateBankEntityBulkPreview(){if(!bankEntityBulkState)return;bankEntityBulkState.fingerprint='';el('bankEntityBulkSave').disabled=true;el('bankEntityBulkMsg').textContent='Review the selected entity changes before saving.';}
+    function bankEntityBulkTable(changes){return '<table class="resp"><thead><tr><th>Date</th><th>Transaction / source</th><th>Amount</th><th>Entity change</th><th>Status</th></tr></thead><tbody>'+(changes||[]).map(function(change){return '<tr><td>'+esc(change.date||'—')+'</td><td>'+esc(change.rowId||'')+'<div class="muted">'+esc((change.linkedRecordIds||[]).join(', ')||'Bank record')+'</div></td><td>'+fmt(change.amount)+'</td><td>'+esc(change.fromNature||'Needs review')+' → <b>'+esc(change.toNature||'')+'</b></td><td>'+esc(change.finalized?'Finalized — entity only':'Draft')+'</td></tr>';}).join('')+'</tbody></table>';}
+    window.openBankEntityBulk=function(scope){
+      var account=el('bs_account')&&el('bs_account').value,boxes=bankEntityBulkBoxes(scope).filter(function(box){return box.checked;}),targets=bankEntityBulkTargets();
+      if(!boxes.length||!targets.length||!bankEntityBulkAllowed(account,boxes.some(function(box){return box.getAttribute('data-finalized')==='true';})))return;
+      var seen={};var items=boxes.map(function(box){return JSON.parse(box.getAttribute('data-item'));}).filter(function(item){var key=(item.recordId?'record:'+item.recordId:'draft:'+item.draftId)+'|'+item.rowId;if(seen[key])return false;seen[key]=true;return true;});
+      bankEntityBulkState={account:account,nature:bankNature,items:items,fingerprint:'',busy:false};
+      el('bankEntityBulkSummary').textContent=items.length+' selected transaction(s) · '+account;
+      el('bankEntityBulkNature').innerHTML='<option value="">Choose final entity</option>'+targets.map(function(n){return '<option value="'+esc(n)+'">'+esc(n)+'</option>';}).join('');
+      el('bankEntityBulkReason').value='';el('bankEntityBulkRows').textContent='Choose the final entity and enter a reason, then review the verified changes.';el('bankEntityBulkMsg').className='msg';el('bankEntityBulkMsg').textContent='';el('bankEntityBulkPreview').disabled=false;el('bankEntityBulkSave').disabled=true;el('bankEntityBulkCancel').disabled=false;el('bankEntityBulkDlg').showModal();
+    };
+    function bankEntityBulkRequest(commit){
+      var state=bankEntityBulkState;if(!state||state.busy)return;
+      var nature=el('bankEntityBulkNature').value,reason=el('bankEntityBulkReason').value.trim(),msg=el('bankEntityBulkMsg');
+      if(!el('bs_account')||el('bs_account').value!==state.account||bankNature!==state.nature){invalidateBankEntityBulkPreview();msg.className='msg err';msg.textContent='The selected account changed. Close this form and select the transactions again.';return;}
+      if(!bankEntityBulkTargets().includes(nature)||reason.length<10){msg.className='msg err';msg.textContent='Choose an allowed final entity and enter a reason of at least 10 characters.';return;}
+      if(commit&&!state.fingerprint){msg.className='msg err';msg.textContent='Review the current changes before saving.';return;}
+      var payload={account:state.account,nature:state.nature,targetNature:nature,reason:reason,items:state.items,dryRun:!commit};if(commit)payload.fingerprint=state.fingerprint;
+      state.busy=true;el('bankEntityBulkPreview').disabled=true;el('bankEntityBulkSave').disabled=true;el('bankEntityBulkCancel').disabled=true;el('bankEntityBulkNature').disabled=true;el('bankEntityBulkReason').disabled=true;msg.className='msg';msg.textContent=commit?'Saving the reviewed entity correction…':'Checking every selected entry without changing any records…';
+      api('/api/expenses/bank-statements/retag-bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(result){
+        if(bankEntityBulkState!==state)return;
+        state.busy=false;el('bankEntityBulkPreview').disabled=false;el('bankEntityBulkCancel').disabled=false;el('bankEntityBulkNature').disabled=false;el('bankEntityBulkReason').disabled=false;
+        if(!result.success){state.fingerprint='';msg.className='msg err';msg.textContent=result.error||'The batch could not be verified. No entity changes were saved.';return;}
+        if(!commit){state.fingerprint=result.fingerprint||'';el('bankEntityBulkRows').innerHTML=bankEntityBulkTable(result.changes);el('bankEntityBulkSave').disabled=!state.fingerprint;msg.className='msg ok';msg.textContent='Review verified: '+Number(result.updated||0)+' transaction(s). Save to apply only these entity changes.';return;}
+        el('bankEntityBulkDlg').close();bankEntityBulkState=null;loadBankStatement(bankDraftId);loadAccountLedger();el('bs_msg').className='msg ok';el('bs_msg').textContent=Number(result.updated||0)+' transaction entity correction(s) saved with an audit trail. Bank figures and reconciliations are unchanged.';
+      }).catch(function(error){if(bankEntityBulkState!==state)return;state.busy=false;state.fingerprint='';el('bankEntityBulkPreview').disabled=false;el('bankEntityBulkCancel').disabled=false;el('bankEntityBulkNature').disabled=false;el('bankEntityBulkReason').disabled=false;msg.className='msg err';msg.textContent=(error&&error.message||'Could not save the correction.')+' Refresh and review before retrying.';});
+    }
+    el('bankEntityBulkNature').addEventListener('change',invalidateBankEntityBulkPreview);el('bankEntityBulkReason').addEventListener('input',invalidateBankEntityBulkPreview);
+    el('bankEntityBulkPreview').addEventListener('click',function(){bankEntityBulkRequest(false);});el('bankEntityBulkSave').addEventListener('click',function(){bankEntityBulkRequest(true);});
+    el('bankEntityBulkCancel').addEventListener('click',function(){if(bankEntityBulkState&&bankEntityBulkState.busy)return;el('bankEntityBulkDlg').close();bankEntityBulkState=null;});
+    el('bankEntityBulkDlg').addEventListener('cancel',function(event){if(bankEntityBulkState&&bankEntityBulkState.busy)event.preventDefault();else bankEntityBulkState=null;});
+    var renderBankHistoryBeforeEntityBulk=renderBankHistory;
+    renderBankHistory=function(imports,account,nature){
+      var html=renderBankHistoryBeforeEntityBulk(imports,account,nature);if(!bankEntityBulkAllowed(account,true))return html;
+      var holder=document.createElement('div');holder.innerHTML=html;var count=0;
+      (imports||[]).forEach(function(log){var card=Array.from(holder.children).find(function(node){return node.id==='bh_'+log.id;});if(!card)return;var trs=Array.from(card.querySelectorAll('tbody tr'));bankHistoryRows(log).forEach(function(row,index){if(!row.bank||!trs[index]||!trs[index].cells[0])return;trs[index].cells[0].insertAdjacentHTML('afterbegin',bankEntityBulkCheckbox({recordId:log.id,rowId:row.id},true));count++;});});
+      return (count?bankEntityBulkToolbar('history'):'')+holder.innerHTML;
+    };
     function openPersonalHistoricalBulk(direction,suggestion){var rows=selectedPersonalHistoricalRows(),total=rows.reduce(function(sum,row){return sum+Number(direction==='debit'?row.bank.debit:row.bank.credit||0);},0);if(!rows.length)return;personalHistoricalSelection={direction:direction,rowIds:rows.map(function(row){return row.id;})};el('personalHistoricalTitle').textContent=direction==='debit'?'Classify historical PERSONAL expenses':'Classify historical PERSONAL money received';el('personalHistoricalSummary').textContent=rows.length+' selected row'+(rows.length===1?'':'s')+' · total '+fmt(total)+' · '+(bankReconView.account||'');el('phDebitWrap').style.display=direction==='debit'?'flex':'none';el('phVendorWrap').style.display=direction==='debit'?'flex':'none';el('phCreditWrap').style.display=direction==='credit'?'flex':'none';el('phDebitCategory').innerHTML=categoryChoices('PERSONAL').map(function(item){return '<option value="'+esc(item.name)+'">'+esc(item.name)+'</option>';}).join('');if(suggestion){el('phDebitCategory').value=suggestion.category;el('phVendor').value=suggestion.vendor;}else el('phVendor').value='';el('phFromAccount').innerHTML='<option value="">Choose source account</option>'+transferAccountsForNature('PERSONAL').filter(function(account){return account!==bankReconView.account;}).map(function(account){return '<option value="'+esc(account)+'">'+esc(account)+'</option>';}).join('');el('phCreditKind').value='rental_income';el('phFromAccountWrap').style.display='none';el('personalHistoricalMsg').textContent=suggestion?'Review the suggested vendor and category, then record the group.':'Review the total before saving. No original bill is required for this historical recovery workflow.';el('personalHistoricalDlg').showModal();}
     el('phCreditKind').addEventListener('change',function(){el('phFromAccountWrap').style.display=this.value==='internal_transfer'?'flex':'none';});el('personalHistoricalCancel').addEventListener('click',function(){el('personalHistoricalDlg').close();});
     el('personalHistoricalSave').addEventListener('click',function(){var direction=personalHistoricalSelection.direction,payload={draftId:bankDraftId,rowIds:personalHistoricalSelection.rowIds,direction:direction,category:el('phDebitCategory').value,vendor:el('phVendor').value.trim(),creditKind:el('phCreditKind').value,fromAccount:el('phFromAccount').value},total=personalHistoricalSelection.rowIds.reduce(function(sum,id){var row=bankReconRow(id);return sum+Number(direction==='debit'?row.bank.debit:row.bank.credit||0);},0);if(direction==='credit'&&payload.creditKind==='internal_transfer'&&!payload.fromAccount){el('personalHistoricalMsg').textContent='Choose the source account.';return;}if(direction==='debit'&&!payload.vendor){el('personalHistoricalMsg').textContent='Confirm or enter the vendor/payee for these selected debits.';return;}if(!confirm('Record '+payload.rowIds.length+' historical '+direction+' row(s), total '+fmt(total)+'? Each row will create its own ledger record.'))return;var button=this;button.disabled=true;api('/api/expenses/bank-statements/personal-historical-bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(d){button.disabled=false;if(!d.success){el('personalHistoricalMsg').className='msg err';el('personalHistoricalMsg').textContent=d.error||'Could not record selected rows.';return;}el('personalHistoricalDlg').close();renderBankReconciliation(d);loadAccountLedger();el('bs_msg').className='msg ok';el('bs_msg').textContent=d.created+' historical PERSONAL row(s) recorded and resolved.';}).catch(function(error){button.disabled=false;el('personalHistoricalMsg').className='msg err';el('personalHistoricalMsg').textContent=error&&error.message||'Could not record selected rows.';});});
     var renderBankReconciliationBase=renderBankReconciliation;
-    renderBankReconciliation=function(d){renderBankReconciliationBase(d);renderBankContinuityEvidence(d);renderPersonalHistoricalTools();renderBankEntityTags();};
+    renderBankReconciliation=function(d){renderBankReconciliationBase(d);renderBankContinuityEvidence(d);renderPersonalHistoricalTools();renderBankEntityTags();renderBankEntityBulkTools();};
     function recordSalesRefund(){
       var amount=Number(el('srf_amount').value||0),saleReference=el('srf_sale').value.trim(),reason=el('srf_reason').value.trim(),files=el('srf_proof').files,btn=el('srf_go');
       if(!saleReference||!(amount>0)||!reason||!files.length){setMsg('Enter the original sale reference, amount, reason and at least one refund proof.',false);return;}
@@ -2536,7 +2616,7 @@
         renderBankReconciliation(d);showBankEntityTagEditor(rowId);el('bankEntityTagMsg').className='msg ok';el('bankEntityTagMsg').textContent='Entity tag saved with its audit reason.';
       }).catch(function(error){button.disabled=false;el('bankEntityTagMsg').className='msg err';el('bankEntityTagMsg').textContent=error&&error.message||'Could not save the entity tag.';});
     });
-    var bankRentalRowId='',bankRentalLoadGeneration=0;
+    var bankRentalRowId='',bankRentalLoadGeneration=0,bankRentalSnapshot=null,bankRentalOpeningBusy=false;
     function bankRentalAvailable(row){
       var amount=Number(row&&row.bank&&row.bank.credit);
       return !!(cfg.canManageRentals&&row&&row.status==='missing_in_app'&&Number.isFinite(amount)&&amount>0&&!Number(row.bank.debit||0)&&!row.reversalReviewRequired&&!row.reversalPairCandidate&&!row.bankReversalPair&&(bankNature==='PERSONAL'||bankEntityTaggingActive()));
@@ -2557,11 +2637,36 @@
     function syncBankRentalKind(){
       var security=el('rentalReconKind').value==='security';
       el('bankRentalSave').textContent=security?'Record security & resolve':'Record rent & resolve';
+      renderBankRentalOpeningReview();
     }
+    function selectedBankRentalTenancy(){return (bankRentalSnapshot&&bankRentalSnapshot.tenancies||[]).find(function(t){return t.id===el('rentalReconTenancy').value;});}
+    function renderBankRentalOpeningReview(){
+      var t=selectedBankRentalTenancy(),row=bankReconRow(bankRentalRowId),bank=row&&row.bank||{},security=el('rentalReconKind').value==='security',hasOpening=!!(t&&t.securityOpening!=null),blocked=hasOpening&&t.securityOpeningDate&&bank.date<=t.securityOpeningDate,show=security&&hasOpening&&cfg.canManageRentals;
+      el('bankRentalOpeningReview').style.display=show?'block':'none';
+      el('bankRentalClearOpening').disabled=bankRentalOpeningBusy;
+      if(show)el('bankRentalOpeningSummary').textContent=t.tenant+' · '+t.floor+': active opening '+fmt(t.securityOpening)+' as of '+(t.securityOpeningDate||'date not set')+'. Current security held '+fmt(t.securityBalance)+'. This bank receipt is '+fmt(bank.credit)+' dated '+(bank.date||'—')+'. Removing the opening does not create or reconcile the source receipt. Other deposits, rent balances and bank entries remain untouched. The security balance will reduce by '+fmt(t.securityOpening)+' until the actual source is recorded.';
+      el('bankRentalSave').disabled=!bankRentalSnapshot||bankRentalOpeningBusy||!!bankRentalValidation(row)||!!(security&&blocked);
+    }
+    el('rentalReconTenancy').addEventListener('change',function(){el('bankRentalOpeningReason').value='';el('bankRentalOpeningMsg').textContent='';renderBankRentalOpeningReview();});
+    el('bankRentalClearOpening').addEventListener('click',function(){
+      if(bankRentalOpeningBusy)return;
+      var t=selectedBankRentalTenancy(),snapshot=bankRentalSnapshot,reason=el('bankRentalOpeningReason').value.trim(),msg=el('bankRentalOpeningMsg');
+      if(!cfg.canManageRentals||!t||t.securityOpening==null||!snapshot||snapshot.revision==null||el('rentalReconKind').value!=='security'){msg.className='msg err';msg.textContent='Refresh and review this tenant’s active opening security first.';return;}
+      if(reason.length<10){msg.className='msg err';msg.textContent='Enter a reason of at least 10 characters identifying the replacement source.';return;}
+      if(!confirm('Remove only the active opening security '+fmt(t.securityOpening)+' dated '+(t.securityOpeningDate||'—')+' for '+t.tenant+' · '+t.floor+'?\nSecurity held will reduce from '+fmt(t.securityBalance)+' to '+fmt(Number(t.securityBalance||0)-Number(t.securityOpening||0))+'.\nThe original imported figure and this correction stay in the audit history. No bank receipt, rent amount or deposit is changed. Record the verified source receipt separately.'))return;
+      var payload={action:'clear_security_opening',tenancyId:t.id,revision:snapshot.revision,expectedSecurityOpening:t.securityOpening,expectedSecurityOpeningDate:t.securityOpeningDate||'',reason:reason};
+      bankRentalOpeningBusy=true;el('bankRentalClearOpening').disabled=true;el('bankRentalSave').disabled=true;el('bankRentalCancel').disabled=true;el('rentalReconTenancy').disabled=true;el('rentalReconKind').disabled=true;el('bankRentalOpeningReason').disabled=true;msg.className='msg';msg.textContent='Checking and removing only this opening security…';
+      api('/api/expenses/rentals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(d){
+        if(!d.success)throw Error(d.error||'The opening security could not be removed.');
+        bankRentalSnapshot=d;el('bankRentalMsg').className='msg ok';el('bankRentalMsg').textContent='Opening security removed with an audit trail. Now record the verified bank source once; no receipt has been added by this correction.';msg.textContent='';loadAccountLedger();
+      }).catch(function(error){msg.className='msg err';msg.textContent=error&&error.message||'Could not remove opening security. Reload the rental form before retrying.';}).finally(function(){bankRentalOpeningBusy=false;el('bankRentalCancel').disabled=false;el('rentalReconTenancy').disabled=false;el('rentalReconKind').disabled=false;el('bankRentalOpeningReason').disabled=false;renderBankRentalOpeningReview();});
+    });
     window.openBankRental=function(rowId,kind){
+      if(bankRentalOpeningBusy)return;
       var row=bankReconRow(rowId),b=row&&row.bank||{},generation=++bankRentalLoadGeneration;
       if(!bankRentalAvailable(row))return;
       bankRentalRowId=rowId;
+      bankRentalSnapshot=null;el('bankRentalOpeningReason').value='';el('bankRentalOpeningMsg').textContent='';
       el('bankRentalSummary').textContent=(b.date||'')+' · '+fmt(Number(b.credit||0))+' · '+(b.description||'Incoming bank transaction');
       el('bankRentalEntity').textContent='Receiving account: '+(bankReconView&&bankReconView.account||'')+' · Entity: '+(bankEntityTaggingActive()?bankEntityTagLabel(row.entityTag):bankNature);
       el('rentalReconTenancy').innerHTML='<option value="">Loading rental floors…</option>';
@@ -2575,8 +2680,9 @@
       api('/api/expenses/rentals').then(function(d){
         if(generation!==bankRentalLoadGeneration)return;
         if(!d.success)throw new Error(d.error||'Could not load the Rental Income register.');
+        bankRentalSnapshot=d;
         el('rentalReconTenancy').innerHTML='<option value="">Choose floor / unit</option>'+(d.tenancies||[]).map(function(t){return '<option value="'+esc(t.id)+'">'+esc((t.property||'Property')+' · '+t.floor+' · '+t.tenant)+'</option>';}).join('');
-        el('bankRentalSave').disabled=!!bankRentalValidation(bankReconRow(rowId));
+        renderBankRentalOpeningReview();
       }).catch(function(error){
         if(generation!==bankRentalLoadGeneration)return;
         el('rentalReconTenancy').innerHTML='<option value="">Could not load rental floors</option>';
@@ -2584,7 +2690,8 @@
       });
     };
     el('rentalReconKind').addEventListener('change',syncBankRentalKind);
-    el('bankRentalCancel').addEventListener('click',function(){el('bankRentalDlg').close();});
+    el('bankRentalCancel').addEventListener('click',function(){if(!bankRentalOpeningBusy)el('bankRentalDlg').close();});
+    el('bankRentalDlg').addEventListener('cancel',function(event){if(bankRentalOpeningBusy)event.preventDefault();});
     el('bankRentalSave').addEventListener('click',function(){
       var tenancyId=el('rentalReconTenancy').value,kind=el('rentalReconKind').value,note=el('rentalReconNote').value.trim(),btn=this,error=bankRentalValidation(bankReconRow(bankRentalRowId));
       if(error){el('bankRentalMsg').className='msg err';el('bankRentalMsg').textContent=error;return;}
