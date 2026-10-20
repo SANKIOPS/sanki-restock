@@ -114,3 +114,17 @@ test('rental, loan and settlement receipts stay in dedicated source workflows ra
     const s=seed();Object.assign(s.receipts[0],protectedFields);write(s);await denied({items:[{recordId,rowId:'bank-0'}]});
   }
 });
+
+test('PERSONAL shared-account view resolves the canonical physical book without widening private access',async()=>{
+  const before=seed(),review=await preview({nature:'PERSONAL'}),done=await bulk({nature:'PERSONAL',fingerprint:review.fingerprint});assert.equal(done.status,200,JSON.stringify(done.body));
+  const after=read();assert.equal(after.receipts[0].nature,'PERSONAL');assert.equal(after.bankStatements[account].imports[0].reconciliationRows[0].transactionNature,'PERSONAL');assert.deepEqual(physical(after),physical(before));assert.equal(Object.keys(after.bankStatements).length,1);
+  seed();await denied({nature:'PERSONAL',targetNature:'SAMAST'},403,{role:'admin'});
+});
+
+test('identical-looking distinct physical bank transactions never collapse or retag an unselected duplicate',async()=>{
+  const s=seed(),record=s.bankStatements[account].imports[0],duplicate=copy(record.reconciliationRows[0]);duplicate.id='bank-duplicate';duplicate.bank.transactionId='BTX-DISTINCT-DUPLICATE';record.reconciliationRows.push(duplicate);
+  s.bankStatements[account].transactions.DUPLICATE={...copy(s.bankStatements[account].transactions['KEY-0']),id:'BTX-DISTINCT-DUPLICATE'};write(s);
+  const result=await denied({items:[{recordId,rowId:'bank-0'}]});assert.match(result.body.error,/indistinguishable|duplicate-looking/i);
+  const t=seed({draft:true});t.bankReconciliationDrafts[draftId].transactions.push(copy(t.bankReconciliationDrafts[draftId].transactions[0]));write(t);
+  const draftResult=await denied({items:[{draftId,rowId:'bank-0'}]});assert.match(draftResult.body.error,/indistinguishable|duplicate-looking/i);
+});
