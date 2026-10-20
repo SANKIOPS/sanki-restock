@@ -157,16 +157,18 @@ test('reconciliation transfer save sends explicit PERSONAL entity and canonical 
   assert.equal(h.calls.length, before, 'empty counterpart cannot be posted');
 });
 
-test('incoming transfer selects PERSONAL source and defaults to owner contribution', () => {
+test('incoming transfer derives PERSONAL source and owner contribution from the single tagged account selector', () => {
   const h = harness();
-  h.run(line('function syncBankIncomingAccount()'));
-  h.context.el('biFromNature').value = 'PERSONAL';
+  ['bankIncomingSources', 'bankIncomingSource', 'syncBankIncomingSource', 'syncBankIncomingAccount'].forEach(name => h.run(line('function ' + name + '(')));
   h.context.syncBankIncomingAccount();
   for (const account of personal) assert.ok(h.nodes.biFromAccount.innerHTML.includes(account));
+  h.context.el('biFromAccount').value = 'PERSONAL|' + personal[0];
+  h.context.syncBankIncomingSource();
   assert.equal(h.nodes.biClassification.value, 'owner_contribution');
   assert.match(line('window.openBankIncoming=function'), /bankIncomingNature=bankRowNature\(row\)/);
-  assert.match(line('window.openBankIncoming=function'), /biFromNature'\)\.innerHTML=transferNatureOptions\(bankIncomingNature,bankIncomingNature\)/);
-  assert.match(line("el('biSave').addEventListener"), /fromNature:ownerSource\?ownerSource\.nature:el\('biFromNature'\)\.value/);
+  assert.doesNotMatch(line('window.openBankIncoming=function'), /biFromNature/);
+  assert.match(line("el('biSave').addEventListener"), /fromNature:ownerSource\?ownerSource\.nature:source\.nature/);
+  assert.ok(!h.nodes.biFromNature, 'no separate source entity control is read');
 });
 
 test('direct transfer submits selected PERSONAL source with business-scoped proof upload, not PERSONAL access', async () => {
