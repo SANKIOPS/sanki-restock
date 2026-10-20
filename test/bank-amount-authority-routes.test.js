@@ -332,7 +332,7 @@ test('manual match never changes money direction, regardless of amount authority
 
 test('finalized expense evidence and foreign draft claims cannot be unlocked by manual amount matching', async () => {
   for (const protect of [
-    store => { store.bankStatements['Axis Bank 3448'] = { transactions: {}, imports: [{ id: 'BST-OTHER', reconciliationRows: [{ linkedRecordIds: [appId] }] }] }; },
+    store => { store.bankStatements[account] = { transactions: {}, imports: [{ id: 'BST-OTHER', reconciliationRows: [{ linkedRecordIds: [appId] }] }] }; },
     store => { store.bankReconciliationDrafts.OTHER = { ...clone(store.bankReconciliationDrafts[draftId]), id: 'OTHER', resolutions: { 'bank-0': { action: 'link_existing', appId, reason: 'Already claimed elsewhere' } } }; },
     store => { store.bankDateOverrides[appId] = { bankDate: ledgerDate, reconciliationDraft: 'FINALIZED-OTHER', bankTransactionId: 'BTX-OTHER' }; }
   ]) {
@@ -344,20 +344,61 @@ test('finalized expense evidence and foreign draft claims cannot be unlocked by 
   }
 });
 
-test('batched, refunded, provisional and settlement-backed payments retain their dedicated safeguards', async () => {
-  for (const payment of [
-    { batchPaymentId: 'BATCH-OTHER' }, { provisional: true },
-    { paytmSettlementId: 'PTM-OTHER' }, { creditCardStatementId: 'CC-OTHER' }
+test('opposite-account finalized evidence stays immutable when only this physical bank cash leg is corrected', async () => {
+  const store = seed({ bankAmount: 700 });
+  store.bankStatements['Axis Bank 3448'] = { transactions: {}, imports: [{ id: 'BST-OTHER', reconciliationRows: [{ linkedRecordIds: [appId] }] }] };
+  write(store);
+  const loaded = await invoke('POST', '/api/expenses/bank-statements/remark', { body: { draftId, remark: 'Original source evidence loaded before review' } });
+  assert.equal(loaded.status, 200, JSON.stringify(loaded.body));
+  const before = read();
+  const candidate = await preview(); assert.equal(candidate.status, 200, JSON.stringify(candidate.body));
+  assert.equal(candidate.body.bankAmountAuthority.effect, 'bank_cash_only');
+  const staged = await resolveMatch(candidate.body.bankAmountAuthority.fingerprint);
+  assert.equal(staged.status, 200, JSON.stringify(staged.body));
+  const done = await finalize(); assert.equal(done.status, 200, JSON.stringify(done.body));
+  const after = read();
+  assert.deepEqual(after.bankStatements['Axis Bank 3448'], before.bankStatements['Axis Bank 3448']);
+  assert.deepEqual(after.expenses[expenseId], before.expenses[expenseId]);
+  assert.equal(after.expenses[expenseId].amount, 500); assert.equal(after.expenses[expenseId].payments[0].amount, 500);
+  const movements = appBankMovements(after, account, 'SANKI').filter(value => value.id === appId);
+  assert.equal(movements.length, 1); assert.equal(movements[0].debit, 700); assert.equal(movements[0].date, bankDate);
+  assert.equal(after.adjustments.length, 0); assert.equal(after.transfers.length, 0); assert.equal(after.receipts.length, 0);
+});
+
+test('batched, refunded, provisional and settlement-backed payments correct bank cash without changing protected source evidence', async () => {
+  for (const fixture of [
+    { payment: { batchPaymentId: 'BATCH-OTHER' } }, { payment: { provisional: true } },
+    { payment: { paytmSettlementId: 'PTM-OTHER' } }, { payment: { creditCardStatementId: 'CC-OTHER' } },
+    { expense: { refundedAmount: 5, refundStatus: 'partially_refunded' } }
   ]) {
-    seed({ bankAmount: 700, payment });
+    seed({ bankAmount: 700, ...fixture });
+    // Warm existing proof-array / paid-status normalization with a non-financial
+    // remark save, then compare every source field through the correction flow.
+    const loaded = await invoke('POST', '/api/expenses/bank-statements/remark', { body: { draftId, remark: 'Original source evidence loaded before review' } });
+    assert.equal(loaded.status, 200, JSON.stringify(loaded.body));
+    const before = clone(read().expenses[expenseId]);
+    assert.equal(before.amount, 500); assert.equal(before.payments[0].amount, 500); assert.equal(before.payments[0].date, ledgerDate);
     const result = await preview();
-    assert.ok([400, 409].includes(result.status), JSON.stringify(result.body));
-    assert.equal(read().expenses[expenseId].payments[0].amount, 500);
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.bankAmountAuthority.effect, 'bank_cash_only');
+    assert.equal(result.body.bankAmountAuthority.sourceType, 'bank_movement');
+    assert.deepEqual(read().expenses[expenseId], before, 'preview is read-only');
+    const staged = await resolveMatch(result.body.bankAmountAuthority.fingerprint);
+    assert.equal(staged.status, 200, JSON.stringify(staged.body));
+    assert.deepEqual(read().expenses[expenseId], before, 'decision stages only the physical-bank correction');
+    const finalized = await finalize();
+    assert.equal(finalized.status, 200, JSON.stringify(finalized.body));
+    const after = read();
+    assert.deepEqual(after.expenses[expenseId], before, 'underlying invoice, payment, refund and settlement flags stay immutable');
+    const movements = appBankMovements(after, account, 'SANKI').filter(value => value.id === appId);
+    assert.equal(movements.length, 1);
+    assert.equal(movements[0].debit, 700);
+    assert.equal(movements[0].date, bankDate);
+    assert.equal(Object.keys(after.bankMovementAuthority).length, 1);
+    assert.equal(after.adjustments.length, 0, 'no fake fee or balancing adjustment');
+    assert.equal(after.transfers.length, 0);
+    assert.equal(after.receipts.length, 0);
   }
-  seed({ bankAmount: 700, expense: { refundedAmount: 5, refundStatus: 'partially_refunded' } });
-  const result = await preview();
-  assert.ok([400, 409].includes(result.status), JSON.stringify(result.body));
-  assert.equal(read().expenses[expenseId].amount, 500);
 });
 
 test('ordinary claimants cannot preview or submit bank amount corrections', async () => {
