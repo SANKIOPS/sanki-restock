@@ -538,7 +538,7 @@
       <div class="fld"><label>Paid from account</label><input id="beAccount" readonly></div>
       <div class="fld"><label>Date</label><input id="beDate" readonly></div>
       <div class="fld"><label>Amount ₹</label><input id="beAmount" readonly></div>
-      <div class="fld"><label>Vendor — required</label><input id="beVendor" placeholder="Who was paid?"></div>
+      <div class="fld combo-wrap"><label for="beVendor">Vendor — required</label><div class="vendor-input"><input id="beVendor" placeholder="Search or enter a vendor" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="beVendorSuggestions"><button type="button" class="btn ghost" id="beVendorDropdown" aria-label="Show vendors for bank expense">▾</button></div><div id="beVendorSuggestions" class="combo-menu" role="listbox" aria-label="Bank expense vendor suggestions"></div><div class="hint">Choose a vendor for the selected expense entity, or type a new name.</div></div>
       <div class="fld"><label>Category — required</label><input id="beLedger" list="beLedgerList" placeholder="Choose expense category"><datalist id="beLedgerList"></datalist></div>
       <div class="fld full"><label>Particulars — required</label><input id="beParticulars" placeholder="What was this payment for?"></div>
       <div class="fld"><label>Bill type</label><select id="beBill"><option value="printed">Printed</option><option value="handwritten">Handwritten</option></select></div>
@@ -967,14 +967,15 @@
         el('seAmount').value='';el('seProof').value='';el('seReference').value='';el('seNote').value='';
       }).catch(function(e){btn.disabled=false;el('seState').textContent='';setMsg(e.message||'Could not upload proof.',false);});
     }
-    var vendorPickers={f_vendor:{menu:'vendorSuggestions',button:'vendorDropdown'},approveVendor:{menu:'approveVendorSuggestions',button:'approveVendorDropdown'},editVendor:{menu:'editVendorSuggestions',button:'editVendorDropdown'}};
-    function vendorPickerNature(inputId){return inputId==='approveVendor'?(expensesById[approveId]||{}).nature||selectedNature:inputId==='editVendor'?el('editNature').value:el('f_nature')?el('f_nature').value:selectedNature;}
+    var vendorPickers={f_vendor:{menu:'vendorSuggestions',button:'vendorDropdown'},approveVendor:{menu:'approveVendorSuggestions',button:'approveVendorDropdown'},editVendor:{menu:'editVendorSuggestions',button:'editVendorDropdown'},beVendor:{menu:'beVendorSuggestions',button:'beVendorDropdown'}};
+    function vendorPickerNature(inputId){if(inputId==='beVendor'){var nature=el('beNature').value;return bankExpenseNatures().includes(nature)?nature:'';}return inputId==='approveVendor'?(expensesById[approveId]||{}).nature||selectedNature:inputId==='editVendor'?el('editNature').value:el('f_nature')?el('f_nature').value:selectedNature;}
     function hideVendorSuggestions(inputId){var picker=vendorPickers[inputId],input=el(inputId),menu=picker&&el(picker.menu);if(menu)menu.classList.remove('open');if(input)input.setAttribute('aria-expanded','false');}
     function renderVendorSuggestions(inputId,showAll){
       inputId=typeof inputId==='string'?inputId:'f_vendor';
       var picker=vendorPickers[inputId],input=el(inputId),menu=picker&&el(picker.menu);if(!cfg||!input||!menu)return;
       Object.keys(vendorPickers).forEach(function(id){if(id!==inputId)hideVendorSuggestions(id);});
       var q=showAll?'':input.value.trim().toLowerCase(),nature=vendorPickerNature(inputId);
+      if(inputId==='beVendor'&&!nature){menu.innerHTML='<div class="combo-option" role="option" aria-disabled="true">Choose an allowed expense entity to see its approved vendors.</div>';menu.classList.add('open');input.setAttribute('aria-expanded','true');return;}
       var vendors=cfg.vendorsByNature?cfg.vendorsByNature[nature]||[]:(nature==='SANKI'?cfg.vendors||[]:[]);
       var matches=vendors.filter(function(v){return !q||v.toLowerCase().includes(q);}).slice(0,20);
       if(!matches.length){
@@ -1004,7 +1005,9 @@
       el(picker.button).addEventListener('click',function(){input.focus();renderVendorSuggestions(inputId,true);});
     }
     function closeVendorSuggestions(ev){Object.keys(vendorPickers).forEach(function(id){var picker=vendorPickers[id],menu=el(picker.menu);if(menu&&!menu.contains(ev.target)&&ev.target!==el(id)&&ev.target!==el(picker.button))hideVendorSuggestions(id);});}
-    bindVendorPicker('approveVendor');bindVendorPicker('editVendor');
+    bindVendorPicker('approveVendor');bindVendorPicker('editVendor');bindVendorPicker('beVendor');
+    if(el('beNature'))el('beNature').addEventListener('change',function(){hideVendorSuggestions('beVendor');});
+    if(el('bankExpenseDlg'))el('bankExpenseDlg').addEventListener('close',function(){hideVendorSuggestions('beVendor');});
     el('editNature').addEventListener('change',function(){hideVendorSuggestions('editVendor');});
     el('editDlg').addEventListener('close',function(){hideVendorSuggestions('editVendor');});
     el('approveDlg').addEventListener('close',function(){hideVendorSuggestions('approveVendor');});
@@ -2659,18 +2662,48 @@
       el('bankRentalSave').disabled=!bankRentalSnapshot||bankRentalOpeningBusy||!!bankRentalValidation(row)||!!(security&&blocked);
     }
     el('rentalReconTenancy').addEventListener('change',function(){el('bankRentalOpeningReason').value='';el('bankRentalOpeningMsg').textContent='';renderBankRentalOpeningReview();});
+    function bankRentalOpeningMoney(value){
+      if(!['number','string'].includes(typeof value)||String(value).trim()==='')return null;
+      var amount=Number(value),cents=Math.round(amount*100);
+      return Number.isFinite(amount)&&amount>=0&&Number.isSafeInteger(cents)&&Math.abs(amount*100-cents)<.00001?amount:null;
+    }
+    function bankRentalOpeningTarget(snapshot,tenancyId){
+      var matches=snapshot&&Array.isArray(snapshot.tenancies)?snapshot.tenancies.filter(function(t){return t&&t.id===tenancyId;}):[];
+      if(matches.length!==1||matches[0].securityOpening==null)throw Error('The selected tenant’s opening security was removed or cannot be identified safely. Reload the rental form and review it again.');
+      var tenancy=matches[0],amount=bankRentalOpeningMoney(tenancy.securityOpening),balance=bankRentalOpeningMoney(tenancy.securityBalance),date=tenancy.securityOpeningDate==null?'':tenancy.securityOpeningDate;
+      if(amount===null||balance===null||typeof date!=='string')throw Error('The selected opening security or held balance is invalid. Reload the rental form and review it before making a correction.');
+      return {tenancy:tenancy,id:tenancyId,amount:amount,date:date,balance:balance};
+    }
+    function prepareBankRentalOpeningClear(review){
+      return api('/api/expenses/rentals',{cache:'no-store'}).then(function(snapshot){
+        if(!snapshot||snapshot.success!==true)throw Error(snapshot&&snapshot.error||'Could not refresh the Rental Income register. Nothing was removed.');
+        if(!Number.isSafeInteger(snapshot.revision)||snapshot.revision<review.revision)throw Error('The refreshed register revision is invalid or older than the reviewed register. Reload the rental form before trying again.');
+        var current=bankRentalOpeningTarget(snapshot,review.id);
+        if(current.amount!==review.amount||current.date!==review.date||current.balance!==review.balance)throw Error('The selected tenant’s opening security, date or held balance changed. Reload the rental form and review the current figures; nothing was removed.');
+        if(!cfg.canManageRentals||bankRentalLoadGeneration!==review.generation||bankRentalRowId!==review.rowId||bankDraftId!==review.draftId||el('rentalReconTenancy').value!==review.id||el('rentalReconKind').value!=='security')throw Error('The selected rental transaction changed. Reopen it and review the opening security again.');
+        bankRentalSnapshot=snapshot;
+        return {snapshot:snapshot,target:current};
+      });
+    }
     el('bankRentalClearOpening').addEventListener('click',function(){
       if(bankRentalOpeningBusy)return;
       var t=selectedBankRentalTenancy(),snapshot=bankRentalSnapshot,reason=el('bankRentalOpeningReason').value.trim(),msg=el('bankRentalOpeningMsg');
-      if(!cfg.canManageRentals||!t||t.securityOpening==null||!snapshot||snapshot.revision==null||el('rentalReconKind').value!=='security'){msg.className='msg err';msg.textContent='Refresh and review this tenant’s active opening security first.';return;}
+      if(!cfg.canManageRentals||!t||t.securityOpening==null||!snapshot||!Number.isSafeInteger(snapshot.revision)||snapshot.revision<0||el('rentalReconKind').value!=='security'){msg.className='msg err';msg.textContent='Refresh and review this tenant’s active opening security first.';return;}
       if(reason.length<10){msg.className='msg err';msg.textContent='Enter a reason of at least 10 characters identifying the replacement source.';return;}
-      if(!confirm('Remove only the active opening security '+fmt(t.securityOpening)+' dated '+(t.securityOpeningDate||'—')+' for '+t.tenant+' · '+t.floor+'?\nSecurity held will reduce from '+fmt(t.securityBalance)+' to '+fmt(Number(t.securityBalance||0)-Number(t.securityOpening||0))+'.\nThe original imported figure and this correction stay in the audit history. No bank receipt, rent amount or deposit is changed. Record the verified source receipt separately.'))return;
-      var payload={action:'clear_security_opening',tenancyId:t.id,revision:snapshot.revision,expectedSecurityOpening:t.securityOpening,expectedSecurityOpeningDate:t.securityOpeningDate||'',reason:reason};
-      bankRentalOpeningBusy=true;el('bankRentalClearOpening').disabled=true;el('bankRentalSave').disabled=true;el('bankRentalCancel').disabled=true;el('rentalReconTenancy').disabled=true;el('rentalReconKind').disabled=true;el('bankRentalOpeningReason').disabled=true;msg.className='msg';msg.textContent='Checking and removing only this opening security…';
-      api('/api/expenses/rentals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(d){
-        if(!d.success)throw Error(d.error||'The opening security could not be removed.');
-        bankRentalSnapshot=d;el('bankRentalMsg').className='msg ok';el('bankRentalMsg').textContent='Opening security removed with an audit trail. Now record the verified bank source once; no receipt has been added by this correction.';msg.textContent='';loadAccountLedger();
-      }).catch(function(error){msg.className='msg err';msg.textContent=error&&error.message||'Could not remove opening security. Reload the rental form before retrying.';}).finally(function(){bankRentalOpeningBusy=false;el('bankRentalCancel').disabled=false;el('rentalReconTenancy').disabled=false;el('rentalReconKind').disabled=false;el('bankRentalOpeningReason').disabled=false;renderBankRentalOpeningReview();});
+      var review;
+      try{review=bankRentalOpeningTarget(snapshot,t.id);}catch(error){msg.className='msg err';msg.textContent=error.message;return;}
+      review.revision=snapshot.revision;review.generation=bankRentalLoadGeneration;review.rowId=bankRentalRowId;review.draftId=bankDraftId;
+      bankRentalOpeningBusy=true;el('bankRentalClearOpening').disabled=true;el('bankRentalSave').disabled=true;el('bankRentalCancel').disabled=true;el('rentalReconTenancy').disabled=true;el('rentalReconKind').disabled=true;el('bankRentalOpeningReason').disabled=true;el('rentalReconNote').disabled=true;msg.className='msg';msg.textContent='Refreshing the register and checking this tenant’s opening security…';
+      return prepareBankRentalOpeningClear(review).then(function(prepared){
+        var current=prepared.target,tenant=current.tenancy;
+        if(!confirm('Remove only the active opening security '+fmt(current.amount)+' dated '+(current.date||'—')+' for '+tenant.tenant+' · '+tenant.floor+'?\nSecurity held will reduce from '+fmt(current.balance)+' to '+fmt(Number((current.balance-current.amount).toFixed(2)))+'.\nThe original imported figure and this correction stay in the audit history. No bank receipt, rent amount or deposit is changed. Record the verified source receipt separately.')){msg.textContent='Opening security was not removed.';return;}
+        var payload={action:'clear_security_opening',tenancyId:current.id,revision:prepared.snapshot.revision,expectedSecurityOpening:tenant.securityOpening,expectedSecurityOpeningDate:current.date,reason:reason};
+        msg.textContent='Removing only the reviewed opening security…';
+        return api('/api/expenses/rentals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(d){
+          if(!d.success)throw Error(d.error||'The opening security could not be removed.');
+          bankRentalSnapshot=d;el('bankRentalMsg').className='msg ok';el('bankRentalMsg').textContent='Opening security removed with an audit trail. Now record the verified bank source once; no receipt has been added by this correction.';msg.textContent='';loadAccountLedger();
+        });
+      }).catch(function(error){msg.className='msg err';msg.textContent=error&&error.message||'Could not remove opening security. Reload the rental form before retrying.';}).finally(function(){bankRentalOpeningBusy=false;el('bankRentalCancel').disabled=false;el('rentalReconTenancy').disabled=false;el('rentalReconKind').disabled=false;el('bankRentalOpeningReason').disabled=false;el('rentalReconNote').disabled=false;renderBankRentalOpeningReview();});
     });
     window.openBankRental=function(rowId,kind){
       if(bankRentalOpeningBusy)return;
