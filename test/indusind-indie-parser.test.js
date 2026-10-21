@@ -6,6 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { parseIndieBusinessStatement } = require('../modules/indusind-indie-statement');
 const { parseIndusIndSavingsStatement } = require('../modules/indusind-savings-pdf');
+const { parseIndusIndMobileStatement } = require('../modules/indusind-mobile-statement');
 
 // Synthetic positions model PDF.js's cell concatenation; no customer statement
 // details or attachment are committed as a fixture.
@@ -152,7 +153,7 @@ function uploadHarness(pages, legacyRows = [], documentError) {
   const code = source.slice(source.indexOf('async function readPdfText('), source.indexOf('function bankRowKey('));
   const state = { fallbackCalls: 0, destroyed: false, legacyText: '' };
   const context = {
-    fs: { readFileSync: () => new Uint8Array([1, 2, 3]) }, path, parseIndieBusinessStatement, parseIndusIndSavingsStatement,
+    fs: { readFileSync: () => new Uint8Array([1, 2, 3]) }, path, parseIndieBusinessStatement, parseIndusIndSavingsStatement, parseIndusIndMobileStatement,
     parseBankStatementText: text => { state.fallbackCalls++; state.legacyText = text; return legacyRows; },
     pdfjs: { getDocument: async () => {
       if (documentError) throw documentError;
