@@ -33,7 +33,7 @@
   <section id="trends" class="panel view" hidden></section>
   <section id="policy" class="panel view" hidden></section>
   <details id="pnlCorrections" class="panel"><summary>Review P&amp;L-only item corrections</summary>
-    <p>Map a missing SKU, record a verified custom-item unit cost, or classify a shipping fee. These audited corrections affect only this report. Shopify orders, invoices, stock, payments and reconciliations are never edited.</p>
+    <p>Map a missing SKU, split a combined SKU line, choose a duplicate SKU's exact variant, record a verified custom-item unit cost, or classify confirmed shipping and rounding. Bundle format: SKU-A:1, SKU-B:1. These audited corrections affect only this report. Shopify orders, invoices, stock, payments and reconciliations are never edited.</p>
     <button id="pnlCorrectionLoad" type="button">Load missing item lines</button>
     <input id="pnlCorrectionSearch" type="search" aria-label="Search item corrections" placeholder="Search order or item">
     <p id="pnlCorrectionStatus" role="status"></p><div id="pnlCorrectionRows"></div>
@@ -66,6 +66,6 @@
 </main>
 <dialog id="details" aria-labelledby="detailTitle"><header><h2 id="detailTitle">Transactions</h2><button id="closeDetails" aria-label="Close transaction details">Close</button></header><div id="detailBody"></div></dialog>
 <script src="/navigation-state.js?v=bb4a39520dbd"></script><script src="/sidebar.js"></script><script src="/pnl.js?v=f29a289f7ad7"></script>
-<script src="/pnl-corrections.js?v=a0d0159d44a0"></script>
+<script src="/pnl-corrections.js?v=20261021-combined"></script>
 <script src="/pnl-order-corrections.js?v=20261018-3"></script>
 </body></html>
