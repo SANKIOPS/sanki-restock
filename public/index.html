@@ -646,7 +646,7 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
   </div>
 </div>
 
-<!-- ═══ P&L MODAL ═══ -->
+<!-- ═══ Results MODAL ═══ -->
 <div class="modal-overlay" id="plModal" style="display:none" onclick="if(event.target===this)closePLModal()">
   <div class="modal" style="max-width:480px">
     <div class="modal-header"><h3>Sales Entry</h3><button class="modal-close" onclick="closePLModal()">✕</button></div>
@@ -4221,7 +4221,7 @@ function o2ExportCSV(){
     <!-- #11 Data durability: export/import all locally-stored business data -->
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:24px; max-width:720px; margin-top:16px;">
       <h3 style="margin-top:0">Data Backup &amp; Restore</h3>
-      <p style="color:#64748b; font-size:13px;">All POS, procurement, P&amp;L, expenses, customers, vendor &amp; settings data lives only in this browser's local storage. Export regularly so a cleared browser or new device doesn't lose it.</p>
+      <p style="color:#64748b; font-size:13px;">All POS, procurement, Results, expenses, customers, vendor &amp; settings data lives only in this browser's local storage. Export regularly so a cleared browser or new device doesn't lose it.</p>
       <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:12px;">
         <button class="btn btn-primary" onclick="sankiExportBackup()">⬇️ Export backup (.json)</button>
         <button class="btn" onclick="document.getElementById('sankiImportFile').click()">⬆️ Import backup</button>
