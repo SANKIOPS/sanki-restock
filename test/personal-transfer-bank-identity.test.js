@@ -20,7 +20,7 @@ const read = () => JSON.parse(fs.readFileSync(file, 'utf8'));
 const write = value => fs.writeFileSync(file, JSON.stringify(value));
 const sourceAccount = 'Namita 5464', destinationAccount = 'IndusInd Bank 7883';
 const date = '2098-08-28', amount = 2000;
-const currentRef = '313758628548', priorRef = '214681264504';
+const currentRef = '900000000101', priorRef = '900000000102';
 const bookKey = account => account === destinationAccount ? account : 'PERSONAL|' + account;
 
 function request(method, route, { role = 'admin', username = 'prashant', permissions = { personalAccounting: true }, body = {}, query = {} } = {}) {
@@ -67,7 +67,7 @@ function draft({ id = 'BRD-CURRENT', incoming = false, reference = currentRef, c
 function resolution(current, extra = {}) {
   return { action: 'create_internal_transfer', otherNature: 'PERSONAL', otherAccount: current.account === sourceAccount ? destinationAccount : sourceAccount, classification: 'internal_transfer', postingNature: 'PERSONAL', principalAmount: amount, chargeAmount: 0, reason: 'Verified separate bank UTR for the personal transfer', by: 'prashant', at: current.createdAt, ...extra };
 }
-function finalized({ id = 'TR-00046', reference = priorRef, incoming = false, excluded = false, evidence = true, origin = false, rawReference = '9810863742', description } = {}) {
+function finalized({ id = 'TR-00046', reference = priorRef, incoming = false, excluded = false, evidence = true, origin = false, rawReference = '9000000000', description } = {}) {
   const transfer = { id, nature: 'PERSONAL', fromNature: 'PERSONAL', toNature: 'PERSONAL', classification: 'internal_transfer', fromAccount: sourceAccount, toAccount: destinationAccount, amount, date, proof: '/existing-transfer-proof.jpg', bankStatementEvidence: true, bankReference: rawReference, reconciliationDraft: 'BRD-ORIGIN-' + id, bankRowId: 'bank-0', note: 'Existing immutable bank-confirmed transfer', createdBy: 'owner-user', createdAt: date + 'T09:00:00.000Z', ...(excluded ? { accountingExcluded: true, accountingExclusion: { reason: 'Previously excluded after Owner review', by: 'owner-user', at: date + 'T09:10:00.000Z' } } : {}) };
   const account = incoming ? destinationAccount : sourceAccount;
   const bank = { date, reference, description: description ?? 'Verified earlier same-day bank movement ' + id, debit: incoming ? 0 : amount, credit: incoming ? amount : 0, balance: 10000 };
@@ -176,12 +176,12 @@ test('excluded prior identity with missing reference fails closed without unexcl
   assert.equal(read().transfers[0].accountingExcluded, true); assert.deepEqual(read(), h.before);
 });
 
-for (const weakReference of ['', '9810863742', 'MANUALLY-TYPED-DISTINCT']) test('weak actual prior bank reference remains ambiguous: ' + (weakReference || '(blank)'), () => {
+for (const weakReference of ['', '9000000000', 'MANUALLY-TYPED-DISTINCT']) test('weak actual prior bank reference remains ambiguous: ' + (weakReference || '(blank)'), () => {
   const h = reset({ existing: [finalized({ reference: weakReference })] });
   const result = stage(h.current); assert.equal(result.status, 409, JSON.stringify(result.body)); assert.deepEqual(read(), h.before);
 });
 
-for (const weakReference of ['', '9810863742', 'MANUALLY-TYPED-DISTINCT']) test('weak actual current bank reference cannot prove a distinct transfer: ' + (weakReference || '(blank)'), () => {
+for (const weakReference of ['', '9000000000', 'MANUALLY-TYPED-DISTINCT']) test('weak actual current bank reference cannot prove a distinct transfer: ' + (weakReference || '(blank)'), () => {
   const h = reset({ current: draft({ reference: weakReference }), existing: [finalized()] });
   const result = stage(h.current); assert.equal(result.status, 409, JSON.stringify(result.body)); assert.deepEqual(read(), h.before);
 });
@@ -201,31 +201,31 @@ test('request-supplied references cannot manufacture distinct bank identity', ()
 });
 
 for (const same of [false, true]) test('an actual stored UPI narration supplies the bank identity rather than its phone-valued reference: ' + (same ? 'same UTR blocks' : 'distinct UTR permits'), () => {
-  const item = finalized({ reference: '9810863742', description: 'UPI/' + (same ? currentRef : priorRef) + '/VERIFIED RECIPIENT/PERSONAL TRANSFER' });
+  const item = finalized({ reference: '9000000000', description: 'UPI/' + (same ? currentRef : priorRef) + '/VERIFIED RECIPIENT/PERSONAL TRANSFER' });
   const h = reset({ existing: [item] }), result = stage(h.current);
   assert.equal(result.status, same ? 409 : 200, JSON.stringify(result.body));
   if (same) assert.deepEqual(read(), h.before); else assertExistingUnchanged(h.before, read());
 });
 
 test('a current actual UPI narration may identify its bank row when the separate reference contains a phone number', () => {
-  const current = draft({ reference: '9810863742' }); current.transactions[0].description = 'UPI/' + currentRef + '/GAGAN PERSONAL/Sent using UPI';
+  const current = draft({ reference: '9000000000' }); current.transactions[0].description = 'UPI/' + currentRef + '/SYNTHETIC PERSON/Sent using UPI';
   const h = reset({ current, existing: [finalized()] }), result = stage(h.current);
   assert.equal(result.status, 200, JSON.stringify(result.body)); assertExistingUnchanged(h.before, read());
 });
 
 for (const [label, reference, description] of [
-  ['two different 12-digit UPI identifiers', '9810863742', 'UPI/' + priorRef + '/' + currentRef + '/AMBIGUOUS BANK EVIDENCE'],
+  ['two different 12-digit UPI identifiers', '9000000000', 'UPI/' + priorRef + '/' + currentRef + '/AMBIGUOUS BANK EVIDENCE'],
   ['explicit bank UTR conflicts with narration', priorRef, 'UPI/111111111111/CONFLICTING BANK EVIDENCE'],
-  ['non-UPI narration with a numerical account token', '9810863742', 'ACCOUNT/' + priorRef + '/NOT VERIFIED UPI EVIDENCE'],
-  ['unbounded 12-digit narration token', '9810863742', 'UPI payment ' + priorRef + ' without slash-delimited bank reference'],
-  ['12-digit token embedded in a longer number', '9810863742', 'UPI/9' + priorRef + '9/NOT A UNIQUE 12-DIGIT UTR']
+  ['non-UPI narration with a numerical account token', '9000000000', 'ACCOUNT/' + priorRef + '/NOT VERIFIED UPI EVIDENCE'],
+  ['unbounded 12-digit narration token', '9000000000', 'UPI payment ' + priorRef + ' without slash-delimited bank reference'],
+  ['12-digit token embedded in a longer number', '9000000000', 'UPI/9' + priorRef + '9/NOT A UNIQUE 12-DIGIT UTR']
 ]) test('ambiguous prior-bank narration cannot authorize a transfer: ' + label, () => {
   const h = reset({ existing: [finalized({ reference, description })] }), result = stage(h.current);
   assert.equal(result.status, 409, JSON.stringify(result.body)); assert.deepEqual(read(), h.before);
 });
 
 for (const [label, reference, description] of [
-  ['two different UPI identifiers', '9810863742', 'UPI/' + currentRef + '/111111111111/AMBIGUOUS'],
+  ['two different UPI identifiers', '9000000000', 'UPI/' + currentRef + '/111111111111/AMBIGUOUS'],
   ['explicit current UTR conflicts with narration', currentRef, 'UPI/111111111111/CONFLICTING']
 ]) test('ambiguous current bank narration cannot prove a distinct transfer: ' + label, () => {
   const current = draft({ reference }); current.transactions[0].description = description;
@@ -333,7 +333,7 @@ function bridgeFixture(change) {
 }
 
 function receivedNarration(reference = '555555555555', prefix = 'SYNTHETIC NAME ') {
-  return prefix + 'UPI/SYNTHETIC NAME/9810863742@pty/Sent using/INDUSIND B/' + reference + '/PTMBABBAE2048A147C0AA0D96D54F15FD97';
+  return prefix + 'UPI/SYNTHETIC NAME/9000000000@pty/Sent using/INDUSIND B/' + reference + '/PTMSYNTHETICBANKREFERENCE';
 }
 
 // Reproduce the older create-incoming shape: its original draft has expired,
@@ -344,11 +344,11 @@ function auditedIncomingBridgeFixture(change) {
   return bridgeFixture(store => {
     const book = store.bankStatements[bookKey(destinationAccount)], row = book.imports[0].reconciliationRows[0];
     const stored = book.transactions[row.bank.transactionId], description = receivedNarration();
-    row.bank.reference = stored.reference = '9810863742';
+    row.bank.reference = stored.reference = '9000000000';
     row.bank.description = stored.description = description;
     const excluded = store.transfers.find(item => item.id === 'TR-00049');
     delete excluded.reconciliationDraft; delete excluded.bankRowId;
-    excluded.bankReconciliationEvidence = { draftId: 'BRD-EXPIRED-INCOMING', rowId: 'bank-0', reference: '9810863742', description };
+    excluded.bankReconciliationEvidence = { draftId: 'BRD-EXPIRED-INCOMING', rowId: 'bank-0', reference: '9000000000', description };
     const audit = { action: 'CREATED_FROM_BANK_RECONCILIATION', subjectType: 'transfer', subjectId: excluded.id, nature: 'PERSONAL', account: sourceAccount, draftId: 'BRD-EXPIRED-INCOMING', bankRowId: 'bank-0', after: clone(excluded) };
     store.auditLog.push(audit);
     if (change) change(store, { excluded, audit, row, stored, book });
@@ -356,7 +356,7 @@ function auditedIncomingBridgeFixture(change) {
 }
 
 for (const prefix of ['', 'SYNTHETIC NAME ', 'SYNTHETIC NAME\n', 'SYNTHETIC NAME \r\n  ']) test('a received UPI narration has a bounded bank identity with a name prefix: ' + JSON.stringify(prefix), () => {
-  const original = finalized({ incoming: true, reference: '9810863742', description: receivedNarration(priorRef, prefix) });
+  const original = finalized({ incoming: true, reference: '9000000000', description: receivedNarration(priorRef, prefix) });
   const h = reset({ current: draft({ incoming: true }), existing: [original] }), result = stage(h.current);
   assert.equal(result.status, 200, JSON.stringify(result.body));
   assert.equal(read().transfers.length, 1, 'review only saves a decision, not another transfer');
@@ -364,14 +364,14 @@ for (const prefix of ['', 'SYNTHETIC NAME ', 'SYNTHETIC NAME\n', 'SYNTHETIC NAME
 });
 
 for (const [label, reference, description] of [
-  ['extra slash-delimited 12-digit token', '9810863742', receivedNarration(priorRef) + '/111111111111'],
-  ['two UPI markers', '9810863742', receivedNarration(priorRef) + ' UPI/111111111111/AMBIGUOUS'],
+  ['extra slash-delimited 12-digit token', '9000000000', receivedNarration(priorRef) + '/111111111111'],
+  ['two UPI markers', '9000000000', receivedNarration(priorRef) + ' UPI/111111111111/AMBIGUOUS'],
   ['conflicting explicit bank reference', currentRef, receivedNarration(priorRef)],
-  ['phone number with no bank UTR', '9810863742', receivedNarration('9810863742')],
-  ['arbitrary account number outside UPI format', '9810863742', 'SYNTHETIC NAME ACCOUNT/' + priorRef + '/PERSONAL BANK'],
-  ['free-form UPI sentence with an account number', '9810863742', 'SYNTHETIC NAME UPI payment ' + priorRef + ' received'],
-  ['a 12-digit reference embedded in a longer number', '9810863742', receivedNarration('9' + priorRef + '9')],
-  ['unbounded suffix after received bank reference', '9810863742', receivedNarration(priorRef) + '/NOT-VERIFIED']
+  ['phone number with no bank UTR', '9000000000', receivedNarration('9000000000')],
+  ['arbitrary account number outside UPI format', '9000000000', 'SYNTHETIC NAME ACCOUNT/' + priorRef + '/PERSONAL BANK'],
+  ['free-form UPI sentence with an account number', '9000000000', 'SYNTHETIC NAME UPI payment ' + priorRef + ' received'],
+  ['a 12-digit reference embedded in a longer number', '9000000000', receivedNarration('9' + priorRef + '9')],
+  ['unbounded suffix after received bank reference', '9000000000', receivedNarration(priorRef) + '/NOT-VERIFIED']
 ]) test('a name-prefixed received narration still fails closed: ' + label, () => {
   const h = reset({ current: draft({ incoming: true }), existing: [finalized({ incoming: true, reference, description })] });
   const result = stage(h.current); assert.equal(result.status, 409, JSON.stringify(result.body));
