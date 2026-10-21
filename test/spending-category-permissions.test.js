@@ -19,6 +19,7 @@ function harness({ owner = false, manager = false, response } = {}) {
     value: '', textContent: '', innerHTML: '', className: '', disabled: false,
     open: false, listeners: {}, focusCount: 0,
     addEventListener(event, listener) { this.listeners[event] = listener; },
+    setAttribute(name, value) { this[name] = value; },
     querySelectorAll() { return []; },
     showModal() { this.open = true; },
     close() { this.open = false; },
@@ -61,7 +62,7 @@ test('authorized non-Owner sees Add category and can open the existing dialog', 
   const h = harness({ manager: true });
   h.context.renderSpendingDashboard();
   assert.match(h.node('panel').innerHTML, /id="sd_add_category"/);
-  assert.match(h.node('panel').innerHTML, /onclick="openSpendingCategoryDialog\(\)"/);
+  assert.match(h.node('panel').innerHTML, /onclick="openManageCategories\(\)"/);
   h.node('spendingCategoryName').value = 'Stale name';
   h.context.window.openSpendingCategoryDialog();
   assert.equal(h.node('spendingCategoryDlg').open, true);

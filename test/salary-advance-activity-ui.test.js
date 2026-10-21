@@ -58,7 +58,7 @@ test('small amounts are summed in currency precision and empty activity is valid
   assert.equal(view.outstanding,.3);assert.deepEqual(build({}, {today}).rows,[]);
 });
 
-function uiHarness(data,{owner=false}={}){
+function uiHarness(data,{owner=false,canEditPendingRequest=true,employeeResponse=null}={}){
   const nodes=new Map(),calls=[];
   function node(id){
     if(!nodes.has(id)){
@@ -70,9 +70,9 @@ function uiHarness(data,{owner=false}={}){
   }
   const document={getElementById:node,querySelectorAll(){return [];}};
   class FixedDate extends Date{constructor(...args){super(...(args.length?args:[today+'T12:00:00Z']));}}
-  const context={document,Date:FixedDate,FormData:class{},console,fetch(url,options){calls.push({url,options});if(url==='/api/auth/me')return new Promise(()=>{});let response=url.startsWith('/api/salary/employees')?{success:true,employees:[{id:'E1',name:'Employee One',active:true}],advancePayingAccounts:[],salaryPayingAccounts:[]}:url.startsWith('/api/expenses/config')?{accountsByNature:{SANKI:[]}}:data;return Promise.resolve({json:()=>Promise.resolve(response)});}};
+  const context={document,Date:FixedDate,FormData:class{},console,fetch(url,options){calls.push({url,options});if(url==='/api/auth/me')return new Promise(()=>{});let response=url.startsWith('/api/salary/employees')?(employeeResponse||{success:true,employees:[{id:'E1',name:'Employee One',active:true}],advancePayingAccounts:[],salaryPayingAccounts:[]}):url.startsWith('/api/expenses/config')?{accountsByNature:{SANKI:[]}}:data;return Promise.resolve({json:()=>Promise.resolve(response)});}};
   context.window=context;context.URL=URL;context.location=new URL('https://example.test/salary.html');context.history={state:null,replaceState(_state,_title,target){context.location=new URL(target,context.location);}};vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/navigation-state.js'),'utf8'),context);vm.runInContext(helper,context);vm.runInContext(inline,context);
-  data.permissions={canRequest:true,canApprove:owner,canDirectPost:owner,canPostProof:true,canEdit:true,canCancel:owner};
+  data.permissions={canRequest:true,canApprove:owner,canDirectPost:owner,canPostProof:true,canEdit:true,canEditPendingRequest,canCancel:owner};
   context.state.ym='2026-07';context.loadAdvances();
   return {context,node,calls};
 }
@@ -116,6 +116,35 @@ test('employee history shortcut expands and focuses the right register employee 
   context.renderRecentAdvanceActivity();button.onclick();
   assert.equal(detail.open,true);assert.equal(detail.scrolled,true);assert.equal(summary.focused,true);assert.equal(summary.tabIndex,-1);
   assert.equal(calls.length,reads);
+});
+
+test('pending request edit is permission-aware, prefilled, allows authorized PSNL sources and PATCHes without posting on open',async()=>{
+  const pending=request('ADVR-PENDING',{empId:'E1',employeeName:'Employee One',date:'2026-10-11',amount:1200,payingNature:'PERSONAL',account:'ICICI Bank 0992',recoveryStartMonth:'2026-11',reference:'REQ-REF',note:'Original request note'});
+  const approved=request('ADVR-APPROVED',{empId:'E1',status:'Approved – proof required',payingNature:'SANKI',account:'Axis Bank 3448'});
+  const data={success:true,activityAdvances:[],advances:[],requests:[pending,approved],summary:[{empId:'E1',name:'Employee One',transactions:[],requests:[pending,approved],outstanding:0,companyOwes:0}],totals:{outstanding:0},editRequests:[]};
+  const employeeResponse={success:true,employees:[{id:'E1',name:'Employee One',active:true},{id:'E2',name:'Employee Two',active:true}],salaryPayingAccounts:[],advancePayingAccounts:[{name:'Axis Bank 3448',nature:'SANKI'},{name:'IndusInd Bank 8181',nature:'SANKI'},{name:'IndusInd Bank 7883',nature:'PERSONAL'},{name:'ICICI Bank 0993',nature:'PERSONAL'},{name:'ICICI Bank 0992',nature:'PERSONAL'},{name:'Gagan Personal Cash',nature:'PERSONAL'}]};
+  const {context,node,calls}=uiHarness(data,{employeeResponse});await flush();
+  const rendered=node('host').innerHTML;
+  ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash'].forEach(function(account){assert.match(rendered,new RegExp('PERSONAL · '+account),'the new-request picker includes '+account);});
+  assert.doesNotMatch(rendered,/Namita 5464|Namita Cash|Paytm Settlement Clearing|Velocity/,'unrelated PERSONAL and clearing ledgers stay out of the new-request picker');
+  assert.equal((rendered.match(/openAdvanceRequestEdit\('/g)||[]).length,1,'only the pending request has an Edit action');
+  assert.match(rendered,/openAdvanceRequestEdit\('ADVR-PENDING'\)/);assert.doesNotMatch(rendered,/openAdvanceRequestEdit\('ADVR-APPROVED'\)/);
+
+  const callsBeforeOpen=calls.length,recordsBeforeOpen=JSON.stringify(data);
+  context.openAdvanceRequestEdit('ADVR-PENDING');
+  assert.equal(calls.length,callsBeforeOpen,'opening the correction form neither fetches nor posts');assert.equal(JSON.stringify(data),recordsBeforeOpen,'opening the form cannot mutate request data');
+  assert.equal(node('advanceRequestEditDlg').open,true);assert.equal(node('advance_request_edit_id').value,'ADVR-PENDING');assert.equal(node('advance_request_edit_emp').value,'E1');assert.equal(node('advance_request_edit_amount').value,1200);assert.equal(node('advance_request_edit_date').value,'2026-10-11');assert.equal(node('advance_request_edit_recovery').value,'2026-11');assert.equal(node('advance_request_edit_ref').value,'REQ-REF');assert.equal(node('advance_request_edit_note').value,'Original request note');assert.equal(node('advance_request_edit_reason').value,'');
+  assert.equal(node('advance_request_edit_account').value,'PERSONAL|ICICI Bank 0992');['Axis Bank 3448','IndusInd Bank 8181'].forEach(function(account){assert.match(node('advance_request_edit_account').innerHTML,new RegExp(account),'the edit picker retains company source '+account);});['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash'].forEach(function(account){assert.match(node('advance_request_edit_account').innerHTML,new RegExp('PERSONAL · '+account),'the edit picker includes '+account);});assert.doesNotMatch(node('advance_request_edit_account').innerHTML,/Namita 5464|Namita Cash|Paytm Settlement Clearing|Velocity/,'the dialog excludes unrelated PERSONAL and clearing ledgers');
+
+  context.saveAdvanceRequestEdit();assert.equal(calls.length,callsBeforeOpen,'a required edit reason is enforced before PATCH');
+  node('advance_request_edit_emp').value='E2';node('advance_request_edit_amount').value='1350.25';node('advance_request_edit_date').value='2026-10-12';node('advance_request_edit_account').value='SANKI|Axis Bank 3448';node('advance_request_edit_recovery').value='2026-12';node('advance_request_edit_ref').value='REQ-REF-2';node('advance_request_edit_note').value='Corrected before approval';node('advance_request_edit_reason').value='Employee confirmed corrected details';
+  context.saveAdvanceRequestEdit();await flush();await flush();
+  const patch=calls.find(x=>x.url.startsWith('/api/salary/advance-requests/ADVR-PENDING?')&&x.options&&x.options.method==='PATCH');assert.ok(patch,'saving calls the pending-request endpoint');assert.match(patch.url,/entity=SANKI/);
+  const body=JSON.parse(patch.options.body);assert.deepEqual(body,{empId:'E2',amount:'1350.25',date:'2026-10-12',account:'Axis Bank 3448',payingNature:'SANKI',recoveryStartMonth:'2026-12',reference:'REQ-REF-2',note:'Corrected before approval',reason:'Employee confirmed corrected details'});assert.equal(node('advanceRequestEditDlg').open,false);
+
+  const deniedData={success:true,activityAdvances:[],advances:[],requests:[pending],summary:[{empId:'E1',name:'Employee One',transactions:[],requests:[pending],outstanding:0,companyOwes:0}],totals:{outstanding:0},editRequests:[]};
+  const denied=uiHarness(deniedData,{canEditPendingRequest:false,employeeResponse});await flush();
+  assert.doesNotMatch(denied.node('host').innerHTML,/openAdvanceRequestEdit\(/,'viewers without request-edit permission never receive the Edit action');
 });
 
 test('all salary inline scripts and the browser helper parse',()=>{

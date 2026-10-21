@@ -12,10 +12,13 @@ test.after(async()=>{if(server){server.closeAllConnections();await new Promise(r
 async function call(method,url,body,role='owner'){const r=await fetch(base+url,{method,headers:{'Content-Type':'application/json','x-test-role':role},body:body?JSON.stringify(body):undefined});return {status:r.status,...await r.json()};}
 async function get(){return call('GET','/api/model-calendar');}
 async function book(overrides={}){const s=await get();return call('POST','/api/model-calendar/bookings',{revision:s.revision,date:'2026-09-11',contract:{name:'Test Model',instagram:'https://www.instagram.com/testmodel/',kind:'monthly',month:'2026-09',amount:20000,includedShoots:4},...overrides});}
-function expenseBody(c){return {modelCalendarContractId:c.id,nature:'SANKI',date:'2026-09-11',ledger:'Models Payment',amount:c.amount,type:'marketing',vendor:c.name,particulars:'September model package',bill:'printed',billPhoto:'/test-bill.jpg',paymentType:'Cash',paidAlready:false};}
+function expenseBody(c){return {modelCalendarContractId:c.id,nature:'SANKI',date:'2026-09-11',ledger:'Models Payment',amount:c.amount,type:'marketing',vendor:c.name,vendorPhone:'+919876543210',particulars:'September model package',bill:'printed',billPhoto:'/test-bill.jpg',paymentType:'Cash',paidAlready:false};}
 test('booking → linked expense → proof-gated partial and full payment → correction',async()=>{
  let s=await book();assert.equal(s.status,200);const c=s.contracts[0],shoot=s.shoots[0];assert.equal(c.finance.paid,0);assert.equal(c.finance.expenseStatus,'not_created');
- const noProof=expenseBody(c);delete noProof.billPhoto;assert.equal((await call('POST','/api/expenses',noProof)).status,400);
+ const beforeInvalid=JSON.parse(fs.readFileSync(path.join(dir,'expenses.json'),'utf8'));
+ const noProof=expenseBody(c);delete noProof.billPhoto;const rejectedProof=await call('POST','/api/expenses',noProof);assert.equal(rejectedProof.status,400);assert.match(rejectedProof.error,/Bill photo is required/i);
+ const noPhone=expenseBody(c);delete noPhone.vendorPhone;const rejectedPhone=await call('POST','/api/expenses',noPhone);assert.equal(rejectedPhone.status,400);assert.match(rejectedPhone.error,/valid vendor phone number/i);
+ const afterInvalid=JSON.parse(fs.readFileSync(path.join(dir,'expenses.json'),'utf8'));assert.deepEqual(afterInvalid.expenses,beforeInvalid.expenses,'invalid input must not create an expense or payment');assert.deepEqual(afterInvalid.modelCalendar,beforeInvalid.modelCalendar,'invalid input must not link or advance the model package');
  const submitted=await call('POST','/api/expenses',expenseBody(c));assert.equal(submitted.status,200);const id=submitted.expense.id;
  assert.equal((await call('POST','/api/expenses',expenseBody(c))).status,409);
  const pay={amount:7500,account:'Services',paymentType:'Cash',paymentProof:'/test-pay.jpg',date:'2026-09-13'};
@@ -46,7 +49,7 @@ test('existing expense links preserve accounting records and reject duplicate al
  const c2=(await book({contract:{name:'Duplicate Model',kind:'monthly',month:'2026-09',amount:10000,includedShoots:2}})).contracts.at(-1);s=await get();assert.equal((await call('POST','/api/model-calendar/contracts/'+c2.id+'/link-expense',{revision:s.revision,expenseId:e.id})).status,409);
  assert.equal((await call('POST','/api/model-calendar/contracts/'+c.id,{revision:s.revision,...c,amount:12000})).status,400);
  const bad={...expenseBody(c2),nature:'PERSONAL'};assert.equal((await call('POST','/api/expenses',bad)).status,400);
- assert.equal((await call('POST','/api/expenses',expenseBody(c2),'claimant')).status,403);
+ const deniedClaimant=await call('POST','/api/expenses',{...expenseBody(c2),date:businessDate()},'claimant');assert.equal(deniedClaimant.status,403);assert.match(deniedClaimant.error,/cannot create, link or change expenses and payments/i);
 });
 test('excluded and rejected expenses cannot make models appear paid',()=>{
  const c={expenseId:'EX-1',amount:10000,includedShoots:4};for(const e of [{status:'rejected',nature:'SANKI'},{status:'paid',nature:'PERSONAL'},{status:'paid',nature:'SANKI',accountingExcluded:true}]){const f=financial({expenses:{'EX-1':{...e,amount:10000,paidAmount:10000}}},c);assert.equal(f.paid,0);assert.ok(f.warning)}

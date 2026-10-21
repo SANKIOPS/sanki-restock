@@ -212,6 +212,23 @@ test('confirmed owner account always retains distinct owner access', () => {
   assert.equal(apiAllowedForUser({ roles: ['accounting'] }, '/api/owner/summary'), false);
 });
 
+test('Owner has an extensible per-user switch for private PERSONAL accounting', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  const usersSource = fs.readFileSync(path.join(__dirname, '..', 'modules', 'auth-users.js'), 'utf8');
+  const adminSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'admin-users.html'), 'utf8');
+  const expenseSource = fs.readFileSync(path.join(__dirname, '..', 'modules', 'expenses.js'), 'utf8');
+  assert.match(usersSource, /id: 'personalAccounting'/);
+  assert.match(usersSource, /router\.post\('\/api\/admin\/users\/permissions', requireOwner/);
+  assert.match(usersSource, /verifySession[\s\S]*permissions: normalizeUserPermissions\(u\)/);
+  assert.match(adminSource, /permission\.label/);
+  assert.match(adminSource, /Save access/);
+  assert.match(adminSource, /Saving…/);
+  assert.match(adminSource, /Saved ✓/);
+  assert.match(adminSource, /d\.permissions && d\.permissions\[permission\.id\]/);
+  assert.match(expenseSource, /function canManagePersonalAccounting/);
+  assert.match(expenseSource, /if \(canManagePersonalAccounting\(req\)\) out\.push\('PERSONAL'\)/);
+});
+
 test('Prashant can administer salary without gaining access to unrelated modules',()=>{
   const p={username:'prashant',role:'claimant',roles:['claimant']};
   assert.equal(apiAllowedForUser(p,'/api/salary/month/2026-09','GET'),true);
@@ -233,6 +250,7 @@ test('Prashant can administer salary without gaining access to unrelated modules
 test('Prashant sees only the requested operational workspace even with an Admin role',()=>{
   const p={username:'Prashant',role:'admin',roles:['admin']};
   assert.deepEqual(visibleFor(p).map(module=>module.key),[
+    'manage',
     'inventory-dashboard','inventory-care',
     'procurement','fresh-proc','size-tracker',
     'pl','rentals','expenses','salary','incentives',

@@ -1,5 +1,6 @@
 const { summarizePayouts } = require('./paytm-report');
 const { validateOrderReceiptTotals } = require('./paytm-rounding');
+const { validatePayoutReturnResolutions, resolutionForTransaction } = require('./paytm-refund-resolutions');
 
 const CLEARING = 'Paytm Settlement Clearing';
 const BANK = 'Axis Bank 3448';
@@ -44,6 +45,7 @@ function matchPayoutBank(store, payout) {
 
 function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   if (!tx) throw new Error('Paytm transaction not found. Import its detailed report first.');
+  if (resolutionForTransaction(store, tx.transactionId)) throw new Error('This transaction belongs to an audited accidental receipt/refund return and cannot be linked to Shopify.');
   if (tx.isCustomerPayment === false) throw new Error('This is a Paytm adjustment, not a customer payment, and must not be linked to Shopify.');
   const orderKey = String(orderId).replace(/^#/, '').trim();
   const matches = orders.filter(x => String(x.id) === orderKey || String(x.orderNumber || x.number || x.name || '').replace(/\D/g, '').replace(/^0+/, '') === orderKey);
@@ -110,7 +112,11 @@ function validateSettlementReview(store, payoutId, saleRows, options = {}) {
   if (!payout) throw new Error('Payout not found. Import the Paytm report first.');
   if (payout.transactionIds.some(id => (store.paytmRoundingReviews || {})[id] && (store.paytmExcludedTransactions || {})[id])) throw new Error('An excluded payment retains an audited rounding receipt. Reverse or correct that rounding treatment before posting.');
   const excludedIds = payout.transactionIds.filter(id => (store.paytmReportTransactions || {})[id]?.isCustomerPayment !== false && (store.paytmExcludedTransactions || {})[id]);
-  if (excludedIds.length && !options.allowExcluded) throw new Error('This payout contains an excluded payment (customer receipt). Restore or separately resolve it before finalizing the payout.');
+  const returns = validatePayoutReturnResolutions(store, payout);
+  const unresolvedExcludedIds = excludedIds.filter(id => !returns.resolvedReceiptIds.includes(id));
+  if (unresolvedExcludedIds.length && !options.allowExcluded) throw new Error('This payout contains an excluded payment (customer receipt). Restore or separately resolve it before finalizing the payout.');
+  payout.returnedReceiptAmount = returns.returnedReceiptAmount;
+  payout.effectiveCustomerGross = Math.round((payout.customerGross - returns.returnedReceiptAmount) * 100) / 100;
   if (!payout.utr || !payout.settledDate) throw new Error('Settlement UTR and settled date are required for an exact bank link.');
   const links = store.paytmOrderLinks || {}, manual = store.paytmManualResolutions || {};
   const customerIds = payout.transactionIds.filter(id => (store.paytmReportTransactions || {})[id]?.isCustomerPayment !== false && !excludedIds.includes(id));
@@ -137,8 +143,8 @@ function validateSettlementReview(store, payoutId, saleRows, options = {}) {
     if (!row || cents(row.amount) < cents(link.amount)) throw new Error(`Shopify order ${link.orderNumber} changed since it was linked. Review it again.`);
     if ((store.bankDateOverrides || {})[row.id]) throw new Error(`Shopify order ${link.orderNumber} is already linked to a bank transaction. Correct that existing link before posting its Paytm payout.`);
   }
-  if (cents(payout.gross) - cents(payout.commission) - cents(payout.platformFee) - cents(payout.gst) - cents(payout.nonCustomerAmount) !== cents(payout.net)) throw new Error('Paytm customer gross, commission, platform fee, GST, VAS deductions and bank net do not balance.');
-  return { payout, linked, excludedIds, excludedAmount };
+  if (cents(payout.gross) - cents(payout.commission) - cents(payout.platformFee) - cents(payout.gst) - cents(payout.nonCustomerAmount) - cents(payout.refundAmount) !== cents(payout.net)) throw new Error('Paytm customer gross, commission, platform fee, GST, VAS deductions, refunds and bank net do not balance.');
+  return { payout, linked, excludedIds, excludedAmount, returnResolutions: returns.reviews };
 }
 
 // A settlement whose customer rows have all been reviewed is already a real
@@ -155,7 +161,7 @@ function reviewedUnpostedSettlements(store, saleRows) {
       const { payout, linked } = validateSettlementReview(store, candidate.payoutId, saleRows);
       let historicalEvidenceLink=null;
       if((store.paytmHistoricalEvidenceLinks||{})[payout.settlementId]) { validateHistoricalSettlementAttachment(store,payout.payoutId,saleRows); historicalEvidenceLink=store.paytmHistoricalEvidenceLinks[payout.settlementId]; }
-      rows.push({ id: `PTMV-REVIEWED-${payout.settlementId}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, historicalEvidenceLink, reviewedNotFinalized: !historicalEvidenceLink });
+      rows.push({ id: `PTMV-REVIEWED-${payout.settlementId}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), gross: payout.effectiveCustomerGross, customerGross: payout.effectiveCustomerGross, rawCustomerGross: payout.customerGross, returnedReceiptAmount: payout.returnedReceiptAmount, refundAmount: payout.refundAmount, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, historicalEvidenceLink, reviewedNotFinalized: !historicalEvidenceLink });
     } catch { /* Incomplete or unsafe batches stay out of the ledger. */ }
   }
   return rows;
@@ -195,7 +201,7 @@ function validateHistoricalSettlementAttachment(store, payoutId, saleRows) {
   const fees=cents(payout.commission)+cents(payout.platformFee)+cents(payout.gst)+cents(payout.nonCustomerAmount);
   const candidates=(store.paytmSettlements||[]).filter(x=>x.bankAccount===BANK&&String(x.date).slice(0,10)===payout.settledDate&&
     String(x.utr||x.bankReference||x.reference||'')===payout.utr&&cents(x.netAmount)===cents(payout.net)&&
-    ((cents(x.grossAmount)===cents(payout.customerGross)&&cents(x.chargeAmount)===fees)||pendingHistoricalDetail(x)));
+    ((cents(x.grossAmount)===cents(payout.effectiveCustomerGross)&&cents(x.chargeAmount)===fees)||pendingHistoricalDetail(x)));
   if(candidates.length!==1)throw new Error('The existing historical settlement must match the exact customer gross, charges, net, date and UTR.');
   const legacy=candidates[0],book=(store.bankStatements||{})[BANK]||{};
   const completePendingDetail=pendingHistoricalDetail(legacy);
@@ -233,6 +239,13 @@ function settlementStatus(store, payout, saleRows) {
     }catch(error){reasons.push(error.message);}
   }
   let code = posted || attachmentValid ? 'posted' : attachment ? 'incomplete' : verified ? 'finalized' : 'ready';
+  const hasReturnReview = Object.values(store.paytmReturnResolutions || {}).some(review => review.settlementId === payout.settlementId || payout.transactionIds.includes(review.receiptTransactionId) || payout.transactionIds.includes(review.refundTransactionId));
+  if ((posted || verified) && (payout.refundAmount > 0 || hasReturnReview)) {
+    try {
+      const reviewed = validateSettlementReview(store, payout.payoutId, saleRows).payout, existing = posted || verified;
+      if (cents(existing.returnedReceiptAmount) !== cents(reviewed.returnedReceiptAmount) || cents(existing.refundAmount) !== cents(reviewed.refundAmount) || cents(existing.customerGross) !== cents(reviewed.effectiveCustomerGross) || cents(existing.nonCustomerAmount) !== cents(reviewed.nonCustomerAmount)) throw new Error('This previously finalized settlement contains a REFUND recorded without the current return treatment. Review the existing accounting; no historical posting was changed.');
+    } catch (error) { code = 'incomplete'; reasons.push(error.message); }
+  }
   if (!posted && !verified) {
     try { validateSettlementReview(store, payout.payoutId, saleRows); }
     catch (error) { code = 'incomplete'; reasons.push(error.message); }
@@ -251,6 +264,8 @@ function settlementStatus(store, payout, saleRows) {
   }
   const blockedTransactions = payout.transactionIds.filter(id => {
     const tx = (store.paytmReportTransactions || {})[id];
+    const returnReview = resolutionForTransaction(store, id);
+    if (returnReview) { try { validatePayoutReturnResolutions(store, payout); return false; } catch { return true; } }
     return tx && tx.isCustomerPayment !== false && ((store.paytmExcludedTransactions || {})[id] ||
       !((store.paytmOrderLinks || {})[id] || (store.paytmManualResolutions || {})[id]));
   }).map(id => ({ transactionId: id, reason: (store.paytmExcludedTransactions || {})[id] ?

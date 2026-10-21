@@ -42,6 +42,9 @@ test('P&L UI renders typed totals, escaped references, tabs and SKU drill-down',
   assert.match(ui.element('cards').innerHTML, /1,542\.53/); assert.equal(ui.element('export').disabled, false);
   ui.tabs[1].listeners.click(); assert.equal(ui.element('statement').hidden, true); assert.equal(ui.element('tax').hidden, false);
   assert.match(ui.element('tax').innerHTML, /&lt;unsafe invoice&gt;/); assert.doesNotMatch(ui.element('tax').innerHTML, /<unsafe invoice>/);
+  assert.match(ui.element('tax').innerHTML, /Invoice GST \(reference only\)/);
+  assert.match(ui.element('tax').innerHTML, /P&amp;L-calculated GST/);
+  assert.match(ui.element('tax').innerHTML, /Shopify, invoices, collections and ledgers are unchanged/);
   ui.clickFilter('sales'); assert.equal(ui.element('details').open, true); assert.match(ui.element('detailBody').innerHTML, /SKU \/ purchase allocations/);
 });
 test('incomplete results display unavailable instead of fabricated profit', async () => {

@@ -33,9 +33,9 @@ test('history failure cannot break navigation',()=>{
   assert.equal(ctx.SankiNavigation.set({tab:'list'}),false);
 });
 test('expense tabs record the selected page and permissions still gate restored pages',()=>{
-  const tabs=['log','list','pending','receivables','spending','vendors','salaryledgers','creditcards','cash','reimbursements','categories','audit','approvals'];
+  const tabs=['log','list','pending','receivables','spending','vendors','salaryledgers','creditcards','cash','reimbursements','manage','categories','audit','approvals'];
   const ctx=browser('https://example.test/expenses.html?tab=cash'),buttons=tabs.map(t=>({dataset:{t},style:{display:''},classList:{toggle(){}}}));
-  ctx.cfg={claimantOnly:false,canManageCategories:true,isAdmin:true};ctx.tab='log';ctx.setMsg=()=>{};ctx.setOpenTabGroup=()=>{};ctx.groupForTab=()=>'';
+  ctx.cfg={claimantOnly:false,canManageCategories:true,isAdmin:true};ctx.tab='log';ctx.setMsg=()=>{};ctx.setOpenTabGroup=()=>{};ctx.groupForTab=()=>'';ctx.openManageHub=section=>'Manage '+(section||'home');
   ctx.el=id=>id==='panel'?{dataset:{}}:{querySelector:selector=>buttons.find(b=>selector.includes('"'+b.dataset.t+'"')),querySelectorAll:()=>buttons};
   for(const name of ['Log','List','PendingPayments','Receivables','SpendingDashboard','Vendors','SalaryLedgers','CreditCards','Cash','Reimbursements','Categories','Audit','Approvals'])ctx['render'+name]=()=>name;
   vm.runInContext(section('expenses.html','    function render(){','    // ── LOG form'),ctx);
@@ -78,7 +78,7 @@ test('ledger refresh preserves an explicit date range and changing accounts clea
   const ctx=browser('https://example.test/expenses.html?tab=cash&account=IndusInd%20Bank%208181&draft=BRD-123&ledgerFrom=2026-10-01&ledgerTo=2026-10-07');
   const fields=new Map(),calls=[];ctx.el=id=>{if(!fields.has(id))fields.set(id,{value:'',style:{},classList:{toggle(){}},innerHTML:'',remove(){}});return fields.get(id);};
   ctx.el('lg_account').value='IndusInd Bank 8181';ctx.el('lg_from').value='2026-10-01';ctx.el('lg_to').value='2026-10-07';
-  ctx.ledgerLoadedAccount='';ctx.selectedNature='SANKI';ctx.cfg={isOwner:false,isAdmin:false};ctx.bankAccountsForNature=()=>[];ctx.reconciliationAccountsForNature=()=>[];ctx.esc=String;ctx.fmt=String;
+  ctx.ledgerLoadedAccount='';ctx.selectedNature='SANKI';ctx.cfg={isOwner:false,isAdmin:false};ctx.bankAccountsForNature=()=>[];ctx.reconciliationAccountsForNature=()=>[];ctx.reconciliationNatureForAccount=(_account,nature)=>nature;ctx.esc=String;ctx.fmt=String;
   ctx.api=async(url,options)=>{calls.push({url,options});return{success:true,account:ctx.el('lg_account').value,entries:[],lastReconciliation:{from:'2026-08-01'},balance:0};};
   vm.runInContext(section('expenses.html','    function loadAccountLedger(){',"    var bankDraftId='"),ctx);
   ctx.loadAccountLedger();await new Promise(setImmediate);
@@ -121,7 +121,7 @@ test('all shipped page scripts and external scripts parse',()=>{
   }
 });
 test('changed external scripts are content-versioned so first refresh cannot run stale navigation code',()=>{
-  const assets=['navigation-state.js','inventory-care.js','inventory-enhancements.js','inventory-movements.js','meta-ads.js','model-calendar.js','pnl.js','rental-register.js','seo-control.js','shoot-planner.js'];
+  const assets=['navigation-state.js','inventory-care.js','inventory-enhancements.js','inventory-movements.js','meta-ads.js','model-calendar.js','pnl.js','rental-register.js','seo-control.js','shoot-planner.js','manage.js','manage-navigation.js'];
   for(const file of fs.readdirSync(path.join(__dirname,'../public')).filter(file=>file.endsWith('.html'))){
     for(const match of publicFile(file).matchAll(/<script\s+src="\/([^"?]+)(?:\?v=([^"]+))?"/g))if(assets.includes(match[1])){
       const hash=require('node:crypto').createHash('sha256').update(publicFile(match[1]).replace(/\r\n/g,'\n')).digest('hex').slice(0,12);assert.equal(match[2],hash,file+' loads '+match[1]);

@@ -38,8 +38,17 @@ function movementOverride(store, id) {
 function evidenceStatus(evidence) {
   return { status: 'reconciled', reconciliationId: evidence.record.id, bankDate: evidence.row.bank.date || '', bankReference: evidence.row.bank.reference || '', finalizedAt: evidence.record.finalizedAt || '', finalizedBy: evidence.record.finalizedBy || '', sourceAccount: evidence.key.replace(/^PERSONAL\|/, '') };
 }
+function ownerPersonalTransfer(transfer) {
+  // Only the explicitly selectable Owner bank counterparts qualify. This
+  // recognition never grants access to a PERSONAL book or creates a movement.
+  const fromNature=transfer.fromNature||transfer.nature,toNature=transfer.toNature||transfer.nature;
+  const contribution=fromNature==='PERSONAL'&&toNature==='SANKI'&&transfer.classification==='owner_contribution';
+  const withdrawal=fromNature==='SANKI'&&toNature==='PERSONAL'&&transfer.classification==='owner_withdrawal';
+  const account=contribution?transfer.fromAccount:withdrawal?transfer.toAccount:'';
+  return ['IndusInd Bank 7883','ICICI Bank 0992','ICICI Bank 0993'].includes(account);
+}
 function transferEvidence(store, transfer) {
-  if (!transfer.bankStatementEvidence || transfer.classification!=='internal_transfer' || !transfer.reconciliationDraft || !transfer.bankRowId || transfer.accountingExcluded) return null;
+  if (!transfer.bankStatementEvidence || (transfer.classification!=='internal_transfer'&&!ownerPersonalTransfer(transfer)) || !transfer.reconciliationDraft || !transfer.bankRowId || transfer.accountingExcluded) return null;
   if ((store.transfers || []).some(other => other !== transfer && !other.accountingExcluded && other.reconciliationDraft === transfer.reconciliationDraft && other.bankRowId === transfer.bankRowId)) return null;
   const candidates = records(store).filter(({ key, record, row }) => {
     const bank = row.bank;
@@ -52,6 +61,7 @@ function transferEvidence(store, transfer) {
     const account = incoming ? transfer.toAccount : transfer.fromAccount;
     const expectedKey = nature === 'PERSONAL' ? 'PERSONAL|' + account : account;
     const charge = confirmedCharge(store, transfer);
+    if(ownerPersonalTransfer(transfer)&&charge&&(nature!=='SANKI'||charge.nature!=='SANKI'))return false;
     if ((!incoming && !outgoing) || key !== expectedKey || transfer.date !== bank.date || money(transfer.amount) + (outgoing && charge ? -money(charge.amount) : 0) !== money(bank.debit) + money(bank.credit)) return false;
     if (transfer.bankReference && transfer.bankReference !== bank.reference) return false;
     const ids = linkedIds(row);
@@ -75,7 +85,7 @@ function repairCreatedTransferLinks(store, audit) {
     const { row, record, key } = evidence, before = { linkedRecordIds: row.linkedRecordIds || [], ledger: row.ledger || null };
     const charge=confirmedCharge(store,transfer);
     row.linkedRecordIds = [transfer.id,...(charge?[charge.id]:[])];
-    row.ledger = { id: transfer.id, date: transfer.date, description: 'Bank-confirmed internal transfer', reference: transfer.bankReference || transfer.id, debit: money(row.bank.debit)>0?Number(transfer.amount):0, credit: money(row.bank.credit)>0?Number(transfer.amount):0 };
+    row.ledger = { id: transfer.id, date: transfer.date, description: ownerPersonalTransfer(transfer)?'Bank-confirmed '+transfer.classification.replaceAll('_',' '):'Bank-confirmed internal transfer', reference: transfer.bankReference || transfer.id, debit: money(row.bank.debit)>0?Number(transfer.amount):0, credit: money(row.bank.credit)>0?Number(transfer.amount):0 };
     if(charge){row.chargeAmount=-Number(charge.amount);row.chargeAdjustmentId=charge.id;}
     row.linkRepair = { rule: 'exact-created-transfer-provenance-v1', at: new Date().toISOString(), transferId: transfer.id, draftId: record.draftId, bankRowId: row.id };
     row.correctionHistory = row.correctionHistory || [];

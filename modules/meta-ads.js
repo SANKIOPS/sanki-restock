@@ -305,7 +305,7 @@ function createStore(options = {}) {
         if(set.behaviorsConfirmed==null&&Array.isArray(groups)&&raw['Flexible Inclusions']){set.interests=groups.flatMap(g=>(g.interests||[]).map(x=>x.name));set.interestsConfirmed=true;set.behaviors=groups.flatMap(g=>(g.behaviors||[]).map(x=>x.name));set.behaviorsConfirmed=true;}
       }catch{/* Preserve existing records when the source audience is unavailable. */}
     }
-    return { ...output, summary: configuredSummary(state), insights:require('./meta-ads-insights').insights(state,period) };
+    return { ...output, summary: configuredSummary(state),setupCoverage:require('./meta-ads-setup-bundle').setupCoverage(output), insights:require('./meta-ads-insights').insights(state,period) };
   }
   function mutate(type, method, recordId, body, actor) {
     if (!plain(body) || Buffer.byteLength(JSON.stringify(body), 'utf8') > 128 * 1024) fail('Record body must be an object below 128 KiB.');
@@ -469,16 +469,18 @@ function createRouter(store = createStore()) {
       res.json({success:true,...store.importPerformance(rows,Number(req.body.revision),req.user.username,req.body.preview==='true')});
     }catch(e){sendError(e,res);}
   }));
-  router.post([`${BASE}/import-setup`,`${BASE}/import-meta`], (req,res) => upload(req,res,error => {
-    if(error)return res.status(400).json({success:false,error:'Upload one CSV or XLSX file below 5 MB.'});
+  const setupUpload=require('multer')({storage:require('multer').memoryStorage(),limits:{fileSize:5*1024*1024,files:10}}).array('file',10);
+  router.post([`${BASE}/import-setup`,`${BASE}/import-meta`], (req,res) => setupUpload(req,res,error => {
+    req.file=req.files?.[0];
+    if(error)return res.status(400).json({success:false,error:'Upload up to 10 CSV or XLSX files, each below 5 MB.'});
     try {
-      if(!req.file || !/\.(csv|xlsx)$/i.test(req.file.originalname))fail('Choose a Meta configuration CSV or XLSX export.');
-      let detected;try{detected=require('./meta-ads-file-type').detectExport(req.file.buffer);}catch(e){fail(e.message);}
+      if(!req.file || req.files.some(file=>!/\.(csv|xlsx)$/i.test(file.originalname)))fail('Choose a Meta configuration CSV or XLSX export.');
+      let detected;try{detected=req.files.length>1?{kind:'setup',label:'Linked setup bundle ('+req.files.length+' files)'}:require('./meta-ads-file-type').detectExport(req.file.buffer);}catch(e){fail(e.message);}
       if(req.path.endsWith('/import-meta')&&req.body.purpose!=='setup'&&detected.kind==='performance'){
         const preview=req.body.preview==='true';if(!preview&&req.body.confirmed!=='true')fail('Confirm the preview before saving.');let rows;try{rows=require('./meta-ads-performance').parsePerformance(req.file.buffer);}catch(e){fail(e.message);}const result=store.importPerformance(rows,Number(req.body.revision),req.user.username,preview,true);return res.json({success:true,kind:'performance',detected:detected.label,...result});
       }
       if(req.body.purpose==='performance'&&detected.kind!=='performance')fail('This is a '+detected.label+'. It can update setup, but ad-level performance needs Ad ID, Ad set ID, reporting dates, Amount spent (INR), Impressions and Reach. Choose Auto or Setup to import the supplied records.');
-      let parsed;try{parsed=require('./meta-ads-import').parseSetup(req.file.buffer);}catch(e){fail(e.message);}
+      let parsed;try{parsed=req.files.length>1?require('./meta-ads-setup-bundle').mergeSetupFiles(req.files):require('./meta-ads-import').parseSetup(req.file.buffer);}catch(e){fail(e.message);}
       const campaignChoices=parsed.level?parsed.records.campaigns.map(r=>({id:r.id,name:r.name,status:r.status})):[];
       if(parsed.level&&req.body.campaignIds){let ids;try{ids=JSON.parse(req.body.campaignIds);}catch{fail('Invalid campaign selection.');}if(!Array.isArray(ids)||!ids.length||ids.some(id=>!campaignChoices.some(c=>c.id===id)))fail('Select at least one campaign from this file.');parsed.records.campaigns=parsed.records.campaigns.filter(r=>ids.includes(r.id));parsed.records.adSets=parsed.records.adSets.filter(r=>ids.includes(r.campaignId));const setIds=new Set(parsed.records.adSets.map(r=>r.id));parsed.records.ads=parsed.records.ads.filter(r=>setIds.has(r.adSetId));}
       const preview=req.body.preview==='true';
@@ -486,7 +488,7 @@ function createRouter(store = createStore()) {
       if(!preview&&req.body.confirmed!=='true')fail('Confirm the reviewed setup changes before saving.');
       let decisions=[];try{decisions=JSON.parse(req.body.decisions||'[]');}catch{fail('Invalid missing-record decisions.');}
       const result=store.importSetup(parsed.records,Number(req.body.revision),req.user.username,preview,{completeCampaigns:req.body.completeCampaigns==='true',decisions,level:parsed.level});
-      res.json({success:true,kind:'setup',detected:detected.label,...result,...(preview?{...parsed,campaignChoices}:{})});
+      res.json({success:true,kind:'setup',detected:detected.label,setupCoverage:require('./meta-ads-setup-bundle').setupCoverage(preview?{campaigns:parsed.records.campaigns,adSets:parsed.records.adSets,ads:parsed.records.ads}:store.view()),...result,...(preview?{...parsed,campaignChoices}:{})});
     }catch(e){sendError(e,res);}
   }));
   router.use(BASE, express.json({ limit: '128kb' }));

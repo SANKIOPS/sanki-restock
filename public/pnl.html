@@ -32,8 +32,40 @@
   <section id="collections" class="panel view" hidden></section>
   <section id="trends" class="panel view" hidden></section>
   <section id="policy" class="panel view" hidden></section>
+  <details id="pnlCorrections" class="panel"><summary>Review P&amp;L-only item corrections</summary>
+    <p>Map a missing SKU, record a verified custom-item unit cost, or classify a shipping fee. These audited corrections affect only this report. Shopify orders, invoices, stock, payments and reconciliations are never edited.</p>
+    <button id="pnlCorrectionLoad" type="button">Load missing item lines</button>
+    <input id="pnlCorrectionSearch" type="search" aria-label="Search item corrections" placeholder="Search order or item">
+    <p id="pnlCorrectionStatus" role="status"></p><div id="pnlCorrectionRows"></div>
+    <label>Reason for correction <input id="pnlCorrectionNote" maxlength="1000" placeholder="Required audit reason"></label>
+    <button id="pnlCorrectionCheck" type="button" disabled>Preview selected corrections</button>
+    <div id="pnlCorrectionPreview"></div><button id="pnlCorrectionSave" type="button" disabled>Save reviewed P&amp;L corrections</button>
+  </details>
+  <details id="pnlOrderCorrections" class="panel"><summary>Review P&amp;L-only cancelled orders</summary>
+    <p>Confirm an order was cancelled, or restore its original source status. This excludes a cancelled sale from P&amp;L without editing Shopify, stock or delivery records. Recorded customer collections and refunds remain visible; no refund or cancellation date is invented.</p>
+    <label>Exact order reference <input id="pnlOrderReference" placeholder="#order number" maxlength="100"></label>
+    <label>P&amp;L treatment <select id="pnlOrderTreatment"><option value="cancelled">Confirmed cancelled · exclude sale</option><option value="delivered">Confirmed delivered · actual date</option><option value="source_status">Restore original source status</option></select></label>
+    <label>Actual delivery date (delivered treatment only) <input id="pnlOrderDate" type="date"></label>
+    <button id="pnlOrderPreviewButton" type="button">Preview order treatment</button>
+    <p id="pnlOrderPreview" role="status"></p>
+    <label>Cancellation confirmation / reason <input id="pnlOrderNote" maxlength="1000" placeholder="Required audit reason"></label>
+    <button id="pnlOrderSave" type="button" disabled>Save P&amp;L-only order treatment</button>
+  </details>
+  <details id="pnlManualCorrections" class="panel"><summary>Review P&amp;L-only manual-sale costs</summary>
+    <p>Record the confirmed quantity and per-unit COGS for an existing manual-sale receipt. No receipt, payment or stock is changed. Leave the GST fields blank until the non-garment tax rate and price basis are confirmed.</p>
+    <label>Exact manual sale reference <input id="pnlManualReference" maxlength="150"></label>
+    <label>Quantity sold <input id="pnlManualQty" type="number" min="1" step="1" value="1"></label>
+    <label>COGS per unit INR <input id="pnlManualCost" type="number" min="0.01" step="0.01"></label>
+    <label>Confirmed GST percent (optional) <input id="pnlManualTax" type="number" min="0" max="100" step="0.01"></label>
+    <label>Confirmed price basis <select id="pnlManualBasis"><option value="">Not confirmed</option><option value="inclusive">GST inclusive</option><option value="exclusive">GST exclusive</option></select></label>
+    <button id="pnlManualPreviewButton" type="button">Preview manual-sale correction</button><p id="pnlManualPreview" role="status"></p>
+    <label>Confirmation / reason <input id="pnlManualNote" maxlength="1000"></label>
+    <button id="pnlManualSave" type="button" disabled>Save P&amp;L-only manual-sale correction</button>
+  </details>
   <p class="muted footnote">Management report: SKU COGS is recognised when sold, even if the supplier is unpaid. Other expenses use approved payments only. No April figures are used.</p>
 </main>
 <dialog id="details" aria-labelledby="detailTitle"><header><h2 id="detailTitle">Transactions</h2><button id="closeDetails" aria-label="Close transaction details">Close</button></header><div id="detailBody"></div></dialog>
-<script src="/navigation-state.js?v=bb4a39520dbd"></script><script src="/sidebar.js"></script><script src="/pnl.js?v=63efaab682cb"></script>
+<script src="/navigation-state.js?v=bb4a39520dbd"></script><script src="/sidebar.js"></script><script src="/pnl.js?v=f29a289f7ad7"></script>
+<script src="/pnl-corrections.js?v=a0d0159d44a0"></script>
+<script src="/pnl-order-corrections.js?v=20261018-3"></script>
 </body></html>

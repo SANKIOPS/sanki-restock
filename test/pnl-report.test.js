@@ -23,11 +23,12 @@ test('inclusive GST is extracted, never multiplied straight onto the gross amoun
   assert.equal(report.totals.gst, 457.47); assert.equal(report.totals.netSales, 2541.53);
   assert.equal(report.totals.cogs, 999); assert.equal(report.totals.netProfit, 1542.53);
 });
-test('invoice tax mismatch and ambiguous tax-inclusive value do not produce a final profit', () => {
-  assert.equal(lineTax({ qty: 1, price: 2999, taxLines: [{ rate: .05, price: 142.81 }] }).valid, false);
-  assert.equal(lineTax({ qty: 1, price: 2800 }).valid, false);
+test('P&L configured GST ignores invoice mismatch and uses the confirmed final selling-price slab', () => {
+  assert.equal(lineTax({ qty: 1, price: 2999, taxLines: [{ rate: .05, price: 142.81 }] }).tax, 457.47);
+  assert.equal(lineTax({ qty: 1, price: 2800 }).valid, true);
+  assert.equal(lineTax({ qty: 1, price: 2800 }).rate, .18);
   const sources = fixtures(); sources.orders.orders[1].lineItems[0].taxLines = [{ rate: .05, price: 142.81 }];
-  assert.equal(run(sources).totals.netProfit, null);
+  assert.equal(run(sources).totals.netProfit, 1542.53);
 });
 test('CGST and SGST invoice tax components combine correctly', () => {
   const tax = lineTax({ qty: 1, price: 1180, taxLines: [{ rate: .025, price: 28.1 }, { rate: .025, price: 28.09 }] });

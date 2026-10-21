@@ -20,18 +20,20 @@
 const express = require('express');
 const router = express.Router();
 
-let verifySession, allowedPagesForUser, rolesOf, registerModules;
+let verifySession, allowedPagesForUser, rolesOf, registerModules, userCanAccessPath;
 try {
   const au = require('./auth-users');
   verifySession = au.verifySession;
   allowedPagesForUser = au.allowedPagesForUser;
   rolesOf = au.rolesOf;
   registerModules = au.registerModules;
+  userCanAccessPath = au.userCanAccessPath;
 } catch {
   verifySession = () => null;
   allowedPagesForUser = () => [];
   rolesOf = (u) => (u && u.roles) || (u && u.role ? [u.role] : []);
   registerModules = () => {};
+  userCanAccessPath = () => false;
 }
 
 // Section order controls how groups stack in the sidebar / dashboard.
@@ -41,6 +43,7 @@ const SECTION_ORDER = ['Main', 'Sales', 'SEO', 'Inventory', 'Store Ops', 'Purcha
 // Everything starts 'hidden' (blank launcher). We turn modules 'live'
 // deliberately, one at a time, as we build/bless them together.
 const MODULES = [
+  { key: 'manage', title: 'Manage', desc: 'One place for the existing management tools you are permitted to use', icon: '⚙️', href: '/manage.html', section: 'Main', status: 'live', roles: [], navigationOnly: true },
   { key: 'sales-orders-logistics', title: 'Sales Orders and Logistics', desc: 'Orders, customer payments, shipments and settlement evidence in one screen', icon: '📦', href: '/sales-orders.html', section: 'Sales', status: 'live', roles: ['admin', 'sales', 'owner'] },
   { key: 'restock',      title: 'Restock Planner',       desc: 'Reorder fast-movers before they run out',            icon: '🔄', href: '/index.html#restock',            section: 'Main',      status: 'hidden', roles: ['admin', 'inventory'] },
   { key: 'velocity',     title: 'Velocity Intelligence', desc: 'How fast every product is selling',                  icon: '⚡', href: '/velocity.html',                  section: 'Main',      status: 'hidden', roles: ['admin', 'sales', 'inventory'] },
@@ -95,7 +98,7 @@ function visibleFor(user) {
   // union'd across all of the user's roles. A module shows when its page path
   // is in that allow-list. Admin sees everything not hidden.
   const allowed = isPrashant ? allowedPagesForUser(user) : (isAdmin || isOwner) ? '*' : allowedPagesForUser(user);
-  const canSee = (m) => isPrashant
+  const canSee = (m) => m.navigationOnly ? userCanAccessPath(user, modulePath(m.href)) : isPrashant
     ? Array.isArray(allowed) && allowed.includes(modulePath(m.href))
     : m.ownerOnly ? isOwner : (allowed === '*' || (Array.isArray(allowed) && allowed.includes(modulePath(m.href))));
   return MODULES
