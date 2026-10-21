@@ -10,14 +10,25 @@ const validDay = d => /^\d{4}-\d{2}-\d{2}$/.test(String(d||''))&&!Number.isNaN(D
 const canonicalSku = sku => String(sku || '').trim().toUpperCase();
 const dateOf = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value||'')) ? value : Number.isFinite(Date.parse(value)) ? new Date(Date.parse(value)+19800000).toISOString().slice(0,10) : '';
 const fail = message => { throw Object.assign(Error(message), {status:409}); };
+const costMatches = (sources, sku) => (sources.shopifyCosts?.items||[]).filter(i=>i&&canonicalSku(i.sku)===canonicalSku(sku));
+const costCurrency = item => item.unitCostCurrency||item.currency||'INR';
+const duplicateSku = items => new Set(items.map(i=>String(i.id||'')+'\0'+i.unitCost+'\0'+costCurrency(i))).size>1;
+function verifiedCostItem(items, inventoryItemId) {
+ const selected=inventoryItemId===undefined?items:items.filter(i=>String(i.id)===String(inventoryItemId));
+ const distinct=new Map(selected.map(i=>[String(i.id),i]));
+ if(distinct.size!==1||!selected[0]?.id||!Number.isFinite(Number(selected[0].unitCost))||!(Number(selected[0].unitCost)>0)||costCurrency(selected[0])!=='INR'||selected.some(i=>Number(i.unitCost)!==Number(selected[0].unitCost)||costCurrency(i)!=='INR'))fail('Select exactly one Shopify item with a positive INR cost. Refresh Shopify costs or resolve the item identity first.');
+ return selected[0];
+}
 function reviewRows(sources, from, to) {
  const rows=[];
  for(const order of Object.values(sources.orders?.orders || {})) {
   const date=dateOf(order.processedAt || order.createdAt);
   if(date < from || date > to || order.accountingExcluded) continue;
   for(const line of order.lineItems || []) {
-   if(canonicalSku(line.sku) || !line.id) continue;
-   rows.push({orderId:String(order.id),lineId:String(line.id),reference:order.name||String(order.id),date,title:line.title||'Custom item',qty:line.qty,price:line.price,discount:line.discount||0,fingerprint:hash(line),current:sources.lineCorrections?.entries?.[key(order.id,line.id)] || null});
+   const sourceSku=canonicalSku(line.sku),matches=sourceSku?costMatches(sources,sourceSku):[];
+   if(!line.id || sourceSku&&!duplicateSku(matches)) continue;
+   const candidates=[...new Map(matches.map(i=>[String(i.id),i])).values()].map(i=>({inventoryItemId:String(i.id||''),sku:canonicalSku(i.sku),variant:i.variant||'',productTitle:i.product?.title||'',unitCost:i.unitCost,currency:costCurrency(i)}));
+   rows.push({orderId:String(order.id),lineId:String(line.id),reference:order.name||String(order.id),date,title:line.title||'Custom item',sourceSku,candidates,qty:line.qty,price:line.price,discount:line.discount||0,fingerprint:hash(line),current:sources.lineCorrections?.entries?.[key(order.id,line.id)] || null});
   }
  }
  return rows.sort((a,b)=>b.date.localeCompare(a.date)||a.reference.localeCompare(b.reference)||a.lineId.localeCompare(b.lineId));
@@ -58,7 +69,7 @@ function prepare(sources, items, requireFingerprint=false) {
   const order=sources.orders?.orders?.[String(input.orderId)];
   const line=order?.lineItems?.find(l=>String(l.id)===String(input.lineId));
   const id=key(input.orderId,input.lineId);
-  if(!order || !line || canonicalSku(line.sku) || seen.has(id)) fail('An item is missing, already has a source SKU, or was selected twice. Reload the review.');
+  if(!order || !line || seen.has(id) || canonicalSku(line.sku)&&input.type!=='sku_identity') fail('An item is missing, already has a source SKU, or was selected twice. Reload the review.');
   seen.add(id);
   if(!dateOf(order.processedAt || order.createdAt)||dateOf(order.processedAt || order.createdAt)<'2026-08-22') fail('Pre-accounting-start or undated orders cannot be corrected here.');
   if(!Number.isFinite(Number(input.expectedPrice)) || Number(input.expectedPrice)!==Number(line.price) || Number(input.expectedQty)!==Number(line.qty) || !(Number(line.qty)>0)) fail('The original item price or quantity changed. Reload and review the exact line.');
@@ -66,14 +77,29 @@ function prepare(sources, items, requireFingerprint=false) {
   const entry={orderId:String(order.id),lineId:String(line.id),type:input.type,expectedPrice:Number(line.price),expectedQty:Number(line.qty),fingerprint:hash(line)};
   if(input.type==='sku') {
    entry.sku=canonicalSku(input.sku);
-   const matches=(sources.shopifyCosts?.items||[]).filter(i=>i && canonicalSku(i.sku)===entry.sku);
-   const distinct=new Map(matches.map(i=>[i.id,i]));
-   if(!entry.sku || distinct.size!==1 || !matches[0]?.id || !(Number(matches[0].unitCost)>0) || !Number.isFinite(Number(matches[0].unitCost)) || (matches[0].unitCostCurrency||matches[0].currency||'INR')!=='INR' || matches.some(i=>Number(i.unitCost)!==Number(matches[0].unitCost))) fail('Mapped SKU must identify one Shopify item with a positive INR cost. Refresh Shopify costs or resolve duplicates first.');
+   if(!entry.sku)fail('Enter the exact Shopify SKU.');
+   verifiedCostItem(costMatches(sources,entry.sku));
+  } else if(input.type==='sku_identity') {
+   entry.sku=canonicalSku(line.sku);
+   const matches=costMatches(sources,entry.sku);
+   if(!entry.sku||!duplicateSku(matches)||!String(input.inventoryItemId||'').trim())fail('Choose an existing duplicate-SKU source line and its exact Shopify item.');
+   const item=verifiedCostItem(matches,input.inventoryItemId);
+   entry.inventoryItemId=String(item.id);
+  } else if(input.type==='bundle') {
+   if(!Array.isArray(input.components)||!input.components.length||input.components.length>100)fail('Enter the exact SKU and quantity for each bundle component.');
+   const componentSkus=new Set();
+   entry.components=input.components.map(component=>{
+    const sku=canonicalSku(component?.sku),qty=Number(component?.qty);
+    if(!sku||componentSkus.has(sku)||!Number.isInteger(qty)||qty<=0||qty>10000)fail('Bundle SKUs must be unique with positive whole quantities. Combine repeated units under the same SKU.');
+    const item=verifiedCostItem(costMatches(sources,sku));componentSkus.add(sku);
+    return {sku,qty,inventoryItemId:String(item.id)};
+   });
+   if(entry.components.reduce((n,c)=>n+c.qty,0)!==Number(line.qty))fail('Bundle component quantities must exactly match the original source line quantity.');
   } else if(input.type==='cost') {
    const cost=Number(input.unitCost);
    if(!Number.isFinite(cost)||cost<=0||cost>10000000||Math.abs(cost*100-Math.round(cost*100))>.00001) fail('Enter a positive per-unit custom-item cost with at most two decimals.');
    entry.unitCost=cost;
-  } else if(input.type!=='shipping') fail('Choose SKU mapping, custom-item cost, or shipping fee.');
+  } else if(!['shipping','shipping_no_tax','rounding'].includes(input.type)) fail('Choose SKU mapping, exact item identity, bundle, custom-item cost, shipping fee, or rounding.');
   return {...entry,reference:order.name||String(order.id),title:line.title||'Custom item'};
  });
 }
@@ -103,10 +129,14 @@ function resolveOrder(order, store={}) {
  }
  const lineItems=(order.lineItems||[]).map(line=>{
   const entry=store.entries?.[key(order.id,line.id)];if(!entry)return line;
-  if(entry.fingerprint!==hash(line)||canonicalSku(line.sku)){issues.push('P&L correction no longer matches source line '+line.id+'. Review it again; source data was not overridden.');return line;}
+  if(entry.fingerprint!==hash(line)||canonicalSku(line.sku)&&entry.type!=='sku_identity'){issues.push('P&L correction no longer matches source line '+line.id+'. Review it again; source data was not overridden.');return line;}
+  if(entry.type==='sku_identity'&&canonicalSku(line.sku)&&canonicalSku(entry.sku)===canonicalSku(line.sku)&&String(entry.inventoryItemId||''))return {...line,pnlInventoryItemId:String(entry.inventoryItemId),pnlCorrection:entry};
   if(entry.type==='sku' && canonicalSku(entry.sku))return {...line,sku:canonicalSku(entry.sku),pnlCorrection:entry};
+  if(entry.type==='bundle'&&Array.isArray(entry.components)&&entry.components.length&&entry.components.every(c=>canonicalSku(c.sku)&&Number.isInteger(c.qty)&&c.qty>0&&String(c.inventoryItemId||''))&&new Set(entry.components.map(c=>canonicalSku(c.sku))).size===entry.components.length&&entry.components.reduce((n,c)=>n+c.qty,0)===Number(line.qty))return {...line,pnlComponents:entry.components.map(c=>({...c,sku:canonicalSku(c.sku)})),pnlCorrection:entry};
   if(entry.type==='cost' && Number.isFinite(entry.unitCost)&&entry.unitCost>0)return {...line,pnlUnitCost:entry.unitCost,pnlCorrection:entry};
   if(entry.type==='shipping')return {...line,pnlKind:'shipping',pnlUnitCost:0,pnlCorrection:entry};
+  if(entry.type==='shipping_no_tax')return {...line,pnlKind:'shipping',pnlShippingTaxZero:true,pnlUnitCost:0,pnlCorrection:entry};
+  if(entry.type==='rounding')return {...line,pnlKind:'rounding',pnlUnitCost:0,pnlCorrection:entry};
   issues.push('Invalid P&L correction for source line '+line.id+'.');return line;
  });
  return {order:{...order,lineItems,pnlCancelled,pnlDeliveryDate,pnlStatusCorrection:pnlCancelled||pnlDeliveryDate?status:null},issues};

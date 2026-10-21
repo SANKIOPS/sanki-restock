@@ -171,6 +171,28 @@ assumed. Original receipts and their bank movements are not edited.
 
 ## Verification / release
 
+### Audited combined-line and non-product corrections
+
+The item-review panel supports exact Shopify inventory-item selection for a
+duplicate source SKU, and combined lines written as `SKU-A:1, SKU-B:1`.
+Component quantities must be positive whole units summing to the unchanged
+source quantity. Each component retains its own Shopify inventory identity
+and current cost; it is not converted to an average or extra sale. Excel
+allocations show component SKUs and quantities. A full parent-line return
+reverses the exact original component total. A partial return without
+identified returned components remains incomplete rather than selecting an
+arbitrary component.
+
+Explicit rounding retains the source amount with zero inventory COGS and
+zero report GST. Explicit tax-free shipping also retains its source amount
+with zero report GST and COGS. Ordinary shipping keeps the existing source-tax
+treatment. These corrections require source validation, preview, an audit
+reason and existing Admin/Owner report-edit rights. Source fingerprints and
+previous annotations remain intact. They never edit Shopify, source orders,
+stock, payments, bank movements, reconciliation evidence or Owner approvals.
+Excluded payments and unfinished reconciliation payments stay excluded; this
+panel cannot restore them or classify capital receipts.
+
 Run `node --test test/pnl-report.test.js test/pnl-ui.test.js
 test/accounts-navigation.test.js test/auth-authorization.test.js`.
 Fixtures are synthetic and API checks use disposable localhost servers.
