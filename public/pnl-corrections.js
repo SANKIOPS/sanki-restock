@@ -44,13 +44,13 @@
   try{
    const items=Array.from(el('pnlCorrectionRows').querySelectorAll('[data-correction-action]')).filter(s=>s.value).map(s=>{const r=rows[Number(s.dataset.correctionAction)],v=el('pnlCorrectionRows').querySelector('[data-correction-value="'+s.dataset.correctionAction+'"]').value.trim(),inventoryItemId=el('pnlCorrectionRows').querySelector('[data-correction-inventory="'+s.dataset.correctionAction+'"]').value;return {orderId:r.orderId,lineId:r.lineId,type:s.value,expectedPrice:r.price,expectedQty:r.qty,...(s.value==='sku'?{sku:v}:s.value==='cost'?{unitCost:v}:s.value==='bundle'?{components:bundle(v)}:s.value==='sku_identity'?{inventoryItemId}:{})};});
    const d=await request('/api/pl/report/line-corrections/preview',{items});preview=d.items;
-   el('pnlCorrectionPreview').innerHTML='<strong>Review '+preview.length+' P&L-only correction(s)</strong><ul>'+preview.map(r=>'<li>'+esc(r.reference)+' · '+esc(r.title)+' · ₹'+esc(r.expectedPrice)+' × '+esc(r.expectedQty)+' → '+esc(treatment(r))+'</li>').join('')+'</ul>';
+   el('pnlCorrectionPreview').innerHTML='<strong>Review '+preview.length+' Results-only correction(s)</strong><ul>'+preview.map(r=>'<li>'+esc(r.reference)+' · '+esc(r.title)+' · ₹'+esc(r.expectedPrice)+' × '+esc(r.expectedQty)+' → '+esc(treatment(r))+'</li>').join('')+'</ul>';
    el('pnlCorrectionSave').disabled=false;status('Preview validated against the exact source lines. Enter a reason, then save.');
   }catch(e){status(e.message);}finally{busy=false;}
  };
  el('pnlCorrectionSave').onclick=async()=>{
   if(busy||!preview||!editable)return;busy=true;el('pnlCorrectionSave').disabled=true;
-  try{const d=await request('/api/pl/report/line-corrections',{items:preview,note:el('pnlCorrectionNote').value});status('Saved '+d.count+' P&L-only correction(s). Original orders, invoices and stock were not changed. Reloading report…');location.reload();}
+  try{const d=await request('/api/pl/report/line-corrections',{items:preview,note:el('pnlCorrectionNote').value});status('Saved '+d.count+' Results-only correction(s). Original orders, invoices and stock were not changed. Reloading report…');location.reload();}
   catch(e){status(e.message);el('pnlCorrectionSave').disabled=false;}finally{busy=false;}
  };
 })();
