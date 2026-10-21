@@ -111,7 +111,10 @@ test('protected finalized transfer split rejects Admin, unexplained gaps and wro
   assert.equal(invoke(route,{method:'POST',role:'owner',body}).body.already,true);assert.equal(JSON.parse(fs.readFileSync(file)).adjustments.length,1);
 });
 test('new bank-created transfers separate confirmed charges and are idempotent',()=>{
-  reset();const id='BRD-NEW-CHARGE',bankRow={date,debit:1005.9,credit:0,reference:'NEW-FEE'},draft={id,nature:'SANKI',account:bank,transactions:[bankRow],resolutions:{'bank-0':{action:'create_internal_transfer',otherAccount:account,principalAmount:1000,chargeAmount:5.9,reason:'Confirmed principal and fee'}}};
+  const id='BRD-NEW-CHARGE',bankRow={date,debit:1005.9,credit:0,reference:'NEW-FEE'},draft={id,nature:'SANKI',account:bank,transactions:[bankRow],resolutions:{'bank-0':{action:'create_internal_transfer',otherAccount:account,principalAmount:1000,chargeAmount:5.9,reason:'Confirmed principal and fee'}}};
+  // The helper is post-finalization: retain the physical row with the exact
+  // draft/index provenance that the normal finalize route supplies.
+  reset({bankStatements:{[bank]:{transactions:{'BTX-NEW-CHARGE':{...bankRow,id:'BTX-NEW-CHARGE',firstSeenImport:'BST-NEW-CHARGE',lastSeenImport:'BST-NEW-CHARGE',reconciliationDraftId:id,reconciliationDraftRowIndex:0}},imports:[{id:'BST-NEW-CHARGE',draftId:id,from:date,to:date,finalizedAt:date+'T12:00:00.000Z',reconciliationRows:[]}]}}});
   applyFinalizedInternalTransfers(draft,'owner-user');applyFinalizedInternalTransfers(draft,'owner-user');const s=JSON.parse(fs.readFileSync(file));assert.equal(s.transfers.length,1);assert.equal(s.transfers[0].amount,1000);assert.equal(s.adjustments.filter(x=>x.transferChargeFor===s.transfers[0].id).length,1);assert.equal(s.adjustments.at(-1).amount,-5.9);
 });
 test('receiving reimbursement credits are available to the normal statement comparison',()=>{

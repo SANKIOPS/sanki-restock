@@ -23,6 +23,61 @@ function identities(movement) {
 }
 
 /**
+ * Verify that a saved closing really belongs to the book's furthest cutoff.
+ * Older historical finalizations overwrote lastReconciliation's amount while
+ * relabeling its through date with the later cutoff. Its own import retains
+ * the actual period, so that evidence takes priority over the relabeled date.
+ */
+function verifiedReconciliationAnchor(book = {}) {
+  const unavailable = { cutoffDate: '', previousClosing: null, anchorSource: 'unavailable', anchorRecordId: '' };
+  const cutoffDate = calendarDate(book.reconciledThrough);
+  if (!cutoffDate) return unavailable;
+  const imports = (book.imports || []).filter(record => record && typeof record === 'object');
+  const last = book.lastReconciliation || {};
+  const finiteAmount = value => ['number', 'string'].includes(typeof value) && String(value).trim() !== ''
+    && Number.isFinite(Number(value)) ? cents(Number(value)) / 100 : null;
+  const firstAmount = values => values.map(finiteAmount).find(value => value != null) ?? null;
+  const period = record => {
+    const values = [record.to, record.statementSummary && record.statementSummary.to]
+      .filter(value => value != null && String(value).trim() !== '');
+    const dates = values.map(calendarDate);
+    return { date: dates[0] || '', contradictory: dates.some(date => !date) || new Set(dates).size > 1 };
+  };
+  const matchingImports = last.draftId == null || !String(last.draftId) ? [] : imports
+    .filter(record => record.draftId != null && String(record.draftId) === String(last.draftId));
+  const matchingPeriods = matchingImports.map(period);
+  const datedMatches = matchingPeriods.filter(value => value.date);
+  const contradictoryImport = matchingPeriods.some(value => value.contradictory || value.date && value.date !== cutoffDate);
+  const lastDate = datedMatches.length ? datedMatches[0].date
+    : last.through != null && String(last.through).trim() ? calendarDate(last.through) : cutoffDate;
+  const lastClosing = firstAmount([last.companyAdjustedClosingBalance, last.closingBalance]);
+  if (!contradictoryImport && lastDate === cutoffDate && lastClosing != null) {
+    return { cutoffDate, previousClosing: lastClosing, anchorSource: 'last_reconciliation',
+      anchorRecordId: String(matchingImports[0] && matchingImports[0].id || '') };
+  }
+
+  const candidates = imports.flatMap(record => {
+    const evidence = period(record);
+    if (evidence.contradictory || evidence.date !== cutoffDate) return [];
+    let closing = firstAmount([record.companyAdjustedClosingBalance,
+      record.statementSummary && record.statementSummary.closingBalance, record.closingBalance]);
+    // A deferred or unreconciled ledger close cannot stand in for missing bank
+    // closing evidence. Accept a ledger-only snapshot only when it was proved
+    // reconciled, with no retained evidence of a difference.
+    if (closing == null && (record.balanceReconciled === true || record.reconciled === true)
+      && record.closingBalanceDeferred !== true
+      && (record.balanceDifference == null || finiteAmount(record.balanceDifference) === 0)) {
+      closing = finiteAmount(record.ledgerClosingBalance);
+    }
+    return closing == null ? [] : [{ record, closing }];
+  });
+  if (!candidates.length || new Set(candidates.map(candidate => cents(candidate.closing))).size !== 1) return unavailable;
+  const selected = candidates[0];
+  return { cutoffDate, previousClosing: selected.closing, anchorSource: 'finalized_import',
+    anchorRecordId: String(selected.record.id || '') };
+}
+
+/**
  * Return ledger identities supported by this account's finalized statement
  * book. Provenance from another account's book is deliberately insufficient:
  * confirming a transfer debit in Axis does not confirm its credit in Indus.
@@ -157,54 +212,71 @@ function pendingCarryForwardCandidates(store = {}, book = {}, movements = []) {
  *
  * This only calculates a preview. It must never create a balance adjustment,
  * change payment dates, or mark the carried movements as bank-confirmed.
- * Callers supply the effective cutoff already chosen for the current draft,
- * and movements already scoped to its account. Finalized linked/covered IDs
- * and their source IDs are excluded, so finalized money is not counted twice.
+ * Callers supply the date represented by the previous closing and movements
+ * already scoped to the account. A closing on or after the statement opening
+ * cannot anchor that opening. Without an earlier closing, rebuild it from the
+ * ledger base and every earlier movement, including finalized money and fees.
+ * Finalized linked/covered IDs are excluded only from forward carry because
+ * only that calculation starts from a balance already containing those IDs.
  */
 function calculateReconciliationOpening(options = {}) {
   const cutoffDate = calendarDate(options.cutoffDate);
   const statementFrom = calendarDate(options.statementFrom);
-  const hasPreviousClosing = !!cutoffDate && options.previousClosing != null;
+  const hasPreviousClosing = !!cutoffDate && !!statementFrom && cutoffDate < statementFrom
+    && options.previousClosing != null && Number.isFinite(parseFloat(options.previousClosing));
   const baselineCents = cents(hasPreviousClosing ? options.previousClosing : options.baseOpening);
-  const hasGap = hasPreviousClosing && !!statementFrom && statementFrom > cutoffDate;
   const excluded = new Set([].concat(Array.from(options.previouslyLinkedIds || []),
     Array.from(options.coveredMovementIds || [])).map(String));
   const carryForwardMovements = [];
+  const historicalOpeningMovements = [];
   const seen = new Set();
 
-  if (hasGap) {
+  if (statementFrom) {
     // Prefer a consolidated movement to its individual aliases. A reimbursement
     // batch and one of its source payment rows represent the same money.
     const eligible = (options.movements || []).map((movement, index) => ({ movement, index, ids: identities(movement) }))
       .filter(({ movement, ids }) => {
-        const date = calendarDate(movement.date);
-        return date && date >= cutoffDate && date < statementFrom
-          && !movement.automaticAxisTransferCharge
-          && !movement.accountingExcluded
-          && !ids.some(id => excluded.has(id));
+        if (!movement || movement.accountingExcluded) return false;
+        // An explicit accounting date can differ from a reconciliation bank
+        // date. Use it for chronological reconstruction, never for carry.
+        const date = calendarDate(!hasPreviousClosing && movement.accountingDate != null
+          ? movement.accountingDate : movement.date);
+        if (!date || date >= statementFrom) return false;
+        return !hasPreviousClosing || date >= cutoffDate
+          && !movement.automaticAxisTransferCharge && !ids.some(id => excluded.has(id));
       })
       .sort((a, b) => b.ids.length - a.ids.length || a.index - b.index);
 
     eligible.forEach(({ movement, ids }) => {
       if (ids.some(id => seen.has(id))) return;
       ids.forEach(id => seen.add(id));
-      carryForwardMovements.push(Object.assign({}, movement,
+      const target = hasPreviousClosing ? carryForwardMovements : historicalOpeningMovements;
+      target.push(Object.assign({}, movement,
         movement.sourceIds ? { sourceIds: movement.sourceIds.slice() } : {}));
     });
-    carryForwardMovements.sort((a, b) => String(a.date).localeCompare(String(b.date))
-      || String(a.createdAt || '').localeCompare(String(b.createdAt || ''))
-      || String(a.id || '').localeCompare(String(b.id || '')));
+    [carryForwardMovements, historicalOpeningMovements].forEach(rows => rows.sort((a, b) =>
+      String(!hasPreviousClosing && a.accountingDate != null ? a.accountingDate : a.date)
+        .localeCompare(String(!hasPreviousClosing && b.accountingDate != null ? b.accountingDate : b.date))
+        || String(a.createdAt || '').localeCompare(String(b.createdAt || ''))
+        || String(a.id || '').localeCompare(String(b.id || ''))));
   }
 
   const carryForwardCents = carryForwardMovements.reduce((total, movement) =>
     total + cents(movement.credit) - cents(movement.debit), 0);
-  const currentOpeningCents = baselineCents + carryForwardCents;
-  const continuityComparisonAvailable = hasGap && options.statementOpening != null
+  const historicalOpeningCents = historicalOpeningMovements.reduce((total, movement) =>
+    total + cents(movement.credit) - cents(movement.debit), 0);
+  const currentOpeningCents = baselineCents + historicalOpeningCents + carryForwardCents;
+  const continuityComparisonAvailable = !!statementFrom && options.statementOpening != null
     && Number.isFinite(parseFloat(options.statementOpening));
 
   return {
     currentOpening: currentOpeningCents / 100,
     previousClosing: hasPreviousClosing ? baselineCents / 100 : null,
+    openingSource: hasPreviousClosing ? 'previous_reconciliation' : statementFrom ? 'ledger_history' : 'base_opening',
+    openingBaseline: baselineCents / 100,
+    openingBaselineDate: hasPreviousClosing ? cutoffDate : '',
+    historicalOpeningMovements,
+    historicalOpeningNet: historicalOpeningCents / 100,
     carryForwardMovements,
     carryForwardNet: carryForwardCents / 100,
     continuityComparisonAvailable,
@@ -213,4 +285,5 @@ function calculateReconciliationOpening(options = {}) {
   };
 }
 
-module.exports = { calculateReconciliationOpening, finalizedMovementCoverageIds, pendingCarryForwardCandidates };
+module.exports = { calculateReconciliationOpening, verifiedReconciliationAnchor,
+  finalizedMovementCoverageIds, pendingCarryForwardCandidates };

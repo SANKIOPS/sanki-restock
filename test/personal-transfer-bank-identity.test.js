@@ -116,6 +116,19 @@ function reset({ current = draft(), existing = [], otherDrafts = [], extra = {} 
 }
 function stage(current, extra = {}) { return invoke('/api/expenses/bank-statements/resolve', { body: { draftId: current.id, rowId: 'bank-0', ...resolution(current), ...extra } }); }
 function incoming(current, extra = {}) { return invoke('/api/expenses/bank-statements/create-incoming', { body: { draftId: current.id, rowId: 'bank-0', sourceKind: 'internal', fromNature: 'PERSONAL', fromAccount: sourceAccount, classification: 'internal_transfer', note: 'Verified incoming transfer with actual bank UTR', ...extra } }); }
+// These direct helper calls run after finalization has retained the current
+// physical bank row. A staged decision by itself is not finalized bank evidence.
+function retainFinalizedFixtureRows(current) {
+  const store = read(), key = bookKey(current.account);
+  const book = store.bankStatements[key] || (store.bankStatements[key] = { transactions: {}, imports: [] });
+  const importId = 'BST-FIXTURE-' + current.id;
+  book.imports.push({ id: importId, draftId: current.id, from: date, to: date, finalizedAt: date + 'T12:00:00.000Z', reconciliationRows: [] });
+  current.transactions.forEach((row, index) => {
+    const id = 'BTX-FIXTURE-' + current.id + '-' + index;
+    book.transactions[id] = { ...clone(row), id, firstSeenImport: importId, lastSeenImport: importId, reconciliationDraftId: current.id, reconciliationDraftRowIndex: index };
+  });
+  write(store);
+}
 function assertExistingUnchanged(before, after) {
   for (const transfer of before.transfers) assert.deepEqual(after.transfers.find(item => item.id === transfer.id), transfer, 'existing transfer and exclusion state must not change');
   for (const [key, book] of Object.entries(before.bankStatements)) {
@@ -133,6 +146,7 @@ for (const excluded of [false, true]) test('different verified source-bank UTR p
   const staged = read(); assert.equal(staged.transfers.length, 1, 'review must not post a second transfer');
   assert.equal(staged.bankReconciliationDrafts[h.current.id].resolutions['bank-0'].action, 'create_internal_transfer');
   assertExistingUnchanged(h.before, staged);
+  retainFinalizedFixtureRows(staged.bankReconciliationDrafts[h.current.id]);
   const posted = applyFinalizedInternalTransfers(staged.bankReconciliationDrafts[h.current.id], 'prashant');
   assert.equal(posted.created.length, 1); assert.equal(posted.blocked.length, 0);
   const after = read(), made = after.transfers.find(item => item.id === posted.created[0]);
@@ -419,6 +433,7 @@ test('one verified active two-bank representative may bridge its excluded duplic
   assert.equal(result.status, 200, JSON.stringify(result.body));
   assertExistingUnchanged(h.before, read());
   assert.equal(read().transfers.find(item => item.id === 'TR-00049').accountingExcluded, true);
+  retainFinalizedFixtureRows(read().bankReconciliationDrafts[h.current.id]);
   const applied = applyFinalizedInternalTransfers(read().bankReconciliationDrafts[h.current.id], 'prashant');
   assert.equal(applied.created.length, 1); assert.equal(read().transfers.length, 3);
   assertExistingUnchanged(h.before, read());
@@ -524,11 +539,18 @@ test('a legacy later twin decision remains blocked deterministically while the e
   const earlier = draft({ id: 'BRD-EARLIER', createdAt: date + 'T09:00:00.000Z' }); earlier.resolutions['bank-0'] = resolution(earlier);
   const current = draft(); current.resolutions['bank-0'] = resolution(current);
   const h = reset({ current, otherDrafts: [earlier] });
+  retainFinalizedFixtureRows(h.current);
   const later = applyFinalizedInternalTransfers(h.current, 'prashant'); assert.equal(later.created.length, 0); assert.equal(later.blocked.length, 1);
+  assert.match(later.blocked[0].error, /BRD-EARLIER/);
+  assertExistingUnchanged(h.before, read());
+  // Replay the earlier winner from an independent post-finalize snapshot. The
+  // same physical bank row cannot carry two drafts' posting provenance at once.
+  const winner = reset({ current, otherDrafts: [earlier] });
+  retainFinalizedFixtureRows(earlier);
   const first = applyFinalizedInternalTransfers(read().bankReconciliationDrafts[earlier.id], 'prashant'); assert.equal(first.created.length, 1);
   const second = applyFinalizedInternalTransfers(read().bankReconciliationDrafts[earlier.id], 'prashant'); assert.equal(second.created.length, 0);
   const last = applyFinalizedInternalTransfers(read().bankReconciliationDrafts[current.id], 'prashant'); assert.equal(last.created.length, 0);
-  assert.equal(read().transfers.length, 1); assertExistingUnchanged(h.before, read());
+  assert.equal(read().transfers.length, 1); assert.equal(read().transfers[0].reconciliationDraft, earlier.id); assertExistingUnchanged(winner.before, read());
 });
 
 test('distinct references do not widen PERSONAL accounting permissions', () => {

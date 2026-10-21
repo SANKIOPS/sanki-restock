@@ -210,6 +210,28 @@ function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 
   return { status, body: result };
 }
 
+// Direct post-finalization helper tests retain the same per-row provenance
+// created by the real finalize route; an unfinished draft is not bank evidence.
+function retainFinalizedFixtureRows(draft) {
+  const file=path.join(tempDir,'expenses.json'),store=JSON.parse(fs.readFileSync(file,'utf8'));
+  store.bankStatements=store.bankStatements||{};
+  const bookKey=draft.nature==='PERSONAL'&&draft.account!=='IndusInd Bank 7883'?'PERSONAL|'+draft.account:draft.account;
+  const book=store.bankStatements[bookKey]||(store.bankStatements[bookKey]={transactions:{},imports:[]});
+  book.transactions=book.transactions||{};book.imports=book.imports||[];
+  const importId='BST-FIXTURE-'+draft.id,dates=(draft.transactions||[]).map(row=>row.date).sort();
+  if(!book.imports.some(record=>record.draftId===draft.id))book.imports.push({id:importId,draftId:draft.id,
+    from:draft.summary&&draft.summary.from||dates[0],to:draft.summary&&draft.summary.to||dates.at(-1),
+    rows:(draft.transactions||[]).length,finalizedAt:new Date().toISOString(),reconciliationRows:[]});
+  (draft.transactions||[]).forEach((row,index)=>{
+    const existing=Object.entries(book.transactions).find(([,value])=>value.date===row.date&&value.reference===row.reference&&
+      Number(value.debit||0)===Number(row.debit||0)&&Number(value.credit||0)===Number(row.credit||0)&&value.balance===row.balance);
+    const key=existing?existing[0]:draft.id+'-'+index;
+    book.transactions[key]={...row,id:existing&&existing[1].id||'BTX-FIXTURE-'+draft.id+'-'+index,
+      firstSeenImport:importId,lastSeenImport:importId,reconciliationDraftId:draft.id,reconciliationDraftRowIndex:index};
+  });
+  fs.writeFileSync(file,JSON.stringify(store));
+}
+
 // Historical scenarios use the normal claimant path for submission, then an
 // authorized Owner correction rather than granting claimants backdating.
 function historicalClaim(options) {
@@ -1737,6 +1759,7 @@ test('Prashant can reconcile transfers from the four managed accounts to 1919 ex
       const saved=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:id,rowId:'bank-0',action:'create_internal_transfer',otherAccount:'Arshpreet 1919',reason:'For Expense'}});
       assert.equal(saved.status,200,JSON.stringify(saved.body));assert.equal(saved.body.rows.find(x=>x.id==='bank-0').status,'resolved');
       const draft=JSON.parse(fs.readFileSync(expenseFile,'utf8')).bankReconciliationDrafts[id];
+      retainFinalizedFixtureRows(draft);
       applyFinalizedInternalTransfers(draft,'prashant');applyFinalizedInternalTransfers(draft,'prashant');
       const entries=JSON.parse(fs.readFileSync(expenseFile,'utf8')).transfers.filter(x=>x.reconciliationDraft===id);
       assert.equal(entries.length,1);assert.equal(entries[0].fromAccount,account);assert.equal(entries[0].toAccount,'Arshpreet 1919');assert.equal(entries[0].amount,1061);assert.equal(entries[0].bankStatementEvidence,true);
@@ -2099,11 +2122,11 @@ test('reviewed bank transactions can finalize while the closing balance remains 
   }finally{fs.writeFileSync(expenseFile,original);}
 });
 
-test('reconciliation closing excludes ledger movements before the statement opening date',()=>{
+test('reconciliation carries earlier ledger movements into the chronological statement opening',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),account='Axis Bank 3448',draftId='BRD-PERIOD-OPENING';
   try{
     const store=JSON.parse(original);store.expenses={};store.receivables={};store.adjustments=[];store.receipts=[];store.vendorAdvances=[];store.paytmSettlements=[];store.reconciliationExpenses=[];store.bankTruthMovements=[];store.bankDateOverrides={};store.bankStatements={};store.openingBalances={[account]:47844.86};store.transfers=[{id:'TR-BEFORE-PERIOD',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'Counter Cash',toAccount:account,amount:21000,date:'2026-08-12'},{id:'TR-IN-PERIOD',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'Counter Cash',toAccount:account,amount:1000,date:'2026-08-22'}];store.bankReconciliationDrafts={[draftId]:{id:draftId,account,nature:'SANKI',transactions:[{date:'2026-08-22',description:'Cash deposit',reference:'DEP-1000',debit:0,credit:1000,balance:48844.86}],summary:{from:'2026-08-22',to:'2026-08-22',openingBalance:47844.86,totalDebits:0,totalCredits:1000,closingBalance:48844.86,validated:true},resolutions:{},matchingPolicy:'strict_identity_v3',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'}};fs.writeFileSync(expenseFile,JSON.stringify(store));
-    const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId,account}});assert.equal(view.status,200,JSON.stringify(view.body));assert.equal(view.body.ledgerClosing,48844.86);assert.equal(view.body.balanceDifference,0);assert.equal(view.body.balanceResolved,true);
+    const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId,account}});assert.equal(view.status,200,JSON.stringify(view.body));assert.equal(view.body.currentOpening,68844.86);assert.equal(view.body.historicalOpeningNet,21000);assert.equal(view.body.postedPeriodNet,1000);assert.equal(view.body.ledgerClosing,69844.86);assert.equal(view.body.balanceDifference,-21000);assert.equal(view.body.balanceResolved,false);
   }finally{fs.writeFileSync(expenseFile,original);}
 });
 
@@ -2120,6 +2143,7 @@ test('excluded statement rows remain bank truth without becoming expenses or P&L
   const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),account='Prashant Axis 3645',draft={id:'BRD-BANK-TRUTH',nature:'SANKI',account,transactions:[{date:'2098-04-01',description:'Personal purchase',reference:'PSNL-100',debit:100,credit:0},{date:'2098-04-01',description:'Personal receipt',reference:'PSNL-40',debit:0,credit:40}],resolutions:{'bank-0':{action:'exclude',reason:'PSNL'},'bank-1':{action:'exclude',reason:'PSNL'}}};
   try{
     const store=JSON.parse(original);store.bankTruthMovements=[];store.bankReconciliationDrafts={};store.oneTimeMigrations=store.oneTimeMigrations||{};store.oneTimeMigrations['owner-reset-all-bank-reconciliation-2026-09-04-v2']={result:'already_applied'};fs.writeFileSync(expenseFile,JSON.stringify(store));
+    retainFinalizedFixtureRows(draft);
     applyFinalizedBankTruth(draft,'prashant');applyFinalizedBankTruth(draft,'prashant');
     const saved=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(saved.bankTruthMovements.length,2,'finalization is idempotent');assert.equal(saved.bankTruthMovements.reduce((n,x)=>n+x.credit-x.debit,0),-60);assert.equal(saved.reconciliationExpenses.some(x=>x.reconciliationDraft===draft.id),false);
     const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account,from:'2098-04-01',to:'2098-04-01'}}).body;assert.equal(ledger.entries.filter(x=>x.kind==='bank_truth').length,2);
@@ -2139,9 +2163,9 @@ test('3645 carries excluded bank truth into later statement periods and keeps on
 
 test('a missing internal transfer can be created from an official bank row without fabricated proof',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),now=new Date().toISOString(),account='Prashant Axis 3645',id='BRD-CREATE-TRANSFER';
-  stored.bankReconciliationDrafts[id]={id,account,nature:'SANKI',transactions:[{date:'2026-08-26',description:'Second transfer from Axis 3448',reference:'BANK-SECOND',debit:0,credit:1203,balance:1203}],summary:{from:'2026-08-26',to:'2026-08-26',openingBalance:0,closingBalance:1203,totalDebits:0,totalCredits:1203,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  stored.bankReconciliationDrafts[id]={id,account,nature:'SANKI',transactions:[{date:'2098-10-09',description:'New transfer from Axis 3448',reference:'629100001234',debit:0,credit:1203,balance:1203}],summary:{from:'2098-10-09',to:'2098-10-09',openingBalance:0,closingBalance:1203,totalDebits:0,totalCredits:1203,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
   const resolved=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:id,rowId:'bank-0',action:'create_internal_transfer',otherAccount:'Axis Bank 3448',reason:'Second bank-confirmed transfer'}});assert.equal(resolved.status,200,JSON.stringify(resolved.body));assert.equal(resolved.body.rows.find(x=>x.id==='bank-0').status,'resolved');
-  const afterResolve=JSON.parse(fs.readFileSync(expenseFile,'utf8'));applyFinalizedInternalTransfers(afterResolve.bankReconciliationDrafts[id],'prashant');const after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),transfer=after.transfers.find(x=>x.reconciliationDraft===id);
+  const afterResolve=JSON.parse(fs.readFileSync(expenseFile,'utf8'));retainFinalizedFixtureRows(afterResolve.bankReconciliationDrafts[id]);applyFinalizedInternalTransfers(afterResolve.bankReconciliationDrafts[id],'prashant');const after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),transfer=after.transfers.find(x=>x.reconciliationDraft===id);
   assert.equal(transfer.fromAccount,'Axis Bank 3448');assert.equal(transfer.toAccount,account);assert.equal(transfer.amount,1203);assert.equal(transfer.bankStatementEvidence,true);assert.equal((after.auditLog||[]).some(x=>x.action==='BANK_CONFIRMED_TRANSFER_CREATED'&&x.subjectId===transfer.id),true);
   const issues=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account}}).body.reconciliationIssues;assert.equal(issues.some(x=>x.reference===transfer.id&&x.code==='missing_transfer_proof'),false);
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
@@ -2282,7 +2306,10 @@ test('reconciliation supports multiple links, rounding, and reusable vendor adva
   const drafts=[['BRD-MULTI',1200,'2026-09-01'],['BRD-ROUND',650.90,'2026-09-02'],['BRD-ADV',418,'2026-09-03']];stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};drafts.forEach(([id,debit,date])=>{stored.bankReconciliationDrafts[id]={id,account,nature:'SANKI',transactions:[{date,description:'Official bank debit',reference:id,debit,credit:0,balance:-debit}],summary:{from:date,to:date,openingBalance:0,closingBalance:-debit,totalDebits:debit,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'strict_identity_v2',temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};});fs.writeFileSync(expenseFile,JSON.stringify(stored));
   let out=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-MULTI',rowId:'bank-0',action:'link_multiple_existing',appIds:['EX-MULTI-A/PAY-001','EX-MULTI-B/PAY-001'],reason:'One payment covers two expenses'}});assert.equal(out.status,200,JSON.stringify(out.body));assert.equal(out.body.rows.find(x=>x.id==='bank-0').resolution.appIds.length,2);
   out=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-ROUND',rowId:'bank-0',action:'link_with_rounding',appIds:['EX-ROUND/PAY-001'],reason:'Reviewed separate rounding allocation of one rupee ten paise'}});assert.equal(out.status,200,JSON.stringify(out.body));assert.equal(out.body.rows.find(x=>x.id==='bank-0').resolution.roundingAmount,1.10);
-  out=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-ADV',rowId:'bank-0',action:'vendor_advance_split',appIds:['EX-ADV-BASE/PAY-001'],vendor:'Kalu',advanceAmount:218,advanceExpenseIds:['EX-ADV-NEXT'],reason:'Overpayment retained by vendor'}});assert.equal(out.status,200,JSON.stringify(out.body));const snapshot=JSON.parse(fs.readFileSync(expenseFile,'utf8'));applyFinalizedCompositeLinks(snapshot.bankReconciliationDrafts['BRD-ROUND'],'prashant');applyFinalizedCompositeLinks(snapshot.bankReconciliationDrafts['BRD-ADV'],'prashant');const after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),advance=after.vendorAdvances.find(x=>x.reconciliationDraft==='BRD-ADV');assert.equal(after.adjustments.find(x=>x.reconciliationDraft==='BRD-ROUND').amount,1.10);assert.equal(advance.amount,218);assert.equal(advance.remainingAmount,118);assert.equal(after.expenses['EX-ADV-NEXT'].paidAmount,100);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+  out=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-ADV',rowId:'bank-0',action:'vendor_advance_split',appIds:['EX-ADV-BASE/PAY-001'],vendor:'Kalu',advanceAmount:218,advanceExpenseIds:['EX-ADV-NEXT'],reason:'Overpayment retained by vendor'}});assert.equal(out.status,200,JSON.stringify(out.body));
+  const snapshot=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+  retainFinalizedFixtureRows(snapshot.bankReconciliationDrafts['BRD-ROUND']);retainFinalizedFixtureRows(snapshot.bankReconciliationDrafts['BRD-ADV']);
+  applyFinalizedCompositeLinks(snapshot.bankReconciliationDrafts['BRD-ROUND'],'prashant');applyFinalizedCompositeLinks(snapshot.bankReconciliationDrafts['BRD-ADV'],'prashant');const after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),advance=after.vendorAdvances.find(x=>x.reconciliationDraft==='BRD-ADV');assert.equal(after.adjustments.find(x=>x.reconciliationDraft==='BRD-ROUND').amount,1.10);assert.equal(advance.amount,218);assert.equal(advance.remainingAmount,118);assert.equal(after.expenses['EX-ADV-NEXT'].paidAmount,100);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
 test('amount-mismatch rows can correct an editable ledger entry with an audit trail',()=>{
@@ -2874,6 +2901,7 @@ test('bank payment can split between a current expense and a paid pre-system ven
   const resolved=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:draft.id,rowId:'bank-0',action:'opening_vendor_payable_split',appId:'EX-FNP-100/PAY-001',principalAmount:100,openingPayableAmount:200,vendor:'FNP',preSystemDates:'2026-08-20, 2026-08-21',reason:'Opening payable for flowers from 20 and 21 August; paid with 22 August expense',remark:'Split current expense and pre-system balance'}});
   assert.equal(resolved.status,200,JSON.stringify(resolved.body));assert.equal(resolved.body.rows.find(x=>x.id==='bank-0').status,'resolved');assert.equal(resolved.body.rows.find(x=>x.app&&x.app.id==='EX-FNP-100/PAY-001').status,'resolved');
   const afterResolve=JSON.parse(fs.readFileSync(expenseFile,'utf8')),savedDraft=afterResolve.bankReconciliationDrafts[draft.id];afterResolve.bankStatements['Prashant Axis 3645']={transactions:{fnp:{id:'BTX-FNP-300',date:'2026-08-22',description:'UPI payment to Ferns n petals',reference:'623499417992',debit:300,credit:0,balance:1000}},imports:[]};fs.writeFileSync(expenseFile,JSON.stringify(afterResolve));
+  retainFinalizedFixtureRows(savedDraft);
   applyFinalizedOpeningVendorPayables(savedDraft,'prashant');
   const finalized=JSON.parse(fs.readFileSync(expenseFile,'utf8')),opening=finalized.vendorOpeningPayables.find(x=>x.reconciliationDraft===draft.id);
   assert.equal(opening.nature,'SAMAST');assert.equal(opening.amount,200);assert.equal(opening.paidAmount,200);assert.equal(opening.status,'paid');assert.equal(opening.bankTransactionId,'BTX-FNP-300');assert.equal(finalized.reconciliationExpenses.some(x=>x.reconciliationDraft===draft.id),false);
@@ -4014,6 +4042,7 @@ test('every Axis account automatically matches fixed transfer charges and posts 
     fs.writeFileSync(expenseFile,JSON.stringify(stored));
     const preview=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId,account}});assert.equal(preview.status,200,JSON.stringify(preview.body));
     const row=preview.body.rows.find(x=>x.bank&&x.app&&x.app.id==='TR-AXIS-FIXED-FEE'),half=preview.body.rows.find(x=>x.bank&&x.app&&x.app.id==='TR-AXIS-HALF-FEE');assert.equal(row.status,'matched');assert.equal(row.axisTransferCharge,true);assert.equal(row.chargeAmount,5.9);assert.equal(half.status,'matched');assert.equal(half.chargeAmount,2.95);assert.equal(preview.body.unresolved,0);
-    const source=fs.readFileSync(path.join(__dirname,'modules','expenses.js'),'utf8');assert.match(source,/automaticAxisTransferCharge:true/);assert.match(source,/category:'BANK CHARGES'/);assert.match(source,/amount:-charge\.amount/);
+    assert.equal(preview.body.pendingPostingNet,-8.85,'only the unposted fixed bank fees enter the preview');
+    const source=fs.readFileSync(path.join(__dirname,'modules','expenses.js'),'utf8');assert.match(source,/automaticAxisTransferCharge:true/);assert.match(source,/category:'BANK CHARGES'/);assert.match(source,/pendingReconciliationAmount\(/);assert.match(source,/amount:-pendingCharge/);
   }finally{fs.writeFileSync(expenseFile,baseline);}
 });
