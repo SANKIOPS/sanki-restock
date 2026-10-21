@@ -47,6 +47,83 @@
       <label>Creative type<select id="creativeTypeFilter"><option value="">All creative types</option></select></label><label>Status<select id="statusFilter"><option value="">All current records</option><option value="reported_running">Reported running</option><option value="delivery_unconfirmed">Delivery unconfirmed</option><option value="active">Verified active</option><option value="paused">Paused</option><option value="draft">Draft</option><option value="archived">Removed records</option><option value="history">History</option></select></label>
       <label>Destination<select id="destinationFilter"><option value="">All destinations</option><option>Instagram profile</option><option>WhatsApp</option><option>Google Maps</option><option>Website</option><option>Messenger</option><option>Other</option></select></label>
     </div>
+    <div id="resultFilters" class="period-filter" hidden><label>Period start on / after<input type="date" id="periodStartFilter" data-date-filter="from"></label><label>Period end on / before<input type="date" id="periodEndFilter" data-date-filter="to"></label><p>Each row is one reporting period. Overlapping rows are not added together.</p></div>
+    <div class="view-heading"><div><h2 id="viewTitle">Ad sets</h2><p id="viewHelp" class="muted"></p></div><span id="rowCount" class="muted"></span></div>
+    <section id="recordView" role="tabpanel" aria-labelledby="tab-adSets">
+
+      <div class="table-wrap" tabindex="0" aria-label="Scrollable marketing table"><table id="records"><thead></thead><tbody></tbody></table></div>
+      <div id="empty" class="empty" hidden></div>
+      <div class="table-footer" id="tableFooter"></div><div id="insightsPanel" hidden></div>
+    </section>
+  </section>
+  <p class="footnote">Budgets are configured daily amounts, not actual spend. “Pending” means unconfirmed; a blank metric is not zero. Reported running statuses come from your record and need a delivery check in Meta.</p>
+</main>
+<dialog id="setupDetailsDialog"><header class="setup-detail-header"><div><p class="eyebrow">FULL AD-SET SETUP</p><h2 id="setupDetailsTitle"></h2></div><button id="closeSetupDetails" type="button" aria-label="Close setup details">×</button></header><div id="setupDetailsBody"></div></dialog>
+<dialog id="editor">
+  <form id="recordForm">
+    <header><div><p class="eyebrow">MARKETING RECORD</p><h2 id="editorTitle">Add ad set</h2></div><button type="button" data-close aria-label="Close editor">×</button></header>
+    <div id="formFields"></div>
+    <label id="reasonWrap">Reason for this change<textarea name="reason" maxlength="1000" placeholder="What changed, and why?"></textarea></label>
+    <p class="form-error" role="alert"></p>
+    <footer><button type="button" id="archive" class="danger" hidden>Archive record</button><div class="actions"><button type="button" data-close>Cancel</button><button type="submit" class="primary">Save record</button></div></footer>
+  </form>
+</dialog>
+<dialog id="bulkDialog"><form id="bulkForm"><header><h2 id="bulkTitle">Edit selected records</h2><button type="button" id="bulkClose" aria-label="Close bulk editor">×</button></header><p id="bulkHelp"></p><div id="bulkFields"><label id="bulkStatusWrap">Recorded status<select id="bulkStatus"><option value="">Keep current status</option><option value="reported_running">Reported running</option><option value="paused">Paused</option><option value="draft">Draft</option><option value="completed">Completed</option><option value="unknown">Unconfirmed</option></select></label><label id="bulkBudgetWrap">Daily budget per selected ad set (₹)<input id="bulkBudget" type="number" min="0" step="0.01" placeholder="Leave blank to keep current budgets"></label><label>Shared notes<textarea id="bulkNotes" placeholder="Leave blank to keep current notes"></textarea></label></div><label>Reason<textarea id="bulkReason" maxlength="1000"></textarea></label><p id="bulkError" class="form-error" role="alert"></p><footer><button type="button" id="bulkCancel">Cancel</button><button type="submit" id="bulkSubmit" class="primary">Apply changes</button></footer></form></dialog>
+<script src="/navigation-state.js?v=bb4a39520dbd"></script><script src="/sidebar.js"></script>
+<script src="/meta-insight-controls.js?v=2c2fbb7a31af"></script>
+<script src="/meta-linked-workspace.js?v=a741cb5cc8d4"></script>
+<script src="/meta-ads.js?v=7d9a224a8966"></script>
+</body>
+</html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Meta Ads · SANKI Business OS</title>
+  <link rel="stylesheet" href="/meta-ads.css?v=c624a80d8dfe">
+</head>
+<body class="meta-fullscreen">
+<main>
+  <header class="page-header">
+    <div><a class="back-to-app" href="/dashboard.html">← Main app</a><p class="eyebrow">SANKI · MARKETING</p><h1 id="pageTitle">Campaigns</h1><p class="muted">Meta Marketing · SANKI account records</p></div>
+    <div class="actions"><button id="refresh">↻ Refresh records</button><button id="openUpload">Upload Meta export</button><button id="openPerformance" hidden class="primary">Upload performance</button></div>
+  </header>
+  <p class="record-note">Tracking records. Changes here do not publish ads or change settings in Meta.</p>
+  <section id="uploadPanel" class="workspace upload-panel" aria-label="Import campaign setup" hidden>
+    <h2>Upload Meta export</h2><p class="muted">Choose a configuration export, or select your Campaigns, Ad sets and Ads CSV files together. Files link by Meta ID. The review shows missing details before saving.</p><label>Use this file for<select id="importPurpose"><option value="auto">Auto-detect</option><option value="setup">Setup records only</option><option value="performance">Performance results</option></select></label>
+    <input id="setupFile" type="file" multiple accept=".csv,.xlsx" aria-label="Meta export file">
+    <button id="setupPreview" type="button">Preview upload</button>
+    <div id="setupCampaignChoices"></div><div id="setupReview"></div><div id="setupSummary" role="status" style="white-space:pre-wrap"></div>
+    <button id="setupSave" type="button" class="primary" hidden>Confirm changes and save</button>
+  </section>
+  <section class="stats" id="stats" aria-label="Configured campaign summary"></section>
+  <section id="performancePanel" class="workspace upload-panel" aria-label="Import daily performance" hidden>
+    <h2>Upload performance</h2><p class="muted">One CSV for all campaigns. Choose any date range with your saved SANKI Daily columns. No daily breakdown required. Import campaign setup first.</p>
+    <input id="performanceFile" type="file" accept=".csv,.xlsx" aria-label="Meta performance file">
+    <button id="performancePreview" type="button">Preview performance</button>
+    <div id="performanceSummary" role="status" style="white-space:pre-wrap"></div>
+    <button id="performanceSave" type="button" class="primary" hidden>Save performance</button>
+  </section>
+  <div id="message" role="status" aria-live="polite">Loading marketing records…</div>
+  <section class="workspace" aria-label="Marketing records">
+    <div class="manager-views"><button id="allRecords" class="view-chip active">All records</button><button id="runningRecords" class="view-chip">Reported running</button><button id="clearScope">Clear selection</button><span id="scopeSummary" class="muted">All campaigns</span></div>
+    <div class="manager-search"><input type="search" id="search" aria-label="Search records" placeholder="Search campaigns, ad sets, ads or audiences…"></div>
+    <div class="tabs" role="tablist" aria-label="Record views">
+      <button role="tab" id="tab-campaigns" data-tab="campaigns" aria-controls="recordView" aria-selected="true"><b id="campaignTabLabel">▣ Campaigns</b> <span></span></button>
+      <button role="tab" id="tab-adSets" data-tab="adSets" aria-controls="recordView" aria-selected="false"><b id="adSetTabLabel">▦ Ad sets</b> <span></span></button>
+      <button role="tab" id="tab-ads" data-tab="ads" aria-controls="recordView" aria-selected="false"><b id="adTabLabel">▤ Ads</b> <span></span></button>
+      <button role="tab" id="tab-results" data-tab="results" aria-controls="recordView" aria-selected="false">Results <span></span></button>
+      <button role="tab" id="tab-changes" hidden data-tab="changes" aria-controls="recordView" aria-selected="false">Changes <span></span></button>
+    </div>
+    <div class="manager-toolbar"><div class="actions"><button class="primary" id="add" disabled>+ Add campaign</button><button id="editSelected" disabled>Edit record</button><button id="removeSelected" class="danger" disabled>Remove selected</button><button id="viewChildren" disabled>View ad sets</button></div><div class="actions"><label class="columns-control">Columns<select id="columnMode"><option value="setup">Full setup</option><option value="overview">Overview</option></select></label><button id="export" disabled>↓ Export CSV</button></div></div>
+    <div class="filters">
+      <label>Campaign<select id="campaignFilter"><option value="">All campaigns</option></select></label>
+      <label>Collection<select id="collectionFilter"><option value="">All collections</option><option>Femme</option><option>Homme</option><option>Studio</option><option>Both</option><option>Other</option><option>Unclassified</option></select></label>
+      <label>Creative type<select id="creativeTypeFilter"><option value="">All creative types</option></select></label><label>Status<select id="statusFilter"><option value="">All current records</option><option value="reported_running">Reported running</option><option value="delivery_unconfirmed">Delivery unconfirmed</option><option value="active">Verified active</option><option value="paused">Paused</option><option value="draft">Draft</option><option value="archived">Removed records</option><option value="history">History</option></select></label>
+      <label>Destination<select id="destinationFilter"><option value="">All destinations</option><option>Instagram profile</option><option>WhatsApp</option><option>Google Maps</option><option>Website</option><option>Messenger</option><option>Other</option></select></label>
+    </div>
     <div id="resultFilters" class="period-filter" hidden><label>Period start on / after<input type="date" id="periodStartFilter"></label><label>Period end on / before<input type="date" id="periodEndFilter"></label><p>Each row is one reporting period. Overlapping rows are not added together.</p></div>
     <div class="view-heading"><div><h2 id="viewTitle">Ad sets</h2><p id="viewHelp" class="muted"></p></div><span id="rowCount" class="muted"></span></div>
     <section id="recordView" role="tabpanel" aria-labelledby="tab-adSets">
