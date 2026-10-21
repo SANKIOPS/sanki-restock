@@ -13,6 +13,7 @@ const { cleanGroupName, categoryGroupNames } = categoryGroupManagement;
 const claimantPolicy = require('./expense-claimant-policy');
 const ledgerConnections = require('./expense-ledger-connections');
 const transferReimbursements = require('./transfer-reimbursement-links');
+const velocityCodAccounting = require('./velocity-cod-accounting');
 // ═══════════════════════════════════════════════════════════════
 // Expenses — the money-OUT side of in-app accounting, built around SANKI's
 // real "runner" process and made leakage-proof by PROOF at every gate.
@@ -1526,6 +1527,12 @@ function procurementAccounting(s) {
 function loadProcurementStore() {
   try { return JSON.parse(fs.readFileSync(PROC_PATH, 'utf8')); } catch { return { pos: {} }; }
 }
+function velocityShipmentEvidence(){
+  let index={byOrder:{},shipments:{}},tracking={shipments:{}};
+  try{index=JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH),'velocity_order_index.json'),'utf8'));}catch{}
+  try{tracking=JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH),'velocity_tracking_evidence.json'),'utf8'));}catch{}
+  return {index,tracking};
+}
 function salesLedgerEntries(accountingStore, options = {}) {
   const rows = [];
   const allocationOverrides=(accountingStore&&accountingStore.saleAllocationOverrides)||{};
@@ -1537,7 +1544,8 @@ function salesLedgerEntries(accountingStore, options = {}) {
   } catch { /* no local-sales store yet */ }
   try {
     const shop = JSON.parse(fs.readFileSync(ORDERS_PATH, 'utf8'));
-    Object.values(shop.orders || {}).filter(isOriginalPaymentOrder).forEach(x => {
+    const velocityEvidence=velocityShipmentEvidence();
+    Object.values(shop.orders || {}).filter(x=>isOriginalPaymentOrder(x)||velocityCodAccounting.isPendingReceivableOrder(shop,x,velocityEvidence)).forEach(x => {
       const gateways=(x.paymentGateways||[]).join(' ').toLowerCase(),cod=/cash\s*on\s*delivery|\bcod\b/.test(gateways),cash=!cod&&gateways.includes('cash'),storeCredit=/store\s*credit|gift\s*card/.test(gateways)||num((accountingStore&&accountingStore.paytmShopifyPayments||{})[x.id]?.storeCreditAmount)>0,paytm=/paytm/.test(gateways),orderNo=String(x.orderNumber||x.name||x.id||'').replace(/\D/g,'').replace(/^0+/,''),gross=num(x.total),baseId='SHOPIFY/'+x.id,override=allocationOverrides[baseId],explicitCash=x.cashAmount!=null?num(x.cashAmount):(x.cashPaidAmount!=null?num(x.cashPaidAmount):null);
       // These are accounting exclusions only. This module only reads the cached
       // Shopify order and never changes the customer's Shopify store-credit balance.
@@ -1553,10 +1561,11 @@ function salesLedgerEntries(accountingStore, options = {}) {
       },0);
       const shopifyPayment=(accountingStore&&accountingStore.paytmShopifyPayments||{})[x.id]||{};
       const verifiedTransactions=(Array.isArray(x.paymentTransactions)&&x.paymentTransactions.length?x.paymentTransactions:shopifyPayment.transactions)||[];
+      const pendingCod=velocityCodAccounting.pendingReceivable(Object.assign({},x,{paymentTransactions:verifiedTransactions}),velocityCodAccounting.isPendingReceivableOrder(shop,x,velocityEvidence)),successfulTransactions=pendingCod.successfulTransactions,pendingCodTransactions=pendingCod.pendingCodTransactions,pendingCodAmount=pendingCod.amount;
       const explicitPaytm=shopifyPayment.paytmAmount!=null?num(shopifyPayment.paytmAmount):(x.paytmAmount!=null?num(x.paytmAmount):(x.paytmPaidAmount!=null?num(x.paytmPaidAmount):null));
       // A POS order or its non-cash remainder is not evidence that Paytm collected it.
       const verifiedPaytm=roundMoney(Math.min(gross,Math.max(0,linkedPaytm,explicitPaytm==null?0:explicitPaytm)));
-      if(storeCredit&&!paytm&&!cash&&!verifiedPaytm)return; // store credit alone is not a new receipt
+      if(storeCredit&&!paytm&&!cash&&!cod&&!verifiedPaytm)return; // store credit alone is not a new receipt
       const bankLinked=!!((accountingStore&&accountingStore.bankDateOverrides)||{})[baseId]||!!((accountingStore&&accountingStore.bankDateOverrides)||{})[baseId+'/NONCASH'];
       const paytmBound=postedPaytmOrders.has(String(x.id))||(!bankLinked&&paytmSalesInScope(date)&&(paytm||verifiedPaytm>0||String(x.channel||'').toLowerCase()==='pos'));
       const websiteSale=/website|online/.test(String(x.channel||'').toLowerCase()),nonCashDefault=cod?VELOCITY_CLEARING_ACCOUNT:(paytmBound?PAYTM_CLEARING_ACCOUNT:(websiteSale?gokwikAccounting.CLEARING:(date>=SHOPIFY_DIRECT_TO_AXIS_FROM?DEFAULT_SALES_BANK:PAYTM_CLEARING_ACCOUNT)));
@@ -1565,7 +1574,7 @@ function salesLedgerEntries(accountingStore, options = {}) {
       // sale after a later refund. Never synthesize it from a refunded total.
       if(options.originalReceipts&&!hasVerifiedShopifyPayments&&num(x.moneyRefunded||x.refundAmount)>0)return;
       if(hasVerifiedShopifyPayments&&!override){
-        const successful=verifiedTransactions.filter(tx=>['sale','capture'].includes(String(tx.kind||'').toLowerCase())&&(!tx.status||String(tx.status).toLowerCase()==='success')&&num(tx.amount)>0),byId=new Map(successful.map(tx=>[String(tx.id||''),tx]));
+        const successful=successfulTransactions,byId=new Map(successful.map(tx=>[String(tx.id||''),tx]));
         const bucket=tx=>{const gateway=String(tx.gateway||tx.payment_gateway||'').toLowerCase();return /store.?credit|gift.?card/.test(gateway)?'store_credit':(/cash\s*on\s*delivery|\bcod\b/.test(gateway)?'cod':(/paytm/.test(gateway)||!websiteSale&&/\bupi\b/.test(gateway)?'paytm':(/cash/.test(gateway)?'cash':(/gokwik|easebuzz/.test(gateway)||websiteSale?'gokwik':'other'))));};
         const components=new Map();successful.forEach(tx=>{const key=bucket(tx),row=components.get(key)||{amount:0,gateway:String(tx.gateway||tx.payment_gateway||key),transactionIds:[],manualCashCollected:false};row.amount=roundMoney(row.amount+num(tx.amount));row.transactionIds.push(String(tx.id||''));if(key==='cod'&&(tx.manualPaymentGateway===true||String(tx.userId||tx.user_id||'')||/manually.*paid|marked.*paid/i.test(String(tx.message||''))))row.manualCashCollected=true;components.set(key,row);});
         const embeddedRefunds=verifiedTransactions.filter(tx=>String(tx.kind||'').toLowerCase()==='refund'&&(!tx.status||String(tx.status).toLowerCase()==='success'));
@@ -1574,8 +1583,10 @@ function salesLedgerEntries(accountingStore, options = {}) {
         const common={orderId:String(x.id),orderNumber:orderNo||String(x.name||x.id),date,gross,paymentGateways:x.paymentGateways||[],description:'Shopify payment component · '+(x.name||x.id)+' · '+(x.channel||''),cashAmount:num(components.get('cash')&&components.get('cash').amount),nonCashAmount:roundMoney(Array.from(components.entries()).filter(([key])=>!['cash','store_credit'].includes(key)).reduce((sum,[,row])=>sum+num(row.amount),0)),refundAmount:x.moneyRefunded!=null?num(x.moneyRefunded):num(x.refundAmount)};
         const routes={cash:DEFAULT_COUNTER_CASH,paytm:PAYTM_CLEARING_ACCOUNT,cod:VELOCITY_CLEARING_ACCOUNT,gokwik:gokwikAccounting.CLEARING,other:nonCashDefault};let sequence=0;
         components.forEach((component,key)=>{if(key==='store_credit'||!(component.amount>0))return;const id=key==='cash'?baseId:(key==='paytm'||key==='gokwik'&&/\bupi\b/i.test(component.gateway)?baseId+'/NONCASH':baseId+'/PAYMENT-'+(++sequence)),account=key==='cod'&&component.manualCashCollected?DEFAULT_COUNTER_CASH:(routes[key]||nonCashDefault),amount=num(componentAmountOverrides[id]&&componentAmountOverrides[id].amount)||component.amount,gokwikOriginalAccount=key==='gokwik'&&/\bupi\b/i.test(component.gateway)?PAYTM_CLEARING_ACCOUNT:WEBSITE_SALES_ACCOUNT;rows.push(Object.assign({id,account,amount,gokwikOriginalAccount,originalAmount:component.amount,componentAmountOverride:componentAmountOverrides[id]||null,allocationPart:key,gateway:component.gateway,manualCashCollected:component.manualCashCollected,shopifyTransactionIds:component.transactionIds},common));});
+        if(pendingCodAmount>0)rows.push(Object.assign({id:baseId+'/PAYMENT-'+(++sequence),account:VELOCITY_CLEARING_ACCOUNT,amount:pendingCodAmount,originalAmount:pendingCodAmount,allocationPart:'cod_receivable',gateway:'Cash on Delivery (COD)',shopifyTransactionIds:pendingCodTransactions.map(tx=>String(tx.id||''))},common));
         return;
       }
+      if(pendingCodAmount>0&&!override){rows.push({id:baseId+'/PAYMENT-1',orderId:String(x.id),orderNumber:orderNo||String(x.name||x.id),date,account:VELOCITY_CLEARING_ACCOUNT,amount:pendingCodAmount,originalAmount:pendingCodAmount,gross,paymentGateways:x.paymentGateways||[],allocationPart:'cod_receivable',gateway:'Cash on Delivery (COD)',description:'Shopify COD receivable · '+(x.name||x.id)+' · '+(x.channel||'')});return;}
       // A pure Shopify Cash order is itself sufficient evidence for the whole
       // receipt. Mixed tenders use Shopify's verified transaction components;
       // never guess the cash portion from the order total.
