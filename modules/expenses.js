@@ -5,6 +5,7 @@ const { finalizedByPo } = require('./lg-invoices');
 const { calculateReconciliationOpening, verifiedReconciliationAnchor, finalizedMovementCoverageIds, pendingCarryForwardCandidates } = require('./reconciliation-opening');
 const { postedBankRowMovements, pendingReconciliationAmount, postedReconciliationConflicts, findTransferCreationConflicts } = require('./reconciliation-staging');
 const { recoverReversalSourceMetadata } = require('./reconciliation-source-metadata');
+const registerBankImportSourceRepair = require('./bank-import-source-repair-routes');
 const { reconciliationReminderAttention } = require('./reconciliation-reminder-attention');
 const { cashVerificationView } = require('./cash-verification-status');
 const { REVIEWED_VENDOR_DECISIONS_20261009 } = require('./vendor-review-decisions-2026-10-09');
@@ -41,6 +42,7 @@ const XLSX = require('xlsx');
 const pdfjs = require('pdf-parse/lib/pdf.js/v1.10.88/build/pdf.js');
 const { parseIndieBusinessStatement } = require('./indusind-indie-statement');
 const { parseIndusIndSavingsStatement } = require('./indusind-savings-pdf');
+const { parseIndusIndMobileStatement } = require('./indusind-mobile-statement');
 const { createWorker } = require('tesseract.js');
 const tesseractEnglish = require('@tesseract.js-data/eng');
 const Jimp = require('jimp');
@@ -4694,27 +4696,35 @@ function parseBankStatementText(raw){
     if(!debit&&!credit)return;const firstAmount=amountTokens[0],description=rest.slice(0,firstAmount.index).trim().replace(/[|:-]+$/,'').trim(),reference=((description.match(/\b(?:utr|ref|txn|chq)[\s:#-]*([a-z0-9-]+)/i)||[])[1]||'');out.push({date,description,reference,debit,credit,balance:Math.abs(balance),row:index+1});
   });return out;
 }
-function selectIndusIndMobileCandidates(rows){
+function selectIndusIndMobileCandidates(rows,options={}){
   if(!rows.length)return false;
-  const penalty=(row,candidate)=>{const side=row.description.match(/\/(DR|CR)\//i),digits=String(candidate.bankReference||'').replace(/\D/g,'').length;let score=Math.max(0,8-digits);if(!row.reversal){if(side&&side[1].toUpperCase()==='DR'&&!candidate.debit)score+=1e12;if(side&&side[1].toUpperCase()==='CR'&&!candidate.credit)score+=1e12;}return score;};
-  const oldestIndex=rows.length-1;let states=rows[oldestIndex].candidates.map(candidate=>{const choices=[];choices[oldestIndex]=candidate;return{cost:penalty(rows[oldestIndex],candidate),choices};});
-  for(let index=oldestIndex-1;index>=0;index--){const row=rows[index],olderIndex=index+1,next=[];for(const candidate of row.candidates){let best;for(const state of states){const older=state.choices[olderIndex],differenceCents=Math.round(Math.abs(candidate.balance-(older.balance+candidate.credit-candidate.debit))*100),cost=state.cost+penalty(row,candidate)+differenceCents*1e6;if(!best||cost<best.cost){const choices=state.choices.slice();choices[index]=candidate;best={cost,choices};}}if(best)next.push(best);}states=next;if(!states.length)return false;}
-  const best=states.sort((a,b)=>a.cost-b.cost)[0];if(!best)return false;
-  rows.forEach((row,index)=>Object.assign(row,best.choices[index]));return true;
+  // A longer reference is not evidence for a smaller amount. Only a unique,
+  // exact running-balance chain may disambiguate flattened text. The oldest
+  // transaction requires an independent opening or an unambiguous boundary.
+  const cents=value=>Math.round(Number(value)*100),valid=(row,candidate)=>{const side=row.description.match(/\/(DR|CR)\//i),debit=cents(candidate.debit),credit=cents(candidate.credit),balance=cents(candidate.balance);return[debit,credit,balance].every(Number.isSafeInteger)&&debit>=0&&credit>=0&&(debit>0)!==(credit>0)&&(row.reversal||!side||(side[1].toUpperCase()==='DR'?debit>0:credit>0));};
+  const candidates=row=>Array.from(new Map((row.candidates||[]).filter(candidate=>valid(row,candidate)).map(candidate=>[[candidate.bankReference,cents(candidate.debit),cents(candidate.credit),cents(candidate.balance)].join('|'),candidate])).values());
+  const oldestIndex=rows.length-1,hasOpening=Number.isFinite(options.openingBalance);let states=candidates(rows[oldestIndex]).filter(candidate=>!hasOpening||cents(candidate.balance)+cents(candidate.debit)-cents(candidate.credit)===cents(options.openingBalance)).map(candidate=>{const choices=[];choices[oldestIndex]=candidate;return{ways:1,choices};});
+  for(let index=oldestIndex-1;index>=0;index--){const next=[];for(const candidate of candidates(rows[index])){let selected=null,ways=0;for(const state of states){const older=state.choices[index+1];if(cents(candidate.balance)!==cents(older.balance)+cents(candidate.credit)-cents(candidate.debit))continue;ways=Math.min(2,ways+state.ways);if(!selected){const choices=state.choices.slice();choices[index]=candidate;selected={ways,choices};}}if(selected){selected.ways=ways;next.push(selected);}}states=next;if(!states.length)return false;}
+  if(states.reduce((sum,state)=>sum+state.ways,0)!==1)return false;
+  rows.forEach((row,index)=>Object.assign(row,states[0].choices[index]));return true;
 }
 function parseIndusIndMobileStatementText(raw){
   const text=String(raw||'').replace(/\r/g,''),isFormat=/Account Statement\s*\n\d{10,}/i.test(text)&&/DateParticularsChq No\/Ref NoWithdrawalDepositBalance/i.test(text)&&/INDUS PRIVILEGE/i.test(text);
   if(!isFormat)return[];
-  const month={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12},dateValue=value=>{const m=String(value||'').match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);return m&&month[m[2].toLowerCase()]?m[3]+'-'+String(month[m[2].toLowerCase()]).padStart(2,'0')+'-'+m[1].padStart(2,'0'):'';},section=(text.split(/Transaction History/i)[1]||'').split(/This is a computer generated statement/i)[0]||'',tailPattern=/([SM])(\d{6,8})((?:\d+\.\d{2}){3})/g,rows=[];let priorEnd=0,match;
+  const month={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12},dateValue=value=>{const m=String(value||'').match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);if(!m||!month[m[2].toLowerCase()])return'';const date=m[3]+'-'+String(month[m[2].toLowerCase()]).padStart(2,'0')+'-'+m[1].padStart(2,'0'),parsed=new Date(date+'T00:00:00Z');return Number.isFinite(parsed.getTime())&&parsed.toISOString().slice(0,10)===date?date:'';},section=(text.split(/Transaction History/i)[1]||'').split(/This is a computer generated statement/i)[0]||'',tailPattern=/([SM])(\d{5,12})((?:\d+\.\d{2}){3})/g,rows=[];let priorEnd=0,match;
   while((match=tailPattern.exec(section))){
     const block=section.slice(priorEnd,match.index),dateMatch=Array.from(block.matchAll(/\d{1,2}\s+[A-Za-z]{3}\s+\d{4}/g)).at(-1),date=dateValue(dateMatch&&dateMatch[0]);priorEnd=tailPattern.lastIndex;if(!date)continue;
-    const description=block.replace(/DateParticularsChq No\/Ref NoWithdrawalDepositBalance/gi,'').replace(/\d{1,2}\s+[A-Za-z]{3}\s+\d{4}/g,'').replace(/\b(UPI|IMPS\/P2A)\/([\d\s]+)(?=\/)/gi,(full,prefix,digits)=>{const compact=digits.replace(/\s/g,'');return /^\d{12}$/.test(compact)?prefix+'/'+compact:full;}).replace(/\s+/g,' ').trim(),reversal=/(?:REVERSED\s*:|\bREVERSAL\b|^RVS\b)/i.test(description),referenceDigits=match[2],candidates=[];
+    const description=block.slice(dateMatch.index+dateMatch[0].length).replace(/DateParticularsChq No\/Ref NoWithdrawalDepositBalance/gi,'').replace(/\b(UPI|IMPS\/P2A)\/([\d\s]+)(?=\/)/gi,(full,prefix,digits)=>{const compact=digits.replace(/\s/g,'');return /^\d{12}$/.test(compact)?prefix+'/'+compact:full;}).replace(/\s+/g,' ').trim(),reversal=/(?:REVERSED\s*:|\bREVERSAL\b|^RVS\b)/i.test(description),referenceDigits=match[2],candidates=[];
     for(let length=5;length<=referenceDigits.length;length++){const money=(referenceDigits.slice(length)+match[3]).match(/\d+\.\d{2}/g)||[];if(money.length!==3)continue;const debit=statementNum(money[0]),credit=statementNum(money[1]),balance=statementNum(money[2]);if((debit>0||credit>0)&&!(debit>0&&credit>0))candidates.push({bankReference:match[1]+referenceDigits.slice(0,length),debit,credit,balance});}
     if(!candidates.length)continue;const transactionReference=((description.match(/\b(?:UPI|IMPS\/P2A)\/(\d{10,})/i)||[])[1]||'');rows.push({date,description:description||'IndusInd transaction',reference:transactionReference,transactionReference,reversal,candidates,row:rows.length+1});
   }
-  if(!rows.length)return rows;
-  selectIndusIndMobileCandidates(rows);rows.forEach(row=>{row.reference=row.transactionReference||row.bankReference;delete row.transactionReference;delete row.candidates;});
+  const datedRows=Array.from(section.matchAll(/(?:^|\n)\s*\d{1,2}\s+[A-Za-z]{3}\s+\d{4}/g)).length;
+  if(!rows.length||datedRows!==rows.length)throw new Error('IndusInd mobile statement validation failed: not every dated row has complete reference and amount columns. Upload the original PDF; no preview was created.');
+  const openingMatch=text.match(/Opening\s+Balance\s*:\s*(-?[\d,]+\.\d{2})/i);
+  if(!selectIndusIndMobileCandidates(rows,openingMatch?{openingBalance:statementNum(openingMatch[1])}:{}))throw new Error('IndusInd mobile statement validation failed: reference and amount columns are ambiguous or do not match the running balances. Upload the original PDF with readable table columns; no preview was created.');
+  rows.forEach(row=>{row.reference=row.transactionReference||row.bankReference;delete row.transactionReference;delete row.candidates;});
   const account=(text.match(/Account Statement\s*\n(\d{10,})/i)||[])[1]||'',period=text.match(/Statement Period:\s*(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})\s*-\s*(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})/i),debits=roundMoney(rows.reduce((sum,row)=>sum+row.debit,0)),credits=roundMoney(rows.reduce((sum,row)=>sum+row.credit,0)),oldest=rows.at(-1),opening=roundMoney(oldest.balance+oldest.debit-oldest.credit),closing=rows[0].balance,calculated=roundMoney(opening+credits-debits),valid=Math.abs(calculated-closing)<=.01;
+  const from=period&&dateValue(period[1]),to=period&&dateValue(period[2]);if(!from||!to||from>to||rows.some((row,index)=>row.date<from||row.date>to||index&&rows[index-1].date<row.date))throw new Error('IndusInd mobile statement validation failed: dates are invalid, outside the printed period, or not newest first. No preview was created.');
   if(!valid)throw new Error('IndusInd statement validation failed: parsed transactions do not reproduce the declared closing balance. No preview was created.');
   rows.statementSummary={format:'IndusInd mobile PDF',accountLast4:account.slice(-4),from:period?dateValue(period[1]):oldest.date,to:period?dateValue(period[2]):rows[0].date,openingBalance:opening,closingBalance:closing,totalDebits:debits,totalCredits:credits,validated:true};return rows;
 }
@@ -4749,7 +4759,7 @@ async function readPdfText(filePath,password,includePositions=false){
 }
 async function parseBankStatementUpload(filePath,originalName,password,options={}){
   const ext=path.extname(originalName||filePath).toLowerCase();if(['.xlsx','.xls','.csv'].includes(ext))return parseBankStatementFile(filePath);
-  if(ext==='.pdf'){const pdf=await readPdfText(filePath,password,true),text=pdf.text,savings=parseIndusIndSavingsStatement(pdf),indie=savings?null:parseIndieBusinessStatement(pdf);const current=options.unbilled?require('./credit-card-accounting').parseUnbilledTransactions(text):[];const rows=savings||indie||(current.length?current:parseBankStatementText(text));if(rows.length)return rows;throw new Error('No readable statement table was found in this PDF. Upload clear page images or the bank Excel/CSV export.');}
+  if(ext==='.pdf'){const pdf=await readPdfText(filePath,password,true),text=pdf.text,savings=parseIndusIndSavingsStatement(pdf),indie=savings?null:parseIndieBusinessStatement(pdf),mobile=savings||indie?null:parseIndusIndMobileStatement(pdf);const current=options.unbilled?require('./credit-card-accounting').parseUnbilledTransactions(text):[];const rows=savings||indie||mobile||(current.length?current:parseBankStatementText(text));if(rows.length)return rows;throw new Error('No readable statement table was found in this PDF. Upload clear page images or the bank Excel/CSV export.');}
   if(['.png','.jpg','.jpeg','.webp','.bmp','.tif','.tiff'].includes(ext)){const worker=await createWorker(tesseractEnglish.code,1,{langPath:tesseractEnglish.langPath,gzip:tesseractEnglish.gzip,cacheMethod:'none'});try{const first=await worker.recognize(filePath),firstText=first&&first.data&&first.data.text||'',currentRows=options.unbilled?require('./credit-card-accounting').parseUnbilledTransactions(firstText):[],firstRows=currentRows.length?currentRows:parseBankStatementText(firstText);if(currentRows.length)return currentRows;if(statementScreenshotRowsArePlausible(firstRows))return firstRows;await worker.setParameters({tessedit_pageseg_mode:'6',preserve_interword_spaces:'1'});const table=await worker.recognize(filePath),tableText=table&&table.data&&table.data.text||'',currentTableRows=options.unbilled?require('./credit-card-accounting').parseUnbilledTransactions(tableText):[],tableRows=currentTableRows.length?currentTableRows:parseBankStatementText(tableText);if(currentTableRows.length)return currentTableRows;return statementScreenshotRowsArePlausible(tableRows)?tableRows:firstRows;}finally{await worker.terminate();}}
   throw new Error('Use XLS, XLSX, CSV, PDF, PNG, JPG, WEBP, BMP or TIFF.');
 }
@@ -5474,6 +5484,7 @@ function removeUncommittedBankDraft(s,draft){
 }
 createBankReconciliationDraft=async function(input){const created=await createSingleBankReconciliationDraft(input);if(!created.success)return created;const s=loadStore(),drafts=Object.values(s.bankReconciliationDrafts||{}).filter(x=>x.account===String(input.account||'')&&normalizedNature(x.nature)===normalizedNature(input.nature)),merged=mergeActiveBankReconciliationDrafts(s,String(input.account||''),normalizedNature(input.nature));if(!merged){if(drafts.some(draft=>draft.originalStatementPeriod))return created;const newest=s.bankReconciliationDrafts&&s.bankReconciliationDrafts[created.draft.id];removeUncommittedBankDraft(s,newest);saveStore(s);return{success:false,error:'This statement could not be combined safely with the existing preview because their verified rows, balances, or review state conflict. Finish or discard the existing preview, then upload this statement again. No new preview was saved.'};}const didMerge=(merged.sourceStatements||[]).length>1;if(didMerge)audit(s,null,'BANK_RECONCILIATION_DRAFTS_MERGED','account',merged.account,{user:input.username||'system',device:input.device||'Web',nature:merged.nature,account:merged.account,after:{draftId:merged.id,from:merged.summary.from,to:merged.summary.to,rows:merged.transactions.length,sourceStatements:merged.sourceStatements.length},note:'Overlapping or consecutive statement uploads merged into one continuous workspace'});saveStore(s);return Object.assign({success:true,draft:merged,merged:didMerge},draftReconciliation(s,merged));};
 async function importBankStatementUpload(input){return createBankReconciliationDraft(input);}
+registerBankImportSourceRepair(router,{loadStore,saveStore,audit,canAccessBankDraft,reconciliationFile,statementDraftDir:STATEMENT_DRAFT_DIR,parseBankStatementUpload,draftReconciliation});
 async function combineStatementScreenshots(files){
   if(files.length===1)return{filePath:files[0].path,originalName:files[0].originalname};
   const allowed=new Set(['.png','.jpg','.jpeg','.webp','.bmp','.tif','.tiff']);
