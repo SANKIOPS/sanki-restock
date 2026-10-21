@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const { parseIndusIndMobileStatement } = require('../modules/indusind-mobile-statement');
 const { parseIndieBusinessStatement } = require('../modules/indusind-indie-statement');
 const { parseIndusIndSavingsStatement } = require('../modules/indusind-savings-pdf');
+const { parseIciciCreditCardPdf, isIciciCreditCardText } = require('../modules/icici-credit-card-pdf');
 
 const columns = [20, 180, 450, 670, 800, 930];
 const headings = ['Date', 'Particulars', 'Chq No/Ref No', 'Withdrawal', 'Deposit', 'Balance'];
@@ -215,9 +216,9 @@ function uploadHarness(pdf) {
   const source = fs.readFileSync(path.join(__dirname, '../modules/expenses.js'), 'utf8');
   const state = { fallbackCalls: 0, destroyed: false };
   const context = {
-    fs: { readFileSync: () => new Uint8Array([1]) }, path, parseIndusIndSavingsStatement, parseIndieBusinessStatement, parseIndusIndMobileStatement,
+    fs: { readFileSync: () => new Uint8Array([1]) }, path, parseIndusIndSavingsStatement, parseIndieBusinessStatement, parseIndusIndMobileStatement, parseIciciCreditCardPdf, isIciciCreditCardText,
     parseBankStatementText: () => { state.fallbackCalls++; return [{ debit: 90 }]; },
-    pdfjs: { getDocument: async () => ({ numPages: pages.length, getPage: async number => ({ getTextContent: async () => pages[number - 1] }), destroy: () => { state.destroyed = true; } }) }
+    pdfjs: { PDFJS: {}, NativeImageDecoding: { NONE: 'none' }, getDocument: async () => ({ numPages: pages.length, getPage: async number => ({ getTextContent: async () => pages[number - 1] }), destroy: () => { state.destroyed = true; } }) }
   };
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('async function readPdfText('), source.indexOf('function bankRowKey(')), context);
