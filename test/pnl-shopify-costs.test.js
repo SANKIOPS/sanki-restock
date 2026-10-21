@@ -22,7 +22,7 @@ test('Shopify SKU cost overrides FIFO and does not depend on stock quantity or s
   assert.equal(report.transactions[0].details[0].allocations[0].costAsOf,input.shopifyCosts.at);
   assert.equal(report.costSource.at,input.shopifyCosts.at);
   assert.match(report.basis,/synced Shopify/);
-  assert.match(report.policy.cogs,/restate management P&L history/);
+  assert.match(report.policy.cogs,/restate management Results history/);
   assert.equal(JSON.stringify(input),before);
 });
 test('blank, zero, negative, nonnumeric and unmapped Shopify costs remain exceptions', () => {
@@ -57,7 +57,7 @@ test('returned SKU quantities reverse the sale allocation and cannot reverse it 
   assert.ok(report.warnings.some(w=>w.scope==='cogs'));
   assert.equal(report.totals.cogs,null);
 });
-test('P&L loads Shopify costs from the persisted snapshot without modifying the source', () => {
+test('Results loads Shopify costs from the persisted snapshot without modifying the source', () => {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pnl-cost-read-'));
   try {
     const file=path.join(dir,'inventory-snapshot.json'),snapshot=source().shopifyCosts;
@@ -74,7 +74,7 @@ test('P&L loads Shopify costs from the persisted snapshot without modifying the 
     fs.rmSync(dir,{recursive:true,force:true});
   }
 });
-test('cancelled and pre-accounting-start deliveries do not enter P&L', () => {
+test('cancelled and pre-accounting-start deliveries do not enter Results', () => {
   const input=source(),sale=input.orders.orders.sale;
   sale.channel='Website';sale.financialStatus='paid';sale.deliveryComplete=true;
   input.orders.dispatch={sale:{packingStatus:'cancelled'}};
