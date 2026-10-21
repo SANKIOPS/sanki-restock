@@ -63,7 +63,7 @@ const MODULES = [
   { key: 'size-tracker', title: 'Size Tracker',           desc: 'Match vendor (China) size charts to SANKI target sizes before every PO', icon: '📏', href: '/size-tracker.html',      section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
 
   { key: 'owner',        title: 'Money Picture',         desc: 'Your private owner view — OD, investment, balances and business result', icon: '👑', href: '/owner.html', section: 'Accounts', status: 'hidden', roles: ['owner'], ownerOnly: true },
-  { key: 'pl', title: 'P&L', desc: 'Net sales, SKU costs and paid business expenses', icon: '💰', href: '/pnl.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
+  { key: 'pl', title: 'Results', desc: 'Net sales, SKU costs and paid business expenses', icon: '💰', href: '/pnl.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
   { key: 'balance-sheet',title: 'Balance Sheet',          desc: 'Assets, liabilities and recorded net position as of a selected date', icon: '⚖️', href: '/balance-sheet.html', section: 'Accounts', status: 'hidden', roles: ['admin','owner'] },
   { key: 'rentals', title: 'Rental income', desc: 'Tenant rents, receipts and security deposits', icon: '🏠', href: '/rentals.html', section: 'Accounts', status: 'live', roles: ['owner'], ownerOnly: true },
   { key: 'expenses',     title: 'Ledgers',               desc: 'Expenses, payments, account movements and reconciliations', icon: '🧾', href: '/expenses.html',    section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'samast_accounting', 'personal_claimant', 'claimant', 'owner'] },
@@ -71,7 +71,7 @@ const MODULES = [
   { key: 'seo-control', title: 'SEO', desc: 'SEO, AEO and GEO tasks, cadence, evidence and progress', icon: '◎', href: '/seo-control.html', section: 'SEO', status: 'live', roles: ['owner'], ownerOnly: true },
   { key: 'meta-ads', title: 'Meta Ads', desc: 'Campaign settings, creative tests, results and change history', icon: '◈', href: '/meta-ads.html', section: 'Marketing', status: 'live', roles: ['owner'], ownerOnly: true },
   { key: 'catalogue-images', title: 'Catalogue Images', desc: 'Stage, visually verify and publish consistent three-image product galleries', icon: '▧', href: '/catalogue-images.html', section: 'Marketing', status: 'live', roles: ['owner'], ownerOnly: true },
-  { key: 'salary',       title: 'Salary',                desc: 'Payroll + attendance — pay from days worked, posted to the P&L', icon: '👛', href: '/salary.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
+  { key: 'salary',       title: 'Salary',                desc: 'Payroll + attendance — pay from days worked, posted to the Results', icon: '👛', href: '/salary.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
   { key: 'incentives',   title: 'Sales incentives',      desc: 'POS salesperson incentives from eligible cash, UPI and card receipts', icon: '🎯', href: '/incentives.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
 
   { key: 'showroom',     title: 'Showroom Replenishment', desc: 'Refill the showroom front from the back',           icon: '🛍️', href: '/showroom-replenishment.html',   section: 'Store Ops', status: 'hidden', roles: ['admin', 'inventory', 'warehouse'] },
