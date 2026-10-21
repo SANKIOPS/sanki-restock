@@ -41,13 +41,17 @@ function salaryForMonth(e, ym) {
 
 const CHANNELS = ['POS', 'Website', 'Shared'];
 const SALARY_PAYING_ACCOUNTS = ['Axis Bank 3448', 'IndusInd Bank 8181', 'Prashant Cash', 'Gagan Sir Cash', 'Counter Cash'];
+// 7883 is shared by SAMAST and PERSONAL. A SAMAST salary is a SAMAST
+// payment from that bank, not permission to use other personal salary sources.
+function salaryPayingAccounts(){return activeSalaryEntity()==='SAMAST'?SALARY_PAYING_ACCOUNTS.concat('IndusInd Bank 7883'):SALARY_PAYING_ACCOUNTS;}
+function salaryPaymentNature(account){return activeSalaryEntity()==='SAMAST'&&account==='IndusInd Bank 7883'?'SAMAST':'SANKI';}
 const RETIRED_SALARY_PAYING_ACCOUNTS = ['Prashant Axis 3645'];
 // Retiring a salary source does not rewrite earlier payments or change the
 // separate advance/import policies. Historical corrections may retain 3645.
 const ADVANCE_PAYING_ACCOUNTS = ['Prashant Axis 3645', 'IndusInd Bank 8181', 'Prashant Cash', 'Gagan Sir Cash', 'Counter Cash', 'Axis Bank 3448'];
 // Admins may use Sir's Owner-approved PERSONAL sources for salary advances
-// only. They are intentionally not added to SALARY_PAYING_ACCOUNTS, so they
-// cannot be used for ordinary salary payments or other accounting flows.
+// only, except the explicit SAMAST salary use of shared 7883 above. They are
+// not generally available for ordinary salary payments or other accounting flows.
 // Namita's bank/cash accounts remain private and are not staff payment options.
 const ADMIN_PERSONAL_ADVANCE_PAYING_ACCOUNTS = ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash'];
 // Real bank/cash accounts only. Clearing ledgers hold money in transit and
@@ -713,7 +717,7 @@ router.use('/api/salary',(req,res,next)=>salaryContext.run({entity:salaryEntity(
 router.get('/api/salary/employees', guard, (req, res) => {
   const s = load();
   const currentMonth=new Date().toISOString().slice(0,7),employees=Object.values(s.employees).sort(byEmployeeName).map(e=>Object.assign({},e,{salaryHistory:salaryHistoryOf(e),effectiveSalary:salaryForMonth(e,currentMonth)}));
-  res.json({ success: true, entity:activeSalaryEntity(), employees, currentMonth, divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:SALARY_PAYING_ACCOUNTS, retiredSalaryPayingAccounts:RETIRED_SALARY_PAYING_ACCOUNTS, advancePayingAccounts:isOwner(req)?ownerAdvancePayingAccounts():advancePayingAccountsFor(req) });
+  res.json({ success: true, entity:activeSalaryEntity(), employees, currentMonth, divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:salaryPayingAccounts(), retiredSalaryPayingAccounts:RETIRED_SALARY_PAYING_ACCOUNTS, advancePayingAccounts:isOwner(req)?ownerAdvancePayingAccounts():advancePayingAccountsFor(req) });
 });
 router.post('/api/salary/employees', guard, (req, res) => {
   const s = load(); const b = req.body || {};
@@ -774,11 +778,11 @@ router.post('/api/salary/post/:ym', guard, (req,res)=>{
 });
 router.post('/api/salary/payments/batch',guard,(req,res)=>{
   const s=load(),b=req.body||{},ym=String(b.ym||''),date=String(b.date||''),account=String(b.account||'').trim(),proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean))),proof=proofs[0]||'',items=Array.isArray(b.items)?b.items:[];
-  const allowedAccounts=SALARY_PAYING_ACCOUNTS;
+  const allowedAccounts=salaryPayingAccounts();
   if(RETIRED_SALARY_PAYING_ACCOUNTS.includes(account))return res.status(400).json({success:false,error:account+' is no longer used for new salary payments. Choose Axis Bank 3448 or another authorized salary source.'});
   if(!/^\d{4}-\d{2}$/.test(ym)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!allowedAccounts.includes(account)||!proofs.length||!items.length)return res.status(400).json({success:false,error:'Choose employees, date, an authorized salary paying account or cash source, and at least one payment proof.'});
   const rows=computeMonth(s,ym),seen=new Set(),prepared=[];for(const x of items){const row=rows.find(r=>r.id===x.empId),amount=round2(num(x.amount)),remaining=round2(Math.max(0,row&&row.balance||0)),modificationReason=String(x.modificationReason||'').trim();if(!row)return res.status(400).json({success:false,error:'One selected employee was not found. Refresh the salary page before retrying.'});if(seen.has(x.empId))return res.status(400).json({success:false,error:row.name+' was selected more than once.'});if(!(amount>0))return res.status(400).json({success:false,error:row.name+': Pay Now must be greater than ₹0.'});if(!(remaining>0))return res.status(400).json({success:false,error:row.name+': no salary is payable on this row. Review the salary amount before recording a payment.',empId:row.id,payNow:amount,remaining});if(x.expectedRemaining!=null&&Math.abs(round2(num(x.expectedRemaining))-remaining)>.001)return res.status(409).json({success:false,error:row.name+': salary due has changed. Refresh the employee balance before paying.'});if(x.expectedRemaining!=null&&amount>remaining+.001)return res.status(400).json({success:false,error:row.name+': payment exceeds the remaining salary due.'});if(Math.abs(amount-remaining)>.001&&!modificationReason)return res.status(400).json({success:false,error:'Enter why '+row.name+' is being paid '+amount+' instead of the full balance '+remaining+'.'});seen.add(x.empId);prepared.push({row,amount,modificationReason,remainingBeforePayment:remaining});}
-  s.salaryPaymentBatchSeq=(s.salaryPaymentBatchSeq||0)+1;const batchId='SALB-'+String(s.salaryPaymentBatchSeq).padStart(5,'0'),now=new Date().toISOString();s.salaryPayments=s.salaryPayments||[];prepared.forEach((x,i)=>s.salaryPayments.push({id:batchId+'-'+String(i+1).padStart(3,'0'),batchId,ym,empId:x.row.id,employeeName:x.row.name,amount:x.amount,date,account,proof,proofs:proofs.slice(),reference:String(b.reference||'').trim(),note:String(b.note||'').trim(),modificationReason:x.modificationReason,remainingBeforePayment:x.remainingBeforePayment,balanceAfterPayment:round2(x.remainingBeforePayment-x.amount),active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now}));save(s);res.json({success:true,batchId,count:prepared.length,total:round2(prepared.reduce((n,x)=>n+x.amount,0)),proofCount:proofs.length});
+  s.salaryPaymentBatchSeq=(s.salaryPaymentBatchSeq||0)+1;const batchId='SALB-'+String(s.salaryPaymentBatchSeq).padStart(5,'0'),now=new Date().toISOString();s.salaryPayments=s.salaryPayments||[];prepared.forEach((x,i)=>s.salaryPayments.push({id:batchId+'-'+String(i+1).padStart(3,'0'),batchId,ym,entity:activeSalaryEntity(),payingNature:salaryPaymentNature(account),empId:x.row.id,employeeName:x.row.name,amount:x.amount,date,account,proof,proofs:proofs.slice(),reference:String(b.reference||'').trim(),note:String(b.note||'').trim(),modificationReason:x.modificationReason,remainingBeforePayment:x.remainingBeforePayment,balanceAfterPayment:round2(x.remainingBeforePayment-x.amount),active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now}));save(s);res.json({success:true,batchId,count:prepared.length,total:round2(prepared.reduce((n,x)=>n+x.amount,0)),proofCount:proofs.length});
 });
 // One employee-payment action can settle earned salary and create a separate
 // recoverable advance. Both allocations are validated before the single save.
@@ -804,17 +808,17 @@ router.patch('/api/salary/payments/:id',guard,(req,res)=>{
   if(p.linkedLedgerEntryId)return res.status(409).json({success:false,error:'This salary payment is linked to an existing ledger debit. Correct that original ledger entry before changing its amount, date, or account.'});
   const amount=round2(num(b.amount)),date=String(b.date||''),account=String(b.account||'').trim(),reason=String(b.reason||'').trim();
   const proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean)));
-  const accountAllowed=SALARY_PAYING_ACCOUNTS.includes(account)||(account===p.account&&RETIRED_SALARY_PAYING_ACCOUNTS.includes(account));
+  const accountAllowed=salaryPayingAccounts().includes(account)||(account===p.account&&RETIRED_SALARY_PAYING_ACCOUNTS.includes(account));
   if(!(amount>0)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!accountAllowed||!proofs.length||!reason)return res.status(400).json({success:false,error:'Amount, date, paying account, at least one proof, and correction reason are required.'});
-  const before={amount:p.amount,date:p.date,account:p.account,proofs:p.proofs||[p.proof].filter(Boolean),reference:p.reference||''};
+  const before={amount:p.amount,date:p.date,account:p.account,entity:p.entity||activeSalaryEntity(),payingNature:p.payingNature||salaryPaymentNature(p.account),proofs:p.proofs||[p.proof].filter(Boolean),reference:p.reference||''};
   const changed=amount!==round2(num(p.amount))||date!==p.date||account!==p.account||JSON.stringify(proofs)!==JSON.stringify(before.proofs)||String(b.reference||'').trim()!==before.reference;
   if(!changed)return res.status(400).json({success:false,error:'No payment details changed.'});
   const otherPaid=(s.salaryPayments||[]).filter(x=>x!==p&&x.active!==false&&x.empId===p.empId&&x.ym===p.ym).reduce((n,x)=>n+num(x.amount),0);
   const row=computeMonth(s,p.ym).find(x=>x.id===p.empId),available=row?round2(row.netPayable-num((s.months[p.ym]&&s.months[p.ym].rows[p.empId]||{}).paid)-otherPaid):0;
   const overpayment=round2(Math.max(0,amount-available));
   if(overpayment>.001&&!(isOwner(req)&&b.allowOverpayment===true))return res.status(400).json({success:false,error:'Corrected amount exceeds this employee’s available salary balance. Only the Owner may explicitly approve a proof-backed overpayment.'});
-  Object.assign(p,{amount,date,account,proof:proofs[0],proofs,reference:String(b.reference||'').trim(),editedAt:new Date().toISOString(),editedBy:req.user.username});
-  s.salaryPaymentAudit=s.salaryPaymentAudit||[];s.salaryPaymentAudit.push({at:p.editedAt,by:req.user.username,action:'PAYMENT_CORRECTED',paymentId:p.id,ym:p.ym,empId:p.empId,before,after:{amount,date,account,proofs,reference:p.reference},overpayment,reason});
+  Object.assign(p,{amount,date,account,entity:activeSalaryEntity(),payingNature:salaryPaymentNature(account),proof:proofs[0],proofs,reference:String(b.reference||'').trim(),editedAt:new Date().toISOString(),editedBy:req.user.username});
+  s.salaryPaymentAudit=s.salaryPaymentAudit||[];s.salaryPaymentAudit.push({at:p.editedAt,by:req.user.username,action:'PAYMENT_CORRECTED',paymentId:p.id,ym:p.ym,empId:p.empId,before,after:{amount,date,account,entity:p.entity,payingNature:p.payingNature,proofs,reference:p.reference},overpayment,reason});
   save(s);res.json({success:true,payment:p});
 });
 function existing3645DebitCandidates(s){
