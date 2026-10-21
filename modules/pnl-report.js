@@ -33,12 +33,13 @@ const gstRate = unitValue => number(unitValue) <= 2500 ? 0.05 : 0.18;
 // This is report-only, not a tax setting or statutory invoice calculation.
 function lineTax(line, taxesIncluded = true) {
   const qty = number(line.qty), discount = number(line.discount);
-  const base = Math.max(0, number(line.price ?? line.unitPrice) * qty - discount);
+  const signedBase=number(line.price ?? line.unitPrice)*qty-discount,base = Math.max(0,signedBase);
   const recorded = Array.isArray(line.taxLines) && line.taxLines.length ? money(line.taxLines.reduce((sum, tax) => sum + number(tax.price), 0)) : null;
+  if(line.pnlKind==='rounding')return {gross:money(signedBase),sourceGross:money(signedBase+(taxesIncluded?0:number(recorded))),tax:0,recorded,calculated:0,rate:0,status:'User-confirmed rounding: no product GST or COGS',valid:qty>0};
   if(line.pnlKind==='shipping') {
-    const known=recorded!==null || line.taxable===false, tax=known ? recorded || 0 : null;
+    const confirmedZero=line.pnlShippingTaxZero===true,known=confirmedZero || recorded!==null || line.taxable===false, tax=confirmedZero?0:known ? recorded || 0 : null;
     const gross=money(base + (taxesIncluded ? 0 : number(tax)));
-    return {gross,sourceGross:gross,tax,recorded:tax,calculated:tax,rate:null,status:known?'Shipping fee: source invoice GST retained':'Shipping fee GST evidence missing',valid:known&&qty>0};
+    return {gross,sourceGross:confirmedZero?money(base+(taxesIncluded?0:number(recorded))):gross,tax,recorded:confirmedZero?recorded:tax,calculated:tax,rate:confirmedZero?0:null,status:confirmedZero?'User-confirmed tax-free shipping (P&L only)':known?'Shipping fee: source invoice GST retained':'Shipping fee GST evidence missing',valid:known&&qty>0};
   }
   if (!(qty > 0)) return { gross: money(base), tax: null, rate: null, recorded, status: 'Missing quantity', valid: false };
   // Confirmed non-garment exception. Match only an explicit perfume product
@@ -117,13 +118,15 @@ function buildReport(sources = {}, options = {}) {
     if (previous && (!item.id || previous.id !== item.id || number(previous.unitCost) !== number(item.unitCost))) duplicateCostSkus.add(sku);
     shopifyCosts.set(sku, item);
   }
-  const allocate = (sku, qty, date, reference, ch) => {
+  const allocate = (sku, qty, date, reference, ch, inventoryItemId) => {
     if (shopifyCostMode) {
-      const item = shopifyCosts.get(sku);
+      const identityMatches=inventoryItemId?(sources.shopifyCosts?.items||[]).filter(i=>i&&String(i.id)===String(inventoryItemId)&&skuKey(i.sku)===sku):[];
+      const identityValid=identityMatches.length>0&&identityMatches.every(i=>number(i.unitCost)===number(identityMatches[0].unitCost)&&(i.unitCostCurrency||i.currency||'INR')==='INR');
+      const item = inventoryItemId?(identityValid?identityMatches[0]:null):shopifyCosts.get(sku);
       const currency = item?.unitCostCurrency || item?.currency || 'INR';
-      const valid = !!sku && !duplicateCostSkus.has(sku) && present(item?.unitCost) && number(item.unitCost) > 0 && currency === 'INR';
+      const valid = !!sku && (inventoryItemId?identityValid:!duplicateCostSkus.has(sku)) && present(item?.unitCost) && number(item.unitCost) > 0 && currency === 'INR';
       if (!valid) {
-        const reason = duplicateCostSkus.has(sku) ? 'Duplicate Shopify SKU' : currency !== 'INR' ? 'Non-INR Shopify cost' : 'Shopify Cost per item missing';
+        const reason = inventoryItemId ? 'Selected Shopify item identity/cost is no longer valid' : duplicateCostSkus.has(sku) ? 'Duplicate Shopify SKU' : currency !== 'INR' ? 'Non-INR Shopify cost' : 'Shopify Cost per item missing';
         warning(reference, reason + ' for ' + (sku || 'unmapped SKU') + ': ' + qty + ' unit(s). Profit is unavailable until resolved.', date, 'cogs', ch);
         return { parts: [], qty, missing: qty, cost: 0 };
       }
@@ -131,8 +134,9 @@ function buildReport(sources = {}, options = {}) {
       // opening quantities or consume today's stock to price past sales.
       // Refunds reverse this sale's exact allocation, not a new estimate.
       const cost = number(item.unitCost);
-      return { parts: [{ lotId: item.id || 'SHOPIFY/' + sku, purchaseId: 'Shopify Cost per item', qty, unitCost: money(cost), amount: money(qty * cost), exactCost: cost, returned: 0, costAsOf: sources.shopifyCosts.at || null }], qty, missing: 0, cost: money(qty * cost) };
+      return { parts: [{ lotId: item.id || 'SHOPIFY/' + sku, purchaseId: 'Shopify Cost per item', sku, inventoryItemId:item.id, qty, unitCost: money(cost), amount: money(qty * cost), exactCost: cost, returned: 0, costAsOf: sources.shopifyCosts.at || null }], qty, missing: 0, cost: money(qty * cost) };
     }
+    if(inventoryItemId){warning(reference,'Selected Shopify item cost source is unavailable; no inventory or average fallback was used.',date,'cogs',ch);return {parts:[],qty,missing:qty,cost:0};}
     let remaining = qty; const parts = [];
     for (const lot of lots) {
       if (lot.sku !== sku || lot.date > date || lot.remaining <= 0) continue;
@@ -147,6 +151,15 @@ function buildReport(sources = {}, options = {}) {
   const returnCost = (key, qty, date, reference, ch) => {
     const allocation = allocations.get(key);
     if (!allocation) return { cost: 0, complete: false };
+    // A source line can represent several different physical products. A
+    // partial return cannot identify which component came back, so never
+    // consume whichever component happens to be listed first.
+    if(allocation.bundle){
+      if(qty!==allocation.qty||allocation.missing>0||allocation.parts.some(p=>p.returned>0)){warning(reference,'Partial or incomplete bundle return requires verified original costs and the exact returned SKU components; no component cost was guessed.',date,'cogs',ch);return {cost:0,complete:false};}
+      for(const part of allocation.parts){part.returned=part.qty;lots.push({id:reference+'/'+part.lotId,sku:part.sku||allocation.sku,date,qty:part.qty,remaining:part.qty,cost:part.exactCost,purchaseId:part.purchaseId});}
+      lots.sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
+      return {cost:allocation.cost,complete:true};
+    }
     let remaining = qty, cost = 0;
     for (const part of allocation.parts) {
       const used = Math.min(remaining, part.qty - part.returned);
@@ -191,10 +204,11 @@ function buildReport(sources = {}, options = {}) {
       lines.forEach((line, index) => {
         const key = id + '/' + (line.id || index), sku = skuKey(line.sku), qty = number(line.qty);
         const tax = lineTax(line, taxesIncluded);
-        const allocation = present(line.pnlUnitCost) ? {qty,missing:0,cost:money(qty*number(line.pnlUnitCost)),parts:line.pnlKind==='shipping'?[]:[{lotId:'PNL-CORRECTION/'+order.id+'/'+line.id,purchaseId:'User-confirmed P&L custom-item cost',qty,unitCost:line.pnlUnitCost,amount:money(qty*line.pnlUnitCost),exactCost:line.pnlUnitCost,returned:0}]} : allocate(sku, Math.max(0, qty), made.date, reference, ch);
+        const components=(line.pnlComponents||[]).map(component=>({...component,allocation:allocate(skuKey(component.sku),component.qty,made.date,reference,ch,component.inventoryItemId)}));
+        const allocation = components.length?{qty,bundle:true,missing:components.reduce((n,c)=>n+c.allocation.missing,0),cost:money(components.reduce((n,c)=>n+c.allocation.cost,0)),parts:components.flatMap(c=>c.allocation.parts)}:present(line.pnlUnitCost) ? {qty,missing:0,cost:money(qty*number(line.pnlUnitCost)),parts:['shipping','rounding'].includes(line.pnlKind)?[]:[{lotId:'PNL-CORRECTION/'+order.id+'/'+line.id,purchaseId:'User-confirmed P&L custom-item cost',qty,unitCost:line.pnlUnitCost,amount:money(qty*line.pnlUnitCost),exactCost:line.pnlUnitCost,returned:0}]} : allocate(sku, Math.max(0, qty), made.date, reference, ch,line.pnlInventoryItemId);
         allocations.set(key, { ...allocation, sku });
         taxAllocations.set(key, { ...tax, qty, taxesIncluded, returnedQty: 0, returnedShare: 0, returnedTax: 0, returnedGross: 0 });
-        detail.push({ sku, qty, title:line.title||'', lineId: line.id || index, gross: tax.gross, gst: tax.tax, netSales: tax.valid ? money(tax.gross - tax.tax) : null, cogs: allocation.missing ? null : allocation.cost, correction:line.pnlCorrection||null, itemKind:line.pnlKind||'product', allocations: allocation.parts.map(({ exactCost, returned, ...part }) => part) });
+        detail.push({ sku, qty, title:line.title||'', lineId: line.id || index, gross: tax.gross, gst: tax.tax, netSales: tax.valid ? money(tax.gross - tax.tax) : null, cogs: allocation.missing ? null : allocation.cost, correction:line.pnlCorrection||null, itemKind:components.length?'bundle':line.pnlKind||'product', components:components.map(({allocation,...component})=>({...component,cogs:allocation.missing?null:allocation.cost})), allocations: allocation.parts.map(({ exactCost, returned, ...part }) => part) });
         const taxRecord = { id: key, date: made.date, reference, sku, qty, channel: ch, ...tax, taxesIncluded };
         taxRows.push(taxRecord); taxDetail.push(taxRecord);
         taxComplete = taxComplete && tax.valid; costComplete = costComplete && qty > 0 && allocation.missing === 0;
@@ -256,7 +270,7 @@ function buildReport(sources = {}, options = {}) {
               if (!originalTax.taxesIncluded && sourceLineGross !== null) reportGrossDifference += reportLineGross - sourceLineGross;
             }
           }
-          if (line.restockType === 'return' && original.pnlKind!=='shipping') {
+          if (line.restockType === 'return' && !['shipping','rounding'].includes(original.pnlKind)) {
             const returned = returnCost(id + '/' + (original.id || originalIndex), qty, date, rid, ch);
             reversedCost += returned.cost; costComplete = costComplete && returned.complete;
           }
