@@ -732,7 +732,7 @@ test('SAMAST expenses are separate and only its accounting role can approve them
   const paid = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, role: 'admin', body: { account:'Gagan Sir Cash',paymentProof:'/api/expenses/photo/samast-payment.jpg' } });
   assert.equal(paid.status, 200, JSON.stringify(paid.body));
   assert.equal(paid.body.expense.payments.at(-1).account, 'Gagan Sir Cash');
-  assert.deepEqual(summaryForPL(), sankiPlBefore, 'SAMAST must never enter the SANKI P&L');
+  assert.deepEqual(summaryForPL(), sankiPlBefore, 'SAMAST must never enter the SANKI Results');
 
   const samastList = invoke('GET', '/api/expenses/list', { query: {}, role: 'samast_accounting' });
   assert.ok(samastList.body.expenses.length > 0);
@@ -741,7 +741,7 @@ test('SAMAST expenses are separate and only its accounting role can approve them
   assert.ok(sankiList.body.expenses.every(e => (e.nature || 'SANKI') !== 'SAMAST'));
 });
 
-test('PERSONAL stays outside business P&L and each claimant sees only their own records', () => {
+test('PERSONAL stays outside business Results and each claimant sees only their own records', () => {
   const sankiPlBefore = summaryForPL();
   const personalConfig = invoke('GET', '/api/expenses/config', { role: 'personal_claimant' });
   assert.deepEqual(personalConfig.body.natures, ['PERSONAL']);
@@ -774,7 +774,7 @@ test('PERSONAL stays outside business P&L and each claimant sees only their own 
   invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'General Expense' }, role: 'owner' });
   const ownerApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'owner' });
   assert.equal(ownerApproval.status, 200);
-  assert.deepEqual(summaryForPL(), sankiPlBefore, 'PERSONAL must never enter a business P&L');
+  assert.deepEqual(summaryForPL(), sankiPlBefore, 'PERSONAL must never enter a business Results');
 });
 
 test('audit log groups each expense into a readable complete lifecycle with user, device and IP', () => {
@@ -2189,7 +2189,7 @@ test('Axis 3448 complaint hold reduces usable funds without changing bank reconc
 
 test('bank UI offers transaction finalization when only the closing balance is pending',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/d\.canFinalizeTransactions\?'inline-flex'/);assert.match(html,/Finalize reviewed transactions — balance pending/);assert.match(html,/Confirm: submit transactions for finalization/);assert.match(html,/dataset\.confirmPending/);assert.match(html,/deferClosingBalance:deferClosingBalance/);assert.match(html,/Transactions ✓ · Balance pending/);});
 
-test('excluded statement rows remain bank truth without becoming expenses or P&L',()=>{
+test('excluded statement rows remain bank truth without becoming expenses or Results',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),account='Prashant Axis 3645',draft={id:'BRD-BANK-TRUTH',nature:'SANKI',account,transactions:[{date:'2098-04-01',description:'Personal purchase',reference:'PSNL-100',debit:100,credit:0},{date:'2098-04-01',description:'Personal receipt',reference:'PSNL-40',debit:0,credit:40}],resolutions:{'bank-0':{action:'exclude',reason:'PSNL'},'bank-1':{action:'exclude',reason:'PSNL'}}};
   try{
     const store=JSON.parse(original);store.bankTruthMovements=[];store.bankReconciliationDrafts={};store.oneTimeMigrations=store.oneTimeMigrations||{};store.oneTimeMigrations['owner-reset-all-bank-reconciliation-2026-09-04-v2']={result:'already_applied'};fs.writeFileSync(expenseFile,JSON.stringify(store));
@@ -3258,7 +3258,7 @@ test('bank payment can split between a current expense and a paid pre-system ven
 
 test('reconciliation UI offers the pre-system vendor payable split with an audit remark', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
-  assert.match(html,/Split: current expense \+ pre-system vendor payable/);assert.match(html,/opening_vendor_payable_split/);assert.match(html,/Pre-system opening payable/);assert.match(html,/does not enter the current-period P&amp;L/);
+  assert.match(html,/Split: current expense \+ pre-system vendor payable/);assert.match(html,/opening_vendor_payable_split/);assert.match(html,/Pre-system opening payable/);assert.match(html,/does not enter the current-period Results/);
 });
 
 test('new accounting UI defaults to current month, uses compact rows and opens proofs in-page', () => {
