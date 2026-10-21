@@ -128,9 +128,14 @@
     .expense-section { margin-top:9px; padding-top:9px; border-top:1px solid #e8edf2; }
     .payment-history { display:grid; gap:6px; margin-top:6px; }
     .payment-entry { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:7px 9px; border-radius:7px; background:#fff; border:1px solid #e5e7eb; }
-    .payable-ledger-choice { display:flex; align-items:center; gap:8px; min-height:36px; margin:7px 0 3px; padding:7px 10px; border:1px solid #bfdbfe; border-radius:7px; background:#eff6ff; color:#1e3a5f; font-size:12px; font-weight:700; cursor:pointer; }
+    .payable-ledger-choice { display:grid; place-items:center; width:30px; min-height:40px; margin:6px 0 0; padding:0; border:0; background:none; cursor:pointer; }
     .payable-ledger-choice input { width:18px; height:18px; min-width:18px; margin:0; accent-color:var(--blue); }
-    .payable-ledger-group { display:grid; gap:3px; }
+    .payable-ledger-choice input:focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
+    .payable-ledger-group { display:grid; grid-template-columns:30px minmax(0,1fr); align-items:start; gap:6px; }
+    .payable-ledger-content { min-width:0; }
+    .payable-ledger-group.is-selected > .payable-ledger-content > .claim-card { border-color:#93c5fd; background:#f8fbff; }
+    #payableLedgerSelected[hidden] { display:none; }
+    #payableLedgerSelected:not([hidden]) { margin-bottom:10px; }
     #payableLedgerToolbar { border-color:#bfdbfe; background:#eff6ff; }
     .vendor-ledger-scroll { overflow-x:auto; border:1px solid #e5e7eb; border-radius:8px; background:#fff; }
     .vendor-ledger-table { min-width:820px; }
@@ -616,7 +621,7 @@
   <script src="/sidebar.js"></script>
   <script src="/expense-refunds.js?v=56afceda004e"></script>
   <script src="/expense-payment-credits.js?v=c6f1629604f4"></script>
-  <script src="/expense-loans.js?v=payables-ledger-selection-20261018"></script>
+  <script src="/expense-loans.js?v=payables-ledger-compact-20261021"></script>
   <script src="/reconciliation-status.js?v=5c162ba56d8c"></script>
 <script src="/gokwik-reconciliation.js?v=f61dcc2d4cf2"></script>
   <script>
@@ -1298,11 +1303,33 @@
       el('payAcctLabel').textContent='Pay from account';
       return populateVendorPayAccounts(nature,refreshIfEmpty);
     }
-    function payableLedgerChoice(key,label,due,body,kind){return '<section class="payable-ledger-group"><label class="payable-ledger-choice"><input type="checkbox" class="payable-ledger-select" data-key="'+esc(key)+'" data-due="'+(Number(due)||0)+'" aria-label="Select '+esc(label)+' '+esc(kind||'vendor')+' ledger"> Select '+esc(label)+' '+esc(kind||'vendor')+' ledger · '+fmt(due)+' outstanding</label>'+body+'</section>';}
+    function payableLedgerChoice(key,label,due,body,kind){var title='Select '+label+' '+(kind||'vendor')+' ledger';return '<section class="payable-ledger-group"><label class="payable-ledger-choice" title="'+esc(title)+'"><input type="checkbox" class="payable-ledger-select" data-key="'+esc(key)+'" data-due="'+(Number(due)||0)+'" aria-label="'+esc(title)+'"></label><div class="payable-ledger-content">'+body+'</div></section>';}
     function payableExpenseCard(e){return expenseCard(e,null,{showRemainingDue:true,hideCombinedPaymentSelector:true});}
     function vendorPayableGroups(expenses){var groups={};(expenses||[]).forEach(function(e){var key=String(e.vendor||'Unspecified vendor').trim().toLocaleLowerCase('en-IN'),g=groups[key]||(groups[key]={key:key,vendor:e.vendor||'Unspecified vendor',items:[],due:0});g.items.push(e);g.due+=Number(e.balanceDue||0);});return Object.values(groups).sort(function(a,b){return a.vendor.localeCompare(b.vendor,'en',{sensitivity:'base',numeric:true});}).map(function(g){var sorted=g.items.sort(function(a,b){return String(a.date+a.id).localeCompare(String(b.date+b.id));}),body=sorted.length===1?payableExpenseCard(sorted[0]):'<details class="claim-card"><summary><div class="claim-main"><div class="claim-desc">'+esc(g.vendor)+'<div class="claim-vendor">'+sorted.length+' approved bills grouped under this vendor</div></div><div class="claim-amount">'+fmt(g.due)+' due</div></div></summary><div class="claim-detail"><div class="claim-list">'+sorted.map(payableExpenseCard).join('')+'</div></div></details>';return payableLedgerChoice('expense|'+g.key,g.vendor,g.due,body,'vendor');}).join('');}
     function procurementPayableGroups(purchases){var groups={};(purchases||[]).forEach(function(e){var key=String(e.vendor||'Unspecified sourcing vendor').trim().toLocaleLowerCase('en-IN'),g=groups[key]||(groups[key]={key:key,vendor:e.vendor||'Unspecified sourcing vendor',items:[],due:0});g.items.push(e);g.due+=Number(e.balanceDue||0);});return Object.values(groups).sort(function(a,b){return a.vendor.localeCompare(b.vendor,'en',{sensitivity:'base',numeric:true});}).map(function(g){var sorted=g.items.sort(function(a,b){return String(a.date+a.id).localeCompare(String(b.date+b.id));}),body=sorted.length===1?procurementPayableCard(sorted[0]):'<details class="claim-card"><summary><div class="claim-main"><div class="claim-desc">'+esc(g.vendor)+'<div class="claim-vendor">'+sorted.length+' sourcing bills grouped under this vendor</div></div><div class="claim-amount">'+fmt(g.due)+' due</div></div></summary><div class="claim-detail"><div class="claim-list">'+sorted.map(procurementPayableCard).join('')+'</div></div></details>';return payableLedgerChoice('sourcing|'+g.key,g.vendor,g.due,body,'sourcing vendor');}).join('');}
-    function bindPayableLedgerSelection(host){var toolbar=el('payableLedgerToolbar'),summary=el('payableLedgerSelectionSummary'),selectAll=el('payableLedgerSelectAll'),deselectAll=el('payableLedgerDeselectAll'),boxes=host?Array.prototype.slice.call(host.querySelectorAll('.payable-ledger-select')):[];if(!toolbar||!summary||!selectAll||!deselectAll)return;toolbar.style.display=boxes.length?'flex':'none';function refresh(){var selected=boxes.filter(function(box){return box.checked&&!box.disabled;}),total=selected.reduce(function(sum,box){return sum+(Number(box.dataset.due)||0);},0);summary.textContent=selected.length+' ledger'+(selected.length===1?'':'s')+' selected · '+fmt(total);selectAll.disabled=!boxes.length||selected.length===boxes.filter(function(box){return !box.disabled;}).length;deselectAll.disabled=!selected.length;}boxes.forEach(function(box){box.addEventListener('change',refresh);});selectAll.onclick=function(){boxes.forEach(function(box){if(!box.disabled)box.checked=true;});refresh();};deselectAll.onclick=function(){boxes.forEach(function(box){box.checked=false;});refresh();};refresh();}
+    function bindPayableLedgerSelection(host){
+      var toolbar=el('payableLedgerToolbar'),summary=el('payableLedgerSelectionSummary'),selectAll=el('payableLedgerSelectAll'),deselectAll=el('payableLedgerDeselectAll'),boxes=host?Array.prototype.slice.call(host.querySelectorAll('.payable-ledger-select')):[];
+      if(!host||!toolbar||!summary||!selectAll||!deselectAll)return;
+      toolbar.style.display=boxes.length?'flex':'none';
+      var selectedHost=document.createElement('div');selectedHost.id='payableLedgerSelected';selectedHost.className='claim-list payable-ledger-selected';selectedHost.hidden=true;host.insertBefore(selectedHost,host.firstChild);
+      var entries=boxes.map(function(box){var group=box.closest('.payable-ledger-group'),anchor=null;if(group&&group.parentNode){anchor=document.createComment('ledger position');group.parentNode.insertBefore(anchor,group);}return{box:box,group:group,anchor:anchor};});
+      function refresh(){
+        var focused=document.activeElement,selected=boxes.filter(function(box){return box.checked&&!box.disabled;}),total=selected.reduce(function(sum,box){return sum+(Number(box.dataset.due)||0);},0),selectedIndex=0;
+        entries.forEach(function(entry){
+          var checked=entry.box.checked&&!entry.box.disabled,group=entry.group,anchor=entry.anchor;if(!group)return;
+          group.classList.toggle('is-selected',checked);
+          // Move the existing card, not a copy: expanded details, proof links,
+          // payment handlers and selection state stay attached to the same row.
+          if(checked){if(selectedHost.children[selectedIndex]!==group)selectedHost.insertBefore(group,selectedHost.children[selectedIndex]||null);selectedIndex++;}
+          else if(anchor&&anchor.parentNode&&group.previousSibling!==anchor)anchor.parentNode.insertBefore(group,anchor.nextSibling);
+        });
+        selectedHost.hidden=!selected.length;
+        summary.textContent=selected.length+' ledger'+(selected.length===1?'':'s')+' selected · '+fmt(total);
+        selectAll.disabled=!boxes.length||selected.length===boxes.filter(function(box){return !box.disabled;}).length;deselectAll.disabled=!selected.length;
+        if(focused&&host.contains(focused)&&document.activeElement!==focused&&typeof focused.focus==='function')focused.focus({preventScroll:true});
+      }
+      boxes.forEach(function(box){box.addEventListener('change',refresh);});selectAll.onclick=function(){boxes.forEach(function(box){if(!box.disabled)box.checked=true;});refresh();};deselectAll.onclick=function(){boxes.forEach(function(box){box.checked=false;});refresh();};refresh();
+    }
     function procurementPayableCard(e){
       if(e.source==='procurement_lg')return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date">LG date '+esc(e.date)+' · LG bill '+esc(e.billNo)+' · <span class="tag">LOGISTICS</span></div><span class="badge b-'+esc(e.status)+'">'+esc(e.status)+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor)+'<div class="claim-vendor">'+(e.poIds||[]).length+' purchase invoice'+((e.poIds||[]).length===1?'':'s')+' · '+(e.finalized&&e.finalized.basis==='vendor'?'Vendor invoice amount':'Purchase Summary amount')+'</div></div><div class="claim-amount">'+fmt(e.balanceDue)+' due</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Finalized amount: '+fmt(e.amount)+'</span><span>Paid: '+fmt(e.paidAmount)+'</span><span>Balance: '+fmt(e.balanceDue)+'</span></div>'+procurementCostHtml(e)+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div><div class="expense-actions"><button class="btn mini green" onclick="openLgPayment(\''+e.id+'\')">Record LG payment</button></div></div></details>';
       return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date">'+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">ADVANCED PURCHASE</span></div><span class="badge b-'+esc(e.status)+'">'+esc(e.status)+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor)+'<div class="claim-vendor">China supplier: '+esc(e.supplier||'—')+(e.billNo?' · Bill '+esc(e.billNo):'')+'</div></div><div class="claim-amount">'+fmt(e.balanceDue)+' due</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Total landed cost: '+fmt(e.amount)+'</span><span>Paid: '+fmt(e.paidAmount)+'</span><span>Balance: '+fmt(e.balanceDue)+'</span><span>Includes goods + China-to-store transport</span></div><div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div><div class="expense-actions"><button class="btn mini green" onclick="openPurchasePay(\''+e.id+'\')">Record mediator payment</button></div></div></details>';
