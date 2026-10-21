@@ -6,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { buildReport } = require('../modules/pnl-report');
 const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'pnl.js'), 'utf8');
-test('P&L collapse release versions script and styles to avoid stale cached assets', () => {
+test('Results collapse release versions script and styles to avoid stale cached assets', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','pnl.html'),'utf8');
   assert.match(html, /href="\/pnl\.css\?v=20261008-collapsed-heads"/);
   const hash=require('node:crypto').createHash('sha256').update(source.replace(/\r\n/g,'\n')).digest('hex').slice(0,12);
@@ -30,20 +30,20 @@ function harness(fetcher, url='https://example.test/pnl.html') {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-test('P&L page refresh keeps selected tab, date range and channel without replaying mutations',async()=>{
+test('Results page refresh keeps selected tab, date range and channel without replaying mutations',async()=>{
   const calls=[],fetcher=async(url,options)=>{calls.push({url,options});return{ok:true,status:200,json:async()=>sample()};};
   const first=harness(fetcher,'https://example.test/pnl.html?from=2026-09-01&to=2026-09-15&channel=POS');await settle();first.tabs[2].listeners.click();
   const refreshed=harness(fetcher,first.url());await settle();
   assert.equal(refreshed.element('collections').hidden,false);assert.equal(refreshed.element('statement').hidden,true);assert.equal(refreshed.element('from').value,'2026-09-01');assert.equal(refreshed.element('to').value,'2026-09-15');assert.equal(refreshed.element('channel').value,'POS');
   assert.ok(calls.every(call=>!call.options?.method||call.options.method==='GET'));
 });
-test('P&L UI renders typed totals, escaped references, tabs and SKU drill-down', async () => {
+test('Results UI renders typed totals, escaped references, tabs and SKU drill-down', async () => {
   const ui = harness(async () => ({ ok: true, status: 200, json: async () => sample() })); await settle();
   assert.match(ui.element('cards').innerHTML, /1,542\.53/); assert.equal(ui.element('export').disabled, false);
   ui.tabs[1].listeners.click(); assert.equal(ui.element('statement').hidden, true); assert.equal(ui.element('tax').hidden, false);
   assert.match(ui.element('tax').innerHTML, /&lt;unsafe invoice&gt;/); assert.doesNotMatch(ui.element('tax').innerHTML, /<unsafe invoice>/);
   assert.match(ui.element('tax').innerHTML, /Invoice GST \(reference only\)/);
-  assert.match(ui.element('tax').innerHTML, /P&amp;L-calculated GST/);
+  assert.match(ui.element('tax').innerHTML, /Results-calculated GST/);
   assert.match(ui.element('tax').innerHTML, /Shopify, invoices, collections and ledgers are unchanged/);
   ui.clickFilter('sales'); assert.equal(ui.element('details').open, true); assert.match(ui.element('detailBody').innerHTML, /SKU \/ purchase allocations/);
 });
@@ -92,4 +92,20 @@ test('major expense heads start collapsed and toggle only their own category row
   ui.clickHead(head);assert.equal(head.expanded,'false');assert.equal(fixed[0].hidden,true);
   ui.clickFilter('category:fixed/Rent');assert.equal(ui.element('details').open,true);
   ui.refresh();await settle();assert.equal((ui.element('statement').innerHTML.match(/aria-expanded="false"/g)||[]).length,4);
+});
+
+test('Results expense drilldown clearly labels report-only provenance and escapes unverified adjustment and audit text',async()=>{
+  const result=sample();
+  result.transactions.push({id:'RESULTS-CONFIRMATION/E',date:'2026-10-03',expenseDate:'2026-10-01',kind:'expense_confirmation',reference:'E/RESULTS-CONFIRMED',particulars:'Existing expense',category:'Example expenses',group:'variable',account:'',method:'User-confirmed reimbursement/payment; report only',source:'Results-only paid-expense confirmation',netSales:0,otherIncome:0,cogs:0,costComplete:true,expenses:107,details:[{reportOnly:true,confirmedTotal:107,includedAmount:67,eligibleSourcePaidAmount:40,confirmedPaymentDate:'2026-10-03',actor:'<admin>',confirmedAt:'2026-10-04T00:00:00Z',reason:'User says <confirmed>',adjustmentReference:'<ADJ-not-evidence>'}]});
+  const ui=harness(async()=>({ok:true,status:200,json:async()=>result}));await settle();ui.clickFilter('expenses');
+  const html=ui.element('detailBody').innerHTML;
+  assert.match(html,/Results-only confirmation — no bank posting/);
+  assert.match(html,/Confirmation basis and audit/);
+  assert.match(html,/Results-only paid-expense confirmation/);
+  assert.match(html,/&lt;admin&gt;/);assert.match(html,/User says &lt;confirmed&gt;/);assert.match(html,/&lt;ADJ-not-evidence&gt;/);
+  assert.doesNotMatch(html,/<admin>|<confirmed>|<ADJ-not-evidence>/);
+  assert.match(html,/user-reported only; not verified bank or adjustment evidence/);
+  assert.match(html,/Original payments, exclusions, bank balances and reconciliations remain unchanged/);
+  assert.match(html,/₹67\.00/);assert.match(html,/₹40\.00/);
+  ui.clickFilter('sales');assert.doesNotMatch(ui.element('detailBody').innerHTML,/Results-only confirmation/);
 });
