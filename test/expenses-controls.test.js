@@ -2039,7 +2039,7 @@ test('IndusInd mobile PDF resolves ambiguous columns using the whole balance cha
   assert.equal(rows[0].balance,rows[1].balance+rows[0].credit-rows[0].debit);
 });
 
-test('IndusInd mobile PDF accepts a five-digit bank reference before the amount',()=>{
+test('IndusInd mobile PDF accepts a five-digit reference when the oldest amount is independently anchored',()=>{
   const text=`Account Statement
 159355468181
 INDUS PRIVILEGE MAX
@@ -2050,7 +2050,8 @@ DateParticularsChq No/Ref NoWithdrawalDepositBalance
 S9531050.000.00203.44
 25 Sep 2026IMPS CHG
 M7463622.950.00253.44`;
-  const rows=parseBankStatementText(text);
+  assert.throws(()=>parseBankStatementText(text),/columns are ambiguous/);
+  const rows=parseBankStatementText(text.replace('Transaction History','Opening Balance: 256.39\nTransaction History'));
   assert.deepEqual(rows.map(x=>[x.bankReference,x.debit,x.credit,x.balance]),[['S95310',50,0,203.44],['M746362',2.95,0,253.44]]);
   assert.equal(rows.statementSummary.validated,true);
 });
