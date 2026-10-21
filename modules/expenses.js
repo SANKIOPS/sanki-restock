@@ -43,6 +43,7 @@ const pdfjs = require('pdf-parse/lib/pdf.js/v1.10.88/build/pdf.js');
 const { parseIndieBusinessStatement } = require('./indusind-indie-statement');
 const { parseIndusIndSavingsStatement } = require('./indusind-savings-pdf');
 const { parseIndusIndMobileStatement } = require('./indusind-mobile-statement');
+const { parseIciciCreditCardPdf, isIciciCreditCardText } = require('./icici-credit-card-pdf');
 const { createWorker } = require('tesseract.js');
 const tesseractEnglish = require('@tesseract.js-data/eng');
 const Jimp = require('jimp');
@@ -4752,14 +4753,45 @@ function parseIndusIndScreenshotText(raw){
 }
 async function readPdfText(filePath,password,includePositions=false){
   const supplied=String(password||''),bytes=new Uint8Array(fs.readFileSync(filePath));pdfjs.disableWorker=true;let doc;
-  try{doc=await pdfjs.getDocument({data:bytes,password:supplied||undefined});}
+  // Server-side operator inspection needs font metadata, never browser font
+  // loading or native Image objects. Text extraction itself is unchanged.
+  pdfjs.PDFJS.disableFontFace=true;
+  try{doc=await pdfjs.getDocument({data:bytes,password:supplied||undefined,nativeImageDecoderSupport:pdfjs.NativeImageDecoding.NONE});}
   catch(e){if(e&&e.name==='PasswordException')throw new Error(supplied?'Incorrect statement password. Please try again.':'This PDF is password protected. Enter the statement password and upload again.');throw e;}
-  try{let text='';const pages=[];for(let pageNo=1;pageNo<=doc.numPages;pageNo++){const page=await doc.getPage(pageNo),content=await page.getTextContent({normalizeWhitespace:false,disableCombineTextItems:false});if(includePositions)pages.push({items:content.items||[]});let lastY,pageText='';(content.items||[]).forEach(item=>{const y=item.transform&&item.transform[5];pageText+=(lastY==null||lastY===y?'':'\n')+String(item.str||'');lastY=y;});text+='\n\n'+pageText;}return includePositions?{text,pages}:text;}
+  try{
+    let text='',icici=false;const pages=[];
+    for(let pageNo=1;pageNo<=doc.numPages;pageNo++){
+      const page=await doc.getPage(pageNo),content=await page.getTextContent({normalizeWhitespace:false,disableCombineTextItems:false}),items=content.items||[];
+      let lastY,pageText='';items.forEach(item=>{const y=item.transform&&item.transform[5];pageText+=(lastY==null||lastY===y?'':'\n')+String(item.str||'');lastY=y;});text+='\n\n'+pageText;
+      icici=icici||isIciciCreditCardText(text);
+      if(includePositions){
+        const fonts={};
+        if(icici&&items.some(item=>/^[H-Q,]+\.[H-Q]{2}$/.test(String(item.str||'').trim()))){
+          // Only the ICICI custom-digit profile needs this extra work. Resolve
+          // fonts actually used by encoded amount cells, not every font/image.
+          const names=[...new Set(items.filter(item=>/^[H-Q,]+\.[H-Q]{2}$/.test(String(item.str||'').trim())).map(item=>item.fontName))];
+          let fontTimer;
+          try{
+            await Promise.race([
+              (async()=>{
+                const operators=await page.getOperatorList(),fontIds=new Set(operators.argsArray.filter((args,index)=>operators.fnArray[index]===pdfjs.OPS.setFont).map(args=>args[0]));
+                if(names.some(name=>!fontIds.has(name)))throw new Error('ICICI credit-card statement validation failed: the encoded amount font is not embedded in this PDF. No preview was created.');
+                await Promise.all(names.map(async name=>{const font=await new Promise(resolve=>page.commonObjs.get(name,resolve));if(font.missingFile||!font.data||!font.data.length)throw new Error('ICICI credit-card statement validation failed: the encoded amount font is not embedded in this PDF. No preview was created.');fonts[name]=font.name||'';}));
+              })(),
+              new Promise((resolve,reject)=>{fontTimer=setTimeout(()=>reject(new Error('ICICI credit-card statement validation failed: the amount font could not be read safely. No preview was created.')),5000);})
+            ]);
+          }finally{clearTimeout(fontTimer);}
+        }
+        pages.push({items,fonts});
+      }
+    }
+    return includePositions?{text,pages}:text;
+  }
   finally{try{doc.destroy();}catch{}}
 }
 async function parseBankStatementUpload(filePath,originalName,password,options={}){
   const ext=path.extname(originalName||filePath).toLowerCase();if(['.xlsx','.xls','.csv'].includes(ext))return parseBankStatementFile(filePath);
-  if(ext==='.pdf'){const pdf=await readPdfText(filePath,password,true),text=pdf.text,savings=parseIndusIndSavingsStatement(pdf),indie=savings?null:parseIndieBusinessStatement(pdf),mobile=savings||indie?null:parseIndusIndMobileStatement(pdf);const current=options.unbilled?require('./credit-card-accounting').parseUnbilledTransactions(text):[];const rows=savings||indie||mobile||(current.length?current:parseBankStatementText(text));if(rows.length)return rows;throw new Error('No readable statement table was found in this PDF. Upload clear page images or the bank Excel/CSV export.');}
+  if(ext==='.pdf'){const pdf=await readPdfText(filePath,password,true),text=pdf.text,icici=parseIciciCreditCardPdf(pdf),savings=icici?null:parseIndusIndSavingsStatement(pdf),indie=icici||savings?null:parseIndieBusinessStatement(pdf),mobile=icici||savings||indie?null:parseIndusIndMobileStatement(pdf);const current=options.unbilled?require('./credit-card-accounting').parseUnbilledTransactions(text):[];const rows=icici||savings||indie||mobile||(current.length?current:parseBankStatementText(text));if(rows.length)return rows;throw new Error('No readable statement table was found in this PDF. Upload clear page images or the bank Excel/CSV export.');}
   if(['.png','.jpg','.jpeg','.webp','.bmp','.tif','.tiff'].includes(ext)){const worker=await createWorker(tesseractEnglish.code,1,{langPath:tesseractEnglish.langPath,gzip:tesseractEnglish.gzip,cacheMethod:'none'});try{const first=await worker.recognize(filePath),firstText=first&&first.data&&first.data.text||'',currentRows=options.unbilled?require('./credit-card-accounting').parseUnbilledTransactions(firstText):[],firstRows=currentRows.length?currentRows:parseBankStatementText(firstText);if(currentRows.length)return currentRows;if(statementScreenshotRowsArePlausible(firstRows))return firstRows;await worker.setParameters({tessedit_pageseg_mode:'6',preserve_interword_spaces:'1'});const table=await worker.recognize(filePath),tableText=table&&table.data&&table.data.text||'',currentTableRows=options.unbilled?require('./credit-card-accounting').parseUnbilledTransactions(tableText):[],tableRows=currentTableRows.length?currentTableRows:parseBankStatementText(tableText);if(currentTableRows.length)return currentTableRows;return statementScreenshotRowsArePlausible(tableRows)?tableRows:firstRows;}finally{await worker.terminate();}}
   throw new Error('Use XLS, XLSX, CSV, PDF, PNG, JPG, WEBP, BMP or TIFF.');
 }
