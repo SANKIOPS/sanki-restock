@@ -31,7 +31,7 @@ function loadSources(directory, env = process.env) {
     manualSales: read('Manual sales', env.SALES_PATH || path.join(directory, 'sales.json'), {}, false, v => Array.isArray(v.sales)),
     opening: read('Verified opening SKU costs', path.join(directory, 'pnl-opening-inventory.json'), {}, false, v => Array.isArray(v.lots)),
     shopifyCosts: read('Shopify Cost per item', env.INVENTORY_SNAPSHOT_PATH || path.join(directory, 'inventory-snapshot.json'), { items: [] }, false, v => Number.isFinite(Date.parse(v.at)) && Array.isArray(v.items)),
-    lineCorrections: read('P&L-only item corrections', path.join(directory, 'pnl-line-corrections.json'), {}, false, v => v.schemaVersion === 1 && record(v.entries) && Array.isArray(v.history)),
+    lineCorrections: read('Results-only corrections', path.join(directory, 'pnl-line-corrections.json'), {}, false, v => v.schemaVersion === 1 && record(v.entries) && Array.isArray(v.history)),
     velocity: {
       index: read('Velocity automatic shipment discovery', path.join(orderDirectory, 'velocity_order_index.json'), {}, false, v => record(v.byOrder) && record(v.shipments)),
       tracking: read('Velocity carrier tracking', path.join(orderDirectory, 'velocity_tracking_evidence.json'), {}, false, v => record(v.shipments)),
@@ -43,7 +43,7 @@ function loadSources(directory, env = process.env) {
 function exportWorkbook(report) {
   const workbook = XLSX.utils.book_new();
   const summary = [
-    ['SANKI P&L'], ['From', report.range.from, 'To', report.range.to], ['Basis', report.basis],
+    ['SANKI Results'], ['From', report.range.from, 'To', report.range.to], ['Basis', report.basis],
     ['Channel', report.channel], ['Result status', report.totals.complete ? 'Complete' : 'Incomplete: review warnings'], [],
     ['Particulars', 'Selected period', 'Previous period'],
     ...[['Sales including GST before discounts', 'grossSales'], ['Discounts', 'discounts'], ['Returns / refunds', 'returns'], ['GST net of returns', 'gst'], ['Net sales excluding GST', 'netSales'], ['Other business income', 'otherIncome'], ['SKU COGS', 'cogs'], ['Gross profit', 'grossProfit'], ['Paid operating expenses', 'expenses'], ['Management profit / loss', 'netProfit']].map(([label, field]) => [label, report.totals[field] ?? 'Unavailable', report.previous?.totals[field] ?? 'Unavailable']),
@@ -51,9 +51,9 @@ function exportWorkbook(report) {
   ];
   const sheets = {
     Summary: summary,
-    Transactions: [['Date', 'Expense date', 'Type', 'Channel', 'Category', 'Particulars', 'Reference', 'Account', 'Method', 'P&L gross sales', 'Discounts', 'P&L returns', 'P&L-calculated GST', 'Net sales', 'Other income', 'Known COGS', 'Paid expense', 'Tax complete', 'Cost complete', 'Proof', 'Source invoice total (unchanged)', 'Source refund amount (unchanged)'], ...report.transactions.map(r => [r.date, r.expenseDate || '', r.kind, r.channel, r.category, r.particulars, r.reference, r.account, r.method, r.grossSales, r.discounts, r.returns, r.taxComplete ? r.gst : 'Unavailable', r.netSales ?? 'Unavailable', r.otherIncome, r.cogs, r.expenses, r.taxComplete, r.costComplete, r.proof, r.sourceInvoiceTotal ?? '', r.sourceRefundAmount ?? ''])],
+    Transactions: [['Date', 'Expense date', 'Type', 'Channel', 'Category', 'Particulars', 'Reference', 'Account', 'Method', 'Results gross sales', 'Discounts', 'Results returns', 'Results-calculated GST', 'Net sales', 'Other income', 'Known COGS', 'Paid expense', 'Tax complete', 'Cost complete', 'Proof', 'Source invoice total (unchanged)', 'Source refund amount (unchanged)', 'Source / report basis', 'Report-only confirmation', 'User-reported adjustment reference (not bank evidence)', 'Confirmation actor', 'Confirmation time', 'Confirmation reason'], ...report.transactions.map(r => {const fact=(r.details||[]).find(d=>d.reportOnly);return [r.date, r.expenseDate || '', r.kind, r.channel, r.category, r.particulars, r.reference, r.account, r.method, r.grossSales, r.discounts, r.returns, r.taxComplete ? r.gst : 'Unavailable', r.netSales ?? 'Unavailable', r.otherIncome, r.cogs, r.expenses, r.taxComplete, r.costComplete, r.proof, r.sourceInvoiceTotal ?? '', r.sourceRefundAmount ?? '',r.source||'',!!fact,fact?.adjustmentReference||'',fact?.actor||'',fact?.confirmedAt||'',fact?.reason||''];})],
     'SKU allocations': [['Date', 'Reference', 'SKU', 'Quantity', 'Purchase batch', 'Allocated quantity', 'Unit cost', 'Allocated cost'], ...report.transactions.flatMap(r => (r.details || []).flatMap(d => (d.allocations || []).map(a => [r.date, r.reference, a.sku || d.sku, d.components?.find(c => c.sku === a.sku)?.qty || d.qty, a.purchaseId, a.qty, a.unitCost, a.amount])))],
-    Tax: [['Date', 'Reference', 'SKU', 'Quantity', 'Channel', 'P&L inclusive amount', 'Invoice GST (reference only)', 'P&L-calculated GST', 'P&L included GST', 'Rate', 'Status'], ...report.taxes.map(r => [r.date, r.reference, r.sku, r.qty, r.channel, r.gross, r.recorded ?? 'Not provided', r.calculated ?? 'Unavailable', r.tax ?? 'Unavailable', r.rate ?? '', r.status])],
+    Tax: [['Date', 'Reference', 'SKU', 'Quantity', 'Channel', 'Results inclusive amount', 'Invoice GST (reference only)', 'Results-calculated GST', 'Results included GST', 'Rate', 'Status'], ...report.taxes.map(r => [r.date, r.reference, r.sku, r.qty, r.channel, r.gross, r.recorded ?? 'Not provided', r.calculated ?? 'Unavailable', r.tax ?? 'Unavailable', r.rate ?? '', r.status])],
     Collections: [['Order', 'Date', 'Channel', 'Order value', 'Collected from customer', 'Cash refunded', 'Uncollected balance', 'Customer advance held', 'Status'], ...report.collections.map(r => [r.reference, r.date, r.channel, r.orderValue, r.collected ?? 'Unavailable', r.cashRefunded, r.balanceToCollect ?? 'Unavailable', r.customerAdvance ?? 'Unavailable', r.status])],
     Warnings: [['Reference', 'Date', 'Area', 'Warning'], ...report.warnings.map(r => [r.reference, r.date || '', r.scope, r.message])],
     Policy: Object.entries(report.policy).map(([name, description]) => [name, description])
@@ -97,7 +97,7 @@ function createRouter({ read, clock = () => new Date(), correctionsFile } = {}) 
     return buildReport(sources, { from, to, start: START, channel: String(req.query.channel || 'All') });
   }
   const canEdit = req => ['admin','owner'].includes(String(req.user?.role || '').toLowerCase());
-  const correctionError = (res,error) => res.status(error.status || 500).json({success:false,error:error.status ? error.message : 'P&L item corrections could not be saved safely. No source financial records were changed.'});
+  const correctionError = (res,error) => res.status(error.status || 500).json({success:false,error:error.status ? error.message : 'Results corrections could not be saved safely. No source financial records were changed.'});
   router.get('/api/pl/report/line-corrections', (req,res)=>{
     try {
       const today=day(clock().toISOString()),from=String(req.query.from||START),to=String(req.query.to||today);
@@ -107,11 +107,11 @@ function createRouter({ read, clock = () => new Date(), correctionsFile } = {}) 
     }catch(error){correctionError(res,error);}
   });
   router.post('/api/pl/report/line-corrections/preview',(req,res)=>{
-    if(!canEdit(req))return res.status(403).json({success:false,error:'Only Admin or Owner can correct P&L item mappings.'});
+    if(!canEdit(req))return res.status(403).json({success:false,error:'Only Admin or Owner can save Results-only confirmations or item mappings.'});
     try {res.set('Cache-Control','no-store').json({success:true,items:lineCorrections.prepare((read||defaultRead)(),req.body?.items)});}catch(error){correctionError(res,error);}
   });
   router.post('/api/pl/report/line-corrections',(req,res)=>{
-    if(!canEdit(req))return res.status(403).json({success:false,error:'Only Admin or Owner can correct P&L item mappings.'});
+    if(!canEdit(req))return res.status(403).json({success:false,error:'Only Admin or Owner can save Results-only confirmations or item mappings.'});
     try {
       const file=correctionsFile||path.join(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname,'..'),'pnl-line-corrections.json');
       const result=lineCorrections.save(file,(read||defaultRead)(),req.body?.items,req.user.username,req.body?.note,clock().toISOString());
@@ -120,16 +120,16 @@ function createRouter({ read, clock = () => new Date(), correctionsFile } = {}) 
   });
   router.get('/api/pl/report', (req, res) => {
     try { res.set('Cache-Control', 'no-store').json(report(req)); }
-    catch (error) { res.status(error.status || 500).json({ success: false, error: error.status ? error.message : 'P&L could not be read safely. No accounting records were changed.' }); }
+    catch (error) { res.status(error.status || 500).json({ success: false, error: error.status ? error.message : 'Results could not be read safely. No accounting records were changed.' }); }
   });
   router.get('/api/pl/report/export', (req, res) => {
     try {
       const data = report(req);
       res.set('Cache-Control', 'no-store');
       res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.set('Content-Disposition', 'attachment; filename="SANKI_PnL_' + data.range.from + '_' + data.range.to + '.xlsx"');
+      res.set('Content-Disposition', 'attachment; filename="SANKI_Results_' + data.range.from + '_' + data.range.to + '.xlsx"');
       res.send(exportWorkbook(data));
-    } catch (error) { res.status(error.status || 500).json({ success: false, error: error.status ? error.message : 'P&L export could not be prepared. No accounting records were changed.' }); }
+    } catch (error) { res.status(error.status || 500).json({ success: false, error: error.status ? error.message : 'Results export could not be prepared. No accounting records were changed.' }); }
   });
   return router;
 }

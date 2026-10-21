@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="robots" content="noindex,nofollow"><title>P&L · SANKI</title>
+  <meta name="robots" content="noindex,nofollow"><title>Results · SANKI</title>
   <link rel="stylesheet" href="/pnl.css?v=20261008-collapsed-heads">
 </head>
 <body>
 <main class="wrap">
-  <header><div><h1>Profit & loss</h1><p class="muted">SANKI · Completed sales, SKU costs and paid operating expenses</p></div><a class="button" href="/expenses.html">Open ledgers</a></header>
+  <header><div><h1>Results</h1><p class="muted">SANKI · Completed sales, SKU costs and paid operating expenses</p></div><a class="button" href="/expenses.html">Open ledgers</a></header>
   <form id="filters" class="panel filters">
     <label>Business<select disabled aria-label="Business"><option>SANKI</option></select></label>
     <label>From<input id="from" name="from" type="date" min="2026-08-22" required></label>
@@ -19,9 +19,9 @@
   <div class="toolbar"><p id="rangeNote" class="muted"></p><div><button id="export" disabled>Export Excel</button><button id="print" disabled>Print / Save PDF</button></div></div>
   <p id="status" role="status" aria-live="polite">Loading report…</p>
   <section id="warnings" class="warning panel" hidden></section>
-  <section id="cards" class="cards" aria-label="P&L summary"></section>
+  <section id="cards" class="cards" aria-label="Results summary"></section>
   <nav class="tabs" aria-label="Report views">
-    <button type="button" data-tab="statement" aria-pressed="true">P&L report</button>
+    <button type="button" data-tab="statement" aria-pressed="true">Results report</button>
     <button type="button" data-tab="tax" aria-pressed="false">Tax & deductions</button>
     <button type="button" data-tab="collections" aria-pressed="false">Collections & COD</button>
     <button type="button" data-tab="trends" aria-pressed="false">Monthly trends</button>
@@ -32,26 +32,26 @@
   <section id="collections" class="panel view" hidden></section>
   <section id="trends" class="panel view" hidden></section>
   <section id="policy" class="panel view" hidden></section>
-  <details id="pnlCorrections" class="panel"><summary>Review P&amp;L-only item corrections</summary>
+  <details id="pnlCorrections" class="panel"><summary>Review Results-only item corrections</summary>
     <p>Map a missing SKU, split a combined SKU line, choose a duplicate SKU's exact variant, record a verified custom-item unit cost, or classify confirmed shipping and rounding. Bundle format: SKU-A:1, SKU-B:1. These audited corrections affect only this report. Shopify orders, invoices, stock, payments and reconciliations are never edited.</p>
     <button id="pnlCorrectionLoad" type="button">Load missing item lines</button>
     <input id="pnlCorrectionSearch" type="search" aria-label="Search item corrections" placeholder="Search order or item">
     <p id="pnlCorrectionStatus" role="status"></p><div id="pnlCorrectionRows"></div>
     <label>Reason for correction <input id="pnlCorrectionNote" maxlength="1000" placeholder="Required audit reason"></label>
     <button id="pnlCorrectionCheck" type="button" disabled>Preview selected corrections</button>
-    <div id="pnlCorrectionPreview"></div><button id="pnlCorrectionSave" type="button" disabled>Save reviewed P&amp;L corrections</button>
+    <div id="pnlCorrectionPreview"></div><button id="pnlCorrectionSave" type="button" disabled>Save reviewed Results corrections</button>
   </details>
-  <details id="pnlOrderCorrections" class="panel"><summary>Review P&amp;L-only cancelled orders</summary>
-    <p>Confirm an order was cancelled, or restore its original source status. This excludes a cancelled sale from P&amp;L without editing Shopify, stock or delivery records. Recorded customer collections and refunds remain visible; no refund or cancellation date is invented.</p>
+  <details id="pnlOrderCorrections" class="panel"><summary>Review Results-only order status and delivery dates</summary>
+    <p>Confirm an order was cancelled or delivered on an actual date, or restore its original source status. This affects Results without editing Shopify, stock or delivery records. Recorded customer collections and refunds remain visible; no refund, delivery or cancellation date is invented.</p>
     <label>Exact order reference <input id="pnlOrderReference" placeholder="#order number" maxlength="100"></label>
-    <label>P&amp;L treatment <select id="pnlOrderTreatment"><option value="cancelled">Confirmed cancelled · exclude sale</option><option value="delivered">Confirmed delivered · actual date</option><option value="source_status">Restore original source status</option></select></label>
+    <label>Results treatment <select id="pnlOrderTreatment"><option value="cancelled">Confirmed cancelled · exclude sale</option><option value="delivered">Confirmed delivered · actual date</option><option value="source_status">Restore original source status</option></select></label>
     <label>Actual delivery date (delivered treatment only) <input id="pnlOrderDate" type="date"></label>
     <button id="pnlOrderPreviewButton" type="button">Preview order treatment</button>
     <p id="pnlOrderPreview" role="status"></p>
-    <label>Cancellation confirmation / reason <input id="pnlOrderNote" maxlength="1000" placeholder="Required audit reason"></label>
-    <button id="pnlOrderSave" type="button" disabled>Save P&amp;L-only order treatment</button>
+    <label>Status or delivery confirmation / reason <input id="pnlOrderNote" maxlength="1000" placeholder="Required audit reason"></label>
+    <button id="pnlOrderSave" type="button" disabled>Save Results-only order treatment</button>
   </details>
-  <details id="pnlManualCorrections" class="panel"><summary>Review P&amp;L-only manual-sale costs</summary>
+  <details id="pnlManualCorrections" class="panel"><summary>Review Results-only manual-sale costs</summary>
     <p>Record the confirmed quantity and per-unit COGS for an existing manual-sale receipt. No receipt, payment or stock is changed. Leave the GST fields blank until the non-garment tax rate and price basis are confirmed.</p>
     <label>Exact manual sale reference <input id="pnlManualReference" maxlength="150"></label>
     <label>Quantity sold <input id="pnlManualQty" type="number" min="1" step="1" value="1"></label>
@@ -60,12 +60,23 @@
     <label>Confirmed price basis <select id="pnlManualBasis"><option value="">Not confirmed</option><option value="inclusive">GST inclusive</option><option value="exclusive">GST exclusive</option></select></label>
     <button id="pnlManualPreviewButton" type="button">Preview manual-sale correction</button><p id="pnlManualPreview" role="status"></p>
     <label>Confirmation / reason <input id="pnlManualNote" maxlength="1000"></label>
-    <button id="pnlManualSave" type="button" disabled>Save P&amp;L-only manual-sale correction</button>
+    <button id="pnlManualSave" type="button" disabled>Save Results-only manual-sale correction</button>
   </details>
-  <p class="muted footnote">Management report: SKU COGS is recognised when sold, even if the supplier is unpaid. Other expenses use approved payments only. No April figures are used.</p>
+  <details id="pnlExpenseCorrections" class="panel"><summary>Review Results-only paid-expense confirmations</summary>
+    <p>Confirm a paid amount and actual reimbursement date for an existing approved company expense whose payment evidence is excluded. This is management-report evidence only, not a bank posting or approval of any adjustment. Source payments and reconciliations remain unchanged. Existing eligible payments take priority so the expense is not counted twice.</p>
+    <label>Expense reference<input id="pnlExpenseReference" placeholder="EX-00000" maxlength="100"></label>
+    <label>Confirmed total paid expense (₹)<input id="pnlExpenseAmount" type="number" min="0.01" step="0.01"></label>
+    <label>Actual reimbursement/payment date<input id="pnlExpenseDate" type="date"></label>
+    <label>Related adjustment reference (user-reported only, optional)<input id="pnlExpenseAdjustment" maxlength="200"></label>
+    <button id="pnlExpenseCheck" type="button">Preview expense confirmation</button><div id="pnlExpensePreview"></div>
+    <label>Reason / confirmation evidence<textarea id="pnlExpenseNote" maxlength="1000"></textarea></label>
+    <button id="pnlExpenseSave" type="button" disabled>Save Results-only expense confirmation</button><p id="pnlExpenseStatus" role="status"></p>
+  </details>
+  <p class="muted footnote">Management report: SKU COGS is recognised when sold, even if the supplier is unpaid. Other expenses use approved payments or explicitly audited Results-only paid-expense confirmations. No April figures are used.</p>
 </main>
 <dialog id="details" aria-labelledby="detailTitle"><header><h2 id="detailTitle">Transactions</h2><button id="closeDetails" aria-label="Close transaction details">Close</button></header><div id="detailBody"></div></dialog>
-<script src="/navigation-state.js?v=bb4a39520dbd"></script><script src="/sidebar.js"></script><script src="/pnl.js?v=f29a289f7ad7"></script>
-<script src="/pnl-corrections.js?v=20261021-combined"></script>
-<script src="/pnl-order-corrections.js?v=20261018-3"></script>
+<script src="/navigation-state.js?v=bb4a39520dbd"></script><script src="/sidebar.js"></script><script src="/pnl.js?v=06389dd1b743"></script>
+<script src="/pnl-corrections.js?v=ec80a6c27e88"></script>
+<script src="/pnl-order-corrections.js?v=1883820e27a6"></script>
+<script src="/pnl-expense-corrections.js?v=9be73ada7f24"></script>
 </body></html>

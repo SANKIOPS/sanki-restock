@@ -190,7 +190,7 @@
       if (!result.success) throw new Error(result.error);
       preview = payload;
       var p = result.preview, pending = payload.status === 'pending', reviewed = p.already || p;
-      node('rf_preview').innerHTML = '<div class="rf-preview"><h3 style="margin-top:0">Review before confirming</h3><p><b>' + amount(reviewed.amount) + '</b> · ' + esc(payload.date) + ' · ' + esc(payload.reason) + '</p>' + (pending ? '<p>Return pending: no cash, bank, vendor balance or P&amp;L posting yet.</p>' : '<p>Bill / expense reduction: ' + amount(result.impact.billCredit) + '</p>' + reviewed.components.map(previewComponent).join('')) + '<p class="hint">The original bill and payment history are preserved. Server checks run again when you confirm.</p></div>';
+      node('rf_preview').innerHTML = '<div class="rf-preview"><h3 style="margin-top:0">Review before confirming</h3><p><b>' + amount(reviewed.amount) + '</b> · ' + esc(payload.date) + ' · ' + esc(payload.reason) + '</p>' + (pending ? '<p>Return pending: no cash, bank, vendor balance or Results posting yet.</p>' : '<p>Bill / expense reduction: ' + amount(result.impact.billCredit) + '</p>' + reviewed.components.map(previewComponent).join('')) + '<p class="hint">The original bill and payment history are preserved. Server checks run again when you confirm.</p></div>';
       node('rf_save').disabled = false; message('Review is valid. Confirm below to record it.', true);
     } catch (error) { message(error.message, false); }
     finally { lockForm(false); node('rf_save').disabled = !preview; }

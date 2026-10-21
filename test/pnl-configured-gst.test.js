@@ -16,12 +16,12 @@ function fixture(overrides = {}) {
 const run = (sources, options = {}) => buildReport(sources, { from: '2026-10-01', to: '2026-10-18', ...options });
 const freeze = object => { if (object && typeof object === 'object') { Object.values(object).forEach(freeze); Object.freeze(object); } return object; };
 
-test('recorded GST, invoice rate and exempt flag never choose or override P&L garment GST', () => {
+test('recorded GST, invoice rate and exempt flag never choose or override Results garment GST', () => {
   for (const recorded of [0, 95.18, 304.94, 9000]) {
     const tax = lineTax({ qty: 1, price: 1999, taxable: false, taxLines: [{ rate: .99, price: recorded }] });
     assert.equal(tax.valid, true); assert.equal(tax.tax, 95.19); assert.equal(tax.calculated, 95.19);
     assert.equal(tax.rate, .05); assert.equal(tax.gross, 1999); assert.equal(tax.recorded, recorded);
-    assert.equal(tax.status, 'P&L configured GST');
+    assert.equal(tax.status, 'Results configured GST');
   }
 });
 
@@ -58,7 +58,7 @@ test('inclusive final selling-price boundary is tested per piece after discount,
   assert.equal(lineTax({ qty: 0, price: 1999, taxable: false }).valid, false);
 });
 
-test('P&L becomes tax complete despite mismatched invoice GST without editing source data', () => {
+test('Results becomes tax complete despite mismatched invoice GST without editing source data', () => {
   const sources = fixture(), before = JSON.stringify(sources), report = run(freeze(sources));
   assert.equal(report.totals.gst, 95.19); assert.equal(report.totals.netSales, 1903.81);
   assert.equal(report.totals.netProfit, 1403.81); assert.equal(report.totals.complete, true);
@@ -86,12 +86,12 @@ test('missing inventory costs still block profit, and unrelated missing-date war
   report = run(sources); assert.ok(report.warnings.some(w => /actual date is missing/.test(w.message)));
 });
 
-test('full item refund reverses original P&L GST, not its higher invoice tax', () => {
+test('full item refund reverses original Results GST, not its higher invoice tax', () => {
   const sources = fixture({ refunds: [{ id: 'RF', date: '2026-10-03', amount: 1999, lineItems: [{ lineItemId: 'L', qty: 1, subtotal: 1694.06, tax: 304.94, restockType: 'return' }] }] });
   const before = JSON.stringify(sources), report = run(freeze(sources));
   assert.equal(report.totals.gst, 0); assert.equal(report.totals.netSales, 0);
   assert.equal(report.totals.cogs, 0); assert.equal(report.totals.netProfit, 0);
-  const refund = report.taxes.find(t => t.status === 'Original P&L GST reversed');
+  const refund = report.taxes.find(t => t.status === 'Original Results GST reversed');
   assert.equal(refund.recorded, -304.94); assert.equal(refund.calculated, -95.19);
   assert.equal(JSON.stringify(sources), before);
 });

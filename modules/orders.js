@@ -527,7 +527,7 @@ router.post('/api/orders-ledger/:id/dispatch', (req, res) => {
   const cur = store.dispatch[id] || {};
   const deliveredAt = b.deliveredAt || cur.deliveredAt || null;
   if (b.deliveredAt && (!validDate(String(b.deliveredAt)) || b.deliveredAt > accountingDay(new Date().toISOString()) || b.deliveredAt < accountingDay(store.orders[id].createdAt))) return res.status(400).json({ success: false, error: 'Use a valid actual delivery date between the order date and today.' });
-  if (b.packingStatus === 'delivered' && !deliveredAt && !store.orders[id].completedAt) return res.status(400).json({ success: false, error: 'Enter the actual delivery date. P&L must not use the date this form was edited.' });
+  if (b.packingStatus === 'delivered' && !deliveredAt && !store.orders[id].completedAt) return res.status(400).json({ success: false, error: 'Enter the actual delivery date. Results must not use the date this form was edited.' });
   const next = {
     velocityAwb:       cur.velocityAwb || '',
     courier:           b.courier != null ? String(b.courier).trim() : (cur.courier || ''),

@@ -10,6 +10,41 @@ const validDay = d => /^\d{4}-\d{2}-\d{2}$/.test(String(d||''))&&!Number.isNaN(D
 const canonicalSku = sku => String(sku || '').trim().toUpperCase();
 const dateOf = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value||'')) ? value : Number.isFinite(Date.parse(value)) ? new Date(Date.parse(value)+19800000).toISOString().slice(0,10) : '';
 const fail = message => { throw Object.assign(Error(message), {status:409}); };
+const list = value => Array.isArray(value)?value:Object.values(value||{});
+const money = value => Math.round((Number(value)+Number.EPSILON)*100)/100;
+const activeExpenseDraft = (record,books) => !!(record&&(record.bankReconciliationDraft&&books.bankReconciliationDrafts?.[record.bankReconciliationDraft]||record.reconciliationDraft&&books.bankReconciliationDrafts?.[record.reconciliationDraft]));
+const expenseConfirmationKey = id => key('expense:'+id,'$expense');
+// Separate from the legacy order/line hashes: existing private annotations
+// retain their original fingerprints. The expense snapshot is evidence, not
+// permission to restore its excluded payment or to post money to an account.
+const expenseHash = expense => crypto.createHash('sha256').update(JSON.stringify([expense.id,expense.date,expense.nature,expense.amount,expense.paidAmount,expense.status,expense.accountingExcluded||false,expense.ownerOnly||false,expense.nonExpenseReimbursement||false,expense.salaryAdvanceId||'',expense.inventoryPurchase||false,expense.procurementPoId||'',expense.purchaseOrderId||'',expense.reconciliationDraft||'',expense.bankReconciliationDraft||'',(expense.payments||[]).map(p=>[p.id,p.amount,p.date||p.paidAt,p.account||'',p.voided||false,p.accountingExcluded||false,p.bankReconciliationDraft||'']).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))),(expense.vendorAdvanceApplications||[]).map(p=>[p.id,p.amount,p.date,p.vendorAdvanceId,p.voided||false,p.accountingExcluded||false])])).digest('hex');
+function expenseGuard(expense,books) {
+ if(!expense||!['SANKI','A3'].includes(String(expense.nature||'').toUpperCase())||expense.ownerOnly||expense.accountingExcluded||expense.nonExpenseReimbursement||expense.salaryAdvanceId||expense.inventoryPurchase||expense.procurementPoId||expense.purchaseOrderId||!['approved','partially_paid','paid'].includes(expense.status)||!Number.isFinite(Number(expense.amount))||!Number.isFinite(Number(expense.paidAmount))||!(Number(expense.amount)>0)||!(Number(expense.paidAmount)>0)||!validDay(expense.date)||expense.date<'2026-08-22')fail('Choose an existing approved, paid business operating expense. Private, excluded, unpaid, inventory and balance-sheet entries cannot be confirmed here.');
+ if(activeExpenseDraft(expense,books)||(expense.payments||[]).some(p=>activeExpenseDraft(p,books))||(expense.vendorAdvanceApplications||[]).some(p=>activeExpenseDraft(list(books.vendorAdvances).find(a=>a.id===p.vendorAdvanceId),books)))fail('This expense still has provisional reconciliation evidence. Complete its existing approval workflow; a Results confirmation cannot bypass it.');
+}
+function eligibleExpensePaidAmount(expense,books={}) {
+ const regular=(expense.payments||[]).filter(p=>!p.voided&&!p.accountingExcluded&&!activeExpenseDraft(p,books)).map((p,i)=>({...p,id:p.id||'PAY-LEGACY/'+i}));
+ const advances=(expense.vendorAdvanceApplications||[]).map((p,i)=>({...p,id:'ADV-APPLICATION/'+(p.id||(p.vendorAdvanceId||'LEGACY')+'/'+(p.batchPaymentId||p.appliedAt||i))})).filter(p=>!p.voided&&!p.accountingExcluded&&!activeExpenseDraft(list(books.vendorAdvances).find(a=>a.id===p.vendorAdvanceId)||{},books));
+ const payments=[...regular,...advances].sort((a,b)=>dateOf(a.date||a.paidAt).localeCompare(dateOf(b.date||b.paidAt))||String(a.id).localeCompare(String(b.id))),seen=new Set();
+ let remaining=Math.max(0,Number(expense.amount)||0),recognized=0;const today=dateOf(new Date().toISOString());
+ for(const p of payments){if(seen.has(p.id)||!Number.isFinite(Number(p.amount))||!(Number(p.amount)>0))continue;seen.add(p.id);const included=Math.min(remaining,Number(p.amount));remaining-=included;const date=dateOf(p.date||p.paidAt);if(validDay(date)&&date>='2026-08-22'&&date<=today)recognized+=included;}
+ return money(recognized);
+}
+function resolveExpenseConfirmation(expense,sources={}) {
+ const entry=sources.lineCorrections?.entries?.[expenseConfirmationKey(expense.id)];
+ if(!entry)return {entry:null,amount:0,issues:[]};
+ const issues=[],bad=message=>({entry,amount:0,issues:[message]});
+ try{expenseGuard(expense,sources.expenses||{});}catch(error){return bad(error.message);}
+ if(entry.type!=='expense_confirmation'||entry.expenseId!==expense.id||!Number.isFinite(entry.amount)||!(entry.amount>0)||money(entry.amount)!==entry.amount)return bad('Results expense confirmation is invalid; the original financial records were not changed.');
+ const eligible=eligibleExpensePaidAmount(expense,sources.expenses||{});
+ // Source payments have priority across ALL dates, not merely this selected
+ // report period. A later restored payment supersedes the annotation, rather
+ // than appearing once on each date or in two different monthly reports.
+ if(eligible>=entry.amount)return {entry,amount:0,issues,superseded:true};
+ if(entry.fingerprint!==expenseHash(expense))return bad('Results expense confirmation no longer matches its source expense/payment evidence. Preview it again; financial records remain unchanged.');
+ if(entry.amount>Math.min(Number(expense.amount),Number(expense.paidAmount))||!validDay(entry.paymentDate)||entry.paymentDate<expense.date||entry.paymentDate<'2026-08-22'||entry.paymentDate>dateOf(new Date().toISOString()))return bad('Results expense amount or actual payment date conflicts with the existing paid expense. Review the confirmation.');
+ return {entry,amount:money(Math.max(0,entry.amount-eligible)),date:entry.paymentDate,eligiblePaidAmount:eligible,issues};
+}
 const costMatches = (sources, sku) => (sources.shopifyCosts?.items||[]).filter(i=>i&&canonicalSku(i.sku)===canonicalSku(sku));
 const costCurrency = item => item.unitCostCurrency||item.currency||'INR';
 const duplicateSku = items => new Set(items.map(i=>String(i.id||'')+'\0'+i.unitCost+'\0'+costCurrency(i))).size>1;
@@ -37,6 +72,20 @@ function prepare(sources, items, requireFingerprint=false) {
  if(!Array.isArray(items)||!items.length||items.length>100) fail('Choose between 1 and 100 item corrections.');
  const seen=new Set();
  return items.map(input=>{
+  if(input.type==='expense_confirmation'){
+   const reference=String(input.reference||input.expenseId||'').trim(),books=sources.expenses||{},matches=list(books.expenses).filter(e=>String(e.id||'').toUpperCase()===reference.toUpperCase());
+   if(!reference||matches.length!==1)fail('Enter the exact existing expense reference.');
+   const expense=matches[0],id=expenseConfirmationKey(expense.id);expenseGuard(expense,books);
+   if(seen.has(id))fail('The same expense confirmation was selected twice.');seen.add(id);
+   const amount=Number(input.amount),paymentDate=String(input.paymentDate||''),adjustmentReference=String(input.adjustmentReference||'').trim(),fingerprint=expenseHash(expense);
+   if(!Number.isFinite(amount)||amount<=0||amount>10000000||money(amount)!==amount||amount>Math.min(Number(expense.amount),Number(expense.paidAmount)))fail('Confirm a positive amount with at most two decimals, no greater than the existing bill and source paid total.');
+   if(!validDay(paymentDate)||paymentDate<expense.date||paymentDate<'2026-08-22'||paymentDate>dateOf(new Date().toISOString()))fail('Confirm the actual reimbursement/payment date, not before the expense, accounting start, or after today.');
+   if(adjustmentReference.length>200)fail('The optional user-reported adjustment reference must be at most 200 characters.');
+   if(requireFingerprint&&input.fingerprint!==fingerprint)fail('Expense or source payment evidence changed since preview. Preview the confirmation again.');
+   const eligiblePaidAmount=eligibleExpensePaidAmount(expense,books),reportOnlyAmount=money(Math.max(0,amount-eligiblePaidAmount));
+   if(!reportOnlyAmount)fail('Existing eligible source payments already cover this amount; no additional Results expense is needed.');
+   return {orderId:'expense:'+expense.id,lineId:'$expense',type:'expense_confirmation',expenseId:expense.id,reference:expense.id,title:expense.particulars||expense.vendor||'Existing paid expense',amount,paymentDate,adjustmentReference,adjustmentReferenceBasis:'User-reported only; not verified bank or adjustment evidence',fingerprint,expectedExpenseAmount:Number(expense.amount),sourcePaidAmount:Number(expense.paidAmount),eligiblePaidAmount,reportOnlyAmount};
+  }
   if(input.type==='manual_cost') {
    const reference=String(input.reference||input.manualId||'').trim();
    const receipts=Object.values(sources.expenses?.receipts||[]).filter(r=>r.receiptType==='product_sale'&&!r.orderId&&!r.shopifyOrderId&&!r.accountingExcluded&&['SANKI','A3'].includes(r.nature)&&String(r.manualSaleId||r.id)===reference);
@@ -59,10 +108,10 @@ function prepare(sources, items, requireFingerprint=false) {
    if(seen.has(id)||!dateOf(order.processedAt||order.createdAt)||dateOf(order.processedAt||order.createdAt)<'2026-08-22'||order.accountingExcluded)fail('Duplicate, excluded, undated or pre-accounting-start orders cannot be corrected here.');
    if(requireFingerprint&&input.fingerprint!==orderHash(order))fail('Order identity changed since preview. Preview it again before saving.');
    seen.add(id);
-   const entry={orderId:String(order.id),lineId:'$order',type:input.type,reference:order.name||String(order.id),fingerprint:orderHash(order),createdDate:dateOf(order.createdAt),title:input.type==='cancelled'?'Confirmed cancelled; exclude sale from P&L':'Use original source completion status'};
+   const entry={orderId:String(order.id),lineId:'$order',type:input.type,reference:order.name||String(order.id),fingerprint:orderHash(order),createdDate:dateOf(order.createdAt),title:input.type==='cancelled'?'Confirmed cancelled; exclude sale from Results':'Use original source completion status'};
    if(input.type==='delivered'){
     if(!validDay(input.deliveryDate)||input.deliveryDate<dateOf(order.createdAt||order.processedAt)||input.deliveryDate<dateOf(order.processedAt||order.createdAt)||input.deliveryDate>dateOf(new Date().toISOString())||order.cancelledAt)fail('Delivery date must be real, not before the order, not in the future, and not on a cancelled source order.');
-    entry.deliveryDate=input.deliveryDate;entry.title='Confirmed delivered '+input.deliveryDate+'; recognize P&L on actual delivery';
+    entry.deliveryDate=input.deliveryDate;entry.title='Confirmed delivered '+input.deliveryDate+'; recognize Results on actual delivery';
    }
    return entry;
   }
@@ -104,7 +153,7 @@ function prepare(sources, items, requireFingerprint=false) {
  });
 }
 function read(file) {
- try { const value=JSON.parse(fs.readFileSync(file,'utf8'));if(value.schemaVersion!==1||!value.entries||Array.isArray(value.entries)||typeof value.entries!=='object'||!Array.isArray(value.history)) fail('The P&L item-correction store requires review; it was not replaced.');return value; }
+ try { const value=JSON.parse(fs.readFileSync(file,'utf8'));if(value.schemaVersion!==1||!value.entries||Array.isArray(value.entries)||typeof value.entries!=='object'||!Array.isArray(value.history)) fail('The Results item-correction store requires review; it was not replaced.');return value; }
  catch(error){if(error.code==='ENOENT') return {schemaVersion:1,entries:{},history:[]};throw error;}
 }
 function save(file, sources, items, actor, note, at=new Date().toISOString()) {
@@ -121,15 +170,15 @@ function resolveOrder(order, store={}) {
  const status=store.entries?.[key(order.id,'$order')];
  let pnlCancelled=false,pnlDeliveryDate='';
  if(status) {
-  if(status.fingerprint!==orderHash(order)||!['cancelled','source_status','delivered'].includes(status.type))issues.push('P&L order-status correction no longer matches the source order. Review it again.');
+  if(status.fingerprint!==orderHash(order)||!['cancelled','source_status','delivered'].includes(status.type))issues.push('Results order-status correction no longer matches the source order. Review it again.');
   else if(status.type==='delivered') {
-   if(!validDay(status.deliveryDate)||status.deliveryDate<dateOf(order.createdAt||order.processedAt)||order.cancelledAt)issues.push('P&L delivery confirmation conflicts with the source order. Review it again.');
+   if(!validDay(status.deliveryDate)||status.deliveryDate<dateOf(order.createdAt||order.processedAt)||order.cancelledAt)issues.push('Results delivery confirmation conflicts with the source order. Review it again.');
    else pnlDeliveryDate=status.deliveryDate;
   } else pnlCancelled=status.type==='cancelled';
  }
  const lineItems=(order.lineItems||[]).map(line=>{
   const entry=store.entries?.[key(order.id,line.id)];if(!entry)return line;
-  if(entry.fingerprint!==hash(line)||canonicalSku(line.sku)&&entry.type!=='sku_identity'){issues.push('P&L correction no longer matches source line '+line.id+'. Review it again; source data was not overridden.');return line;}
+  if(entry.fingerprint!==hash(line)||canonicalSku(line.sku)&&entry.type!=='sku_identity'){issues.push('Results correction no longer matches source line '+line.id+'. Review it again; source data was not overridden.');return line;}
   if(entry.type==='sku_identity'&&canonicalSku(line.sku)&&canonicalSku(entry.sku)===canonicalSku(line.sku)&&String(entry.inventoryItemId||''))return {...line,pnlInventoryItemId:String(entry.inventoryItemId),pnlCorrection:entry};
   if(entry.type==='sku' && canonicalSku(entry.sku))return {...line,sku:canonicalSku(entry.sku),pnlCorrection:entry};
   if(entry.type==='bundle'&&Array.isArray(entry.components)&&entry.components.length&&entry.components.every(c=>canonicalSku(c.sku)&&Number.isInteger(c.qty)&&c.qty>0&&String(c.inventoryItemId||''))&&new Set(entry.components.map(c=>canonicalSku(c.sku))).size===entry.components.length&&entry.components.reduce((n,c)=>n+c.qty,0)===Number(line.qty))return {...line,pnlComponents:entry.components.map(c=>({...c,sku:canonicalSku(c.sku)})),pnlCorrection:entry};
@@ -137,8 +186,8 @@ function resolveOrder(order, store={}) {
   if(entry.type==='shipping')return {...line,pnlKind:'shipping',pnlUnitCost:0,pnlCorrection:entry};
   if(entry.type==='shipping_no_tax')return {...line,pnlKind:'shipping',pnlShippingTaxZero:true,pnlUnitCost:0,pnlCorrection:entry};
   if(entry.type==='rounding')return {...line,pnlKind:'rounding',pnlUnitCost:0,pnlCorrection:entry};
-  issues.push('Invalid P&L correction for source line '+line.id+'.');return line;
+  issues.push('Invalid Results correction for source line '+line.id+'.');return line;
  });
  return {order:{...order,lineItems,pnlCancelled,pnlDeliveryDate,pnlStatusCorrection:pnlCancelled||pnlDeliveryDate?status:null},issues};
 }
-module.exports={key,hash,orderHash,manualHash,reviewRows,prepare,read,save,resolveOrder};
+module.exports={key,hash,orderHash,manualHash,expenseHash,expenseConfirmationKey,eligibleExpensePaidAmount,resolveExpenseConfirmation,reviewRows,prepare,read,save,resolveOrder};

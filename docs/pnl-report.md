@@ -1,6 +1,6 @@
-# Management P&L
+# Management Results
 
-Accounts → P&L is `/pnl.html`. It is separate from the legacy percentage-based
+Accounts → Results is `/pnl.html`. It is separate from the legacy percentage-based
 `/accounting.html` and its unit-economics assumptions. Only Owner, Admin and
 SANKI Accounting can read the new report and export. Existing custom page
 permissions remain respected.
@@ -27,7 +27,7 @@ permissions remain respected.
   ₹2,500 uses 18%. GST-inclusive prices are divided by `(1 + rate)`. For an
   missing price basis or missing shipping tax,
   profit remains unavailable until reviewed. Garment GST is calculated exclusively
-  by this P&L policy: invoice rates, recorded GST differences and Shopify exempt
+  by this Results policy: invoice rates, recorded GST differences and Shopify exempt
   flags never override it or block profit by themselves. Source invoice GST is
   retained for reference only. Tax invoices, Shopify, actual collections and all
   other accounting/ledger calculations are never altered by this report.
@@ -45,7 +45,7 @@ permissions remain respected.
   Missing, zero, negative, non-INR and duplicate-SKU costs remain exceptions.
   Sale quantity multiplies unit cost regardless of supplier payment or today's
   available stock. No opening quantities or purchase lots are invented.
-  Current synced cost changes restate management P&L history; this is not a
+  Current synced cost changes restate management Results history; this is not a
   frozen historical stock valuation. Refunds reverse the original sale's
   allocation. Purchase advances/payables are not extra operating expenses.
   The pure report builder retains legacy verified FIFO behavior only when
@@ -61,7 +61,7 @@ permissions remain respected.
   including received vouchers. Pending refunds, unpaid-only credit notes and
   returned unallocated advances do not reduce paid operating costs. Linked
   card credits and refund receipts are not counted a second time.
-- Dated credit notes reduce sales and reverse the original P&L-calculated GST,
+- Dated credit notes reduce sales and reverse the original Results-calculated GST,
   not the source refund tax or a newly selected slab. Cumulative quantity/tax
   allocations prevent duplicate or excessive reversals; partial value credits
   follow their documented fraction of the original line. Only physically restocked SKU quantities
@@ -105,7 +105,7 @@ ledger. Source sync time is disclosed in Rules & sources.
 
 ## Views and export
 
-Filters: date range, quick periods and sales channel. Views: P&L with previous
+Filters: date range, quick periods and sales channel. Views: Results with previous
 period, tax/deductions, customer collections/COD, monthly trends and policies.
 Totals/categories open their underlying transactions and SKU purchase lots.
 Excel export includes Summary, Transactions, SKU allocations, Tax,
@@ -117,7 +117,7 @@ GET `/api/pl/report/export` with the same filters. Both use no-store caching,
 validate dates and refuse future end dates. These report reads never modify
 source financial records.
 
-## P&L-only missing-item corrections
+## Results-only missing-item corrections
 
 The collapsed item-review panel can map an originally blank order-line SKU
 to a unique positive-cost Shopify SKU, record a verified custom-item per-unit
@@ -143,7 +143,7 @@ Shopify order, invoice, stock, expense, payment or reconciliation store is
 edited. Business-specific corrections are private runtime data, never
 hardcoded into the public source repository.
 
-### Confirmed cancelled orders (P&L only)
+### Confirmed cancelled orders (Results only)
 
 Admin and Owner can preview an exact order reference and save an audited
 `cancelled` order-status annotation through the same private correction
@@ -206,6 +206,6 @@ The wider suite completed with 966 passing tests and four existing failures
 in the bank-transfer review, consolidated payment selector, inventory photo
 search authorization assertion and owner-only category UI assertion. The
 affected source assertions are unchanged from the main-branch baseline.
-Focused P&L, navigation, authorization and refund/incentive checks pass;
+Focused Results, navigation, authorization and refund/incentive checks pass;
 this is not a claim of a fully green legacy suite. No accounting records
 were edited to produce this report.

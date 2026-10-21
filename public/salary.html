@@ -70,7 +70,7 @@
 <body>
   <div class="wrap">
     <h1 id="salaryTitle">SANKI Salary &amp; Attendance</h1>
-    <p class="sub">Earned salary starts at <b>salary ÷ 30 × paid days</b>; the Owner may set a final amount with a reason. Record salary payments from Axis Bank 3448 or another authorized bank/cash source separately with proof. Earned salary posts to the P&amp;L Fixed Cost, channel-tagged.</p>
+    <p class="sub">Earned salary starts at <b>salary ÷ 30 × paid days</b>; the Owner may set a final amount with a reason. Record salary payments from Axis Bank 3448 or another authorized bank/cash source separately with proof. Earned salary posts to the Results Fixed Cost, channel-tagged.</p>
 
     <div class="tabs" id="salaryEntities" style="margin-bottom:12px">
       <button data-entity="SANKI" class="on">SANKI Salary</button>
@@ -434,7 +434,7 @@
             '<div class="fld"><label>Last working date (optional)</label><input id="ne_lastworking" type="date"></div>'+
             '<div class="fld" style="justify-content:flex-end"><button class="btn" id="addEmp">＋ Add employee</button></div>'+
           '</div></div>'+
-          '<div class="conf">Channel decides which P&amp;L column the salary lands in — <b>POS</b> (store), <b>Website</b> (content/fulfilment), or <b>Shared</b> (split by revenue share).</div>';
+          '<div class="conf">Channel decides which Results column the salary lands in — <b>POS</b> (store), <b>Website</b> (content/fulfilment), or <b>Shared</b> (split by revenue share).</div>';
         el('addEmp').addEventListener('click', function(){
           var b = { name:el('ne_name').value.trim(), post:el('ne_post').value.trim(), salary:el('ne_salary').value, channel:el('ne_channel').value, weekOffDay:el('ne_weekoff').value, monthlyPaidLeaveAllowance:el('ne_paidleaves').value, joiningDate:el('ne_joining').value, lastWorkingDate:el('ne_lastworking').value };
           if(!b.name){ flash('Name required.', false); return; }

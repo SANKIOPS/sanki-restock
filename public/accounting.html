@@ -91,7 +91,7 @@
       .stat { min-width:44%; padding:11px 13px; }
       .stat .v { font-size:19px; }
       .tabs button { flex:1; padding:11px 8px; font-size:13px; }
-      /* 4-column P&L / UE matrices don't stack — let the card scroll sideways. */
+      /* 4-column Results / UE matrices don't stack — let the card scroll sideways. */
       .card { overflow-x:auto; -webkit-overflow-scrolling:touch; }
       table.pl { font-size:12.5px; min-width:520px; }
       table.pl th, table.pl td { padding:9px 10px; }
@@ -107,7 +107,7 @@
 <body>
   <div class="wrap">
     <h1>Accounting</h1>
-    <p class="sub">Live P&amp;L from your Shopify sales — split POS · Website · Combined. Replaces the "Till Date P&amp;L" sheet.</p>
+    <p class="sub">Live Results from your Shopify sales — split POS · Website · Combined. Replaces the "Till Date Results" sheet.</p>
 
     <div class="controls">
       <div class="fld"><label>From</label><input type="date" id="from" /></div>
@@ -121,7 +121,7 @@
     </div>
 
     <div class="tabs" id="tabs">
-      <button data-v="pl" class="on">P&amp;L</button>
+      <button data-v="pl" class="on">Results</button>
       <button data-v="ue">Unit Economics</button>
     </div>
 
@@ -185,7 +185,7 @@
     el('from').addEventListener('change', function(){ state.from=this.value; state.quick=''; Array.prototype.forEach.call(el('quick').children,function(b){b.classList.remove('on');}); load(); });
     el('to').addEventListener('change', function(){ state.to=this.value; state.quick=''; Array.prototype.forEach.call(el('quick').children,function(b){b.classList.remove('on');}); load(); });
 
-    // Tab switch between P&L and Unit Economics (both share the date range).
+    // Tab switch between Results and Unit Economics (both share the date range).
     el('tabs').addEventListener('click', function(e){
       if(!e.target.dataset.v) return;
       state.view = e.target.dataset.v;
@@ -270,7 +270,7 @@
       fetch('/api/pl/summary?from='+state.from+'&to='+state.to)
         .then(function(r){ return r.json(); })
         .then(function(d){ if(d && d.success) render(d); else { el('tableHost').innerHTML='<div class="loading">No data.</div>'; } })
-        .catch(function(){ el('tableHost').innerHTML='<div class="loading">Could not load P&amp;L.</div>'; });
+        .catch(function(){ el('tableHost').innerHTML='<div class="loading">Could not load Results.</div>'; });
     }
 
     // ── Unit Economics ──

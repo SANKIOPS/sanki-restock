@@ -213,7 +213,7 @@
 <body>
   <div class="wrap">
     <h1>Ledgers</h1>
-    <p class="sub">Log → approve (bill proof) → pay (payment proof). Only approved business expenses reach the P&amp;L.</p>
+    <p class="sub">Log → approve (bill proof) → pay (payment proof). Only approved business expenses reach the Results.</p>
     <div id="ledgerReconciliationAttention" class="ledger-recon-alert" role="status" aria-live="polite"></div>
 
     <div class="tabs" id="tabs">
@@ -410,7 +410,7 @@
     <div id="brOpeningWrap" style="display:none;margin-top:10px" class="grid">
       <div class="fld"><label>Vendor</label><input id="brVendor" placeholder="FNP"></div>
       <div class="fld"><label>Pre-system expense dates</label><input id="brPreSystemDates" placeholder="20-08-2026, 21-08-2026"></div>
-      <div class="fld full"><div class="hint">The opening payable is recorded in the vendor ledger and paid by this bank transaction, but it does not enter the current-period P&amp;L.</div></div>
+      <div class="fld full"><div class="hint">The opening payable is recorded in the vendor ledger and paid by this bank transaction, but it does not enter the current-period Results.</div></div>
     </div>
     <div id="brVendorAdvanceWrap" style="display:none;margin-top:10px" class="grid">
       <div class="fld"><label>Vendor</label><input id="brAdvanceVendor" placeholder="Kalu Fruits and Flowers"></div>
@@ -517,9 +517,9 @@
   </div></dialog>
 
   <script src="/sidebar.js"></script>
-  <script src="/expense-refunds.js?v=grouped-receivables-20261016"></script>
+  <script src="/expense-refunds.js?v=2bb96e282a86"></script>
   <script src="/expense-payment-credits.js?v=c6f1629604f4"></script>
-  <script src="/expense-loans.js?v=lender-groups-20261012"></script>
+  <script src="/expense-loans.js?v=7dad67caab1e"></script>
   <script>
     var el = function(id){ return document.getElementById(id); };
     var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:1,maximumFractionDigits:2}); };
