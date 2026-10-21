@@ -2436,6 +2436,39 @@
       return previewAttempt(0);
     }
     var bankMatchReviewPending={};
+    var bankImportRepairReview=null;
+    window.previewBankImportRepair=async function(){
+      if(!bankDraftId)return;
+      var draftId=bankDraftId,button=el('bs_repair_import');if(button)button.disabled=true;
+      try{
+        var result=await api('/api/expenses/bank-statements/repair-import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({draftId:draftId,mode:'preview'})});
+        if(draftId!==bankDraftId)return;
+        if(!result.success)throw Error(result.error||'Could not verify the original PDF.');
+        if(!result.changed){el('bs_msg').className='msg ok';el('bs_msg').textContent='The saved imported amounts already agree with the original PDF columns.';return;}
+        if(!el('bankImportRepairDlg'))document.body.insertAdjacentHTML('beforeend','<dialog id="bankImportRepairDlg" style="max-width:720px;width:calc(100% - 40px)"><h3>Review imported bank amount repair</h3><p>Only the temporary bank import and its statement totals will change. Expenses, payments, adjustments and account opening balances stay unchanged.</p><div id="bankImportRepairRows"></div><label for="bankImportRepairReason">Reason — required</label><textarea id="bankImportRepairReason" maxlength="2000" style="width:100%;min-height:70px"></textarea><p id="bankImportRepairMsg" role="status"></p><button class="btn primary" id="bankImportRepairApply" onclick="applyBankImportRepair()">Apply source-verified import repair</button> <button class="btn ghost" onclick="document.getElementById(\'bankImportRepairDlg\').close()">Cancel</button></dialog>');
+        bankImportRepairReview={draftId:draftId,fingerprint:result.fingerprint};
+        el('bankImportRepairRows').innerHTML='<table class="resp"><thead><tr><th>Bank row</th><th>Previous debit / credit</th><th>PDF debit / credit</th></tr></thead><tbody>'+result.changes.map(function(change){return '<tr><td>'+esc(change.rowId)+'<div class="muted">'+esc(change.after.reference||change.before.reference||'')+'</div></td><td>'+fmt(change.before.debit)+' / '+fmt(change.before.credit)+'</td><td>'+fmt(change.after.debit)+' / '+fmt(change.after.credit)+'</td></tr>';}).join('')+'</tbody></table><p>Statement opening: '+fmt(result.beforeSummary.openingBalance)+' → '+fmt(result.afterSummary.openingBalance)+'<br>Statement debits: '+fmt(result.beforeSummary.totalDebits)+' → '+fmt(result.afterSummary.totalDebits)+'<br>Statement closing: '+fmt(result.afterSummary.closingBalance)+' (unchanged)</p><p class="muted">Verified original PDF SHA-256: '+esc(result.sourceHash)+'</p>';
+        el('bankImportRepairReason').value='Correct imported bank amounts using verified original PDF column positions.';
+        el('bankImportRepairMsg').textContent='Review these source corrections before applying. No new accounting entry will be created.';
+        el('bankImportRepairApply').disabled=false;el('bankImportRepairDlg').showModal();
+      }catch(error){el('bs_msg').className='msg err';el('bs_msg').textContent=error.message||'Could not verify this import.';}finally{if(button)button.disabled=false;}
+    };
+    window.applyBankImportRepair=async function(){
+      var review=bankImportRepairReview,reason=el('bankImportRepairReason').value.trim();
+      if(!review||review.draftId!==bankDraftId){el('bankImportRepairMsg').textContent='The selected statement changed. Close this review and preview again.';return;}
+      if(!reason){el('bankImportRepairMsg').textContent='Enter a reason for the repair.';return;}
+      el('bankImportRepairApply').disabled=true;
+      try{
+        var result=await api('/api/expenses/bank-statements/repair-import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({draftId:review.draftId,mode:'apply',fingerprint:review.fingerprint,reason:reason})});
+        if(!result.success)throw Error(result.error||'The repair could not be saved.');
+        el('bankImportRepairDlg').close();bankImportRepairReview=null;loadBankStatement(review.draftId);
+        el('bs_msg').className='msg ok';el('bs_msg').textContent='Imported bank figures corrected from the original PDF with an audit trail. Expenses, payments and adjustments are unchanged.';
+      }catch(error){el('bankImportRepairMsg').textContent=error.message||'Could not save the repair.';el('bankImportRepairApply').disabled=false;}
+    };
+    function renderBankImportRepair(d){
+      if((d.statementSummary||{}).format!=='IndusInd mobile PDF')return;
+      el('bs_table').insertAdjacentHTML('afterbegin','<p><button class="btn mini ghost" id="bs_repair_import" onclick="previewBankImportRepair()">Check imported amounts against original PDF</button><span class="hint"> Re-read retained PDF columns; accounting entries are never changed by this repair.</span></p>');
+    }
     function renderBankReconciliation(d){
       SankiNavigation.set({draft:d.draftId});
       bankStatementLoadGeneration++;el('bs_table').dataset.reconciliationDirty='';
@@ -2540,7 +2573,7 @@
     el('phCreditKind').addEventListener('change',function(){el('phFromAccountWrap').style.display=this.value==='internal_transfer'?'flex':'none';});el('personalHistoricalCancel').addEventListener('click',function(){el('personalHistoricalDlg').close();});
     el('personalHistoricalSave').addEventListener('click',function(){var direction=personalHistoricalSelection.direction,payload={draftId:bankDraftId,rowIds:personalHistoricalSelection.rowIds,direction:direction,category:el('phDebitCategory').value,vendor:el('phVendor').value.trim(),creditKind:el('phCreditKind').value,fromAccount:el('phFromAccount').value},total=personalHistoricalSelection.rowIds.reduce(function(sum,id){var row=bankReconRow(id);return sum+Number(direction==='debit'?row.bank.debit:row.bank.credit||0);},0);if(direction==='credit'&&payload.creditKind==='internal_transfer'&&!payload.fromAccount){el('personalHistoricalMsg').textContent='Choose the source account.';return;}if(direction==='debit'&&!payload.vendor){el('personalHistoricalMsg').textContent='Confirm or enter the vendor/payee for these selected debits.';return;}if(!confirm('Record '+payload.rowIds.length+' historical '+direction+' row(s), total '+fmt(total)+'? Each row will create its own ledger record.'))return;var button=this;button.disabled=true;api('/api/expenses/bank-statements/personal-historical-bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(d){button.disabled=false;if(!d.success){el('personalHistoricalMsg').className='msg err';el('personalHistoricalMsg').textContent=d.error||'Could not record selected rows.';return;}el('personalHistoricalDlg').close();renderBankReconciliation(d);loadAccountLedger();el('bs_msg').className='msg ok';el('bs_msg').textContent=d.created+' historical PERSONAL row(s) recorded and resolved.';}).catch(function(error){button.disabled=false;el('personalHistoricalMsg').className='msg err';el('personalHistoricalMsg').textContent=error&&error.message||'Could not record selected rows.';});});
     var renderBankReconciliationBase=renderBankReconciliation;
-    renderBankReconciliation=function(d){renderBankReconciliationBase(d);renderBankContinuityEvidence(d);renderPersonalHistoricalTools();renderBankEntityTags();renderBankEntityBulkTools();};
+    renderBankReconciliation=function(d){renderBankReconciliationBase(d);renderBankContinuityEvidence(d);renderPersonalHistoricalTools();renderBankEntityTags();renderBankEntityBulkTools();renderBankImportRepair(d);};
     function recordSalesRefund(){
       var amount=Number(el('srf_amount').value||0),saleReference=el('srf_sale').value.trim(),reason=el('srf_reason').value.trim(),files=el('srf_proof').files,btn=el('srf_go');
       if(!saleReference||!(amount>0)||!reason||!files.length){setMsg('Enter the original sale reference, amount, reason and at least one refund proof.',false);return;}
