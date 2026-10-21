@@ -4,7 +4,7 @@
 // follow actual approved payments. Never write to accounting/order stores.
 const purchaseCosts = require('../public/purchase-costs');
 const { velocityCompletion } = require('./pnl-delivery');
-const { resolveOrder, manualHash } = require('./pnl-line-corrections');
+const { resolveOrder, manualHash, resolveExpenseConfirmation } = require('./pnl-line-corrections');
 const START = '2026-08-22';
 const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const money = value => Math.round((number(value) + Number.EPSILON) * 100) / 100;
@@ -28,7 +28,7 @@ function channel(value) {
 }
 const gstRate = unitValue => number(unitValue) <= 2500 ? 0.05 : 0.18;
 
-// User-configured management P&L policy: choose the slab from the final
+// User-configured management Results policy: choose the slab from the final
 // per-piece selling amount after discount, then extract inclusive GST.
 // This is report-only, not a tax setting or statutory invoice calculation.
 function lineTax(line, taxesIncluded = true) {
@@ -39,7 +39,7 @@ function lineTax(line, taxesIncluded = true) {
   if(line.pnlKind==='shipping') {
     const confirmedZero=line.pnlShippingTaxZero===true,known=confirmedZero || recorded!==null || line.taxable===false, tax=confirmedZero?0:known ? recorded || 0 : null;
     const gross=money(base + (taxesIncluded ? 0 : number(tax)));
-    return {gross,sourceGross:confirmedZero?money(base+(taxesIncluded?0:number(recorded))):gross,tax,recorded:confirmedZero?recorded:tax,calculated:tax,rate:confirmedZero?0:null,status:confirmedZero?'User-confirmed tax-free shipping (P&L only)':known?'Shipping fee: source invoice GST retained':'Shipping fee GST evidence missing',valid:known&&qty>0};
+    return {gross,sourceGross:confirmedZero?money(base+(taxesIncluded?0:number(recorded))):gross,tax,recorded:confirmedZero?recorded:tax,calculated:tax,rate:confirmedZero?0:null,status:confirmedZero?'User-confirmed tax-free shipping (Results only)':known?'Shipping fee: source invoice GST retained':'Shipping fee GST evidence missing',valid:known&&qty>0};
   }
   if (!(qty > 0)) return { gross: money(base), tax: null, rate: null, recorded, status: 'Missing quantity', valid: false };
   // Confirmed non-garment exception. Match only an explicit perfume product
@@ -47,15 +47,15 @@ function lineTax(line, taxesIncluded = true) {
   const perfume = /\bperfumes?\b/i.test(String(line.title || ''));
   const rate = perfume ? 0.28 : gstRate(base / qty);
   const calculated = money(taxesIncluded ? base - base / (1 + rate) : base * rate);
-  // Management P&L only: invoice rates, recorded tax and Shopify's taxable
+  // Management Results only: invoice rates, recorded tax and Shopify's taxable
   // flag never override the configured garment calculation. sourceGross is
   // reconciliation evidence, not a tax-rate input.
-  return { gross: money(base + (taxesIncluded ? 0 : calculated)), sourceGross: taxesIncluded ? money(base) : recorded === null ? null : money(base + recorded), tax: calculated, rate, recorded, calculated, difference: recorded === null ? null : money(calculated - recorded), status: 'P&L configured GST', valid: true };
+  return { gross: money(base + (taxesIncluded ? 0 : calculated)), sourceGross: taxesIncluded ? money(base) : recorded === null ? null : money(base + recorded), tax: calculated, rate, recorded, calculated, difference: recorded === null ? null : money(calculated - recorded), status: 'Results configured GST', valid: true };
 }
 
 function completion(order, dispatch = {}, velocity = {}) {
   if (order.pnlCancelled) return null;
-  if (order.pnlDeliveryDate) return {date:order.pnlDeliveryDate,evidence:'User-confirmed delivery (P&L only)'};
+  if (order.pnlDeliveryDate) return {date:order.pnlDeliveryDate,evidence:'User-confirmed delivery (Results only)'};
   const explicit = day(order.completedAt || order.deliveredAt || dispatch.deliveredAt);
   if (explicit) return { date: explicit, evidence: 'Recorded completion date' };
   if (order.cancelledAt || ['cancelled', 'rto'].includes(dispatch.packingStatus)) return null;
@@ -130,7 +130,7 @@ function buildReport(sources = {}, options = {}) {
         warning(reference, reason + ' for ' + (sku || 'unmapped SKU') + ': ' + qty + ' unit(s). Profit is unavailable until resolved.', date, 'cogs', ch);
         return { parts: [], qty, missing: qty, cost: 0 };
       }
-      // Current Shopify cost is the management P&L basis. Never invent
+      // Current Shopify cost is the management Results basis. Never invent
       // opening quantities or consume today's stock to price past sales.
       // Refunds reverse this sale's exact allocation, not a new estimate.
       const cost = number(item.unitCost);
@@ -192,7 +192,7 @@ function buildReport(sources = {}, options = {}) {
     const refundedValue = money(list(order.refunds).filter(r => day(r.date || r.createdAt) && day(r.date || r.createdAt) <= to).reduce((sum, r) => sum + number(r.amount), 0));
     if (placed >= start && placed <= to) collections.push({ id, reference, date: completedInTime ? made.date : placed, channel: ch, orderValue: money(order.total), collected, cashRefunded, balanceToCollect: cancelledInTime ? 0 : collected === null ? null : money(Math.max(0, number(order.total) - refundedValue - collected + cashRefunded)), status: completedInTime ? 'Completed sale' : (cancelledInTime ? 'Cancelled / RTO' : 'Awaiting completion'), customerAdvance: collected === null ? null : (completedInTime ? 0 : money(Math.max(0, collected - cashRefunded))), payments: periodPayments.map(t => ({ id: t.id, date: day(t.processedAt), method: t.gateway, amount: money(t.amount) })), source });
     if (order.pnlCancelled && collections.length && collections[collections.length-1].id===id) {
-      collections[collections.length-1].status='Cancelled (P&L-only confirmation)';
+      collections[collections.length-1].status='Cancelled (Results-only confirmation)';
       collections[collections.length-1].correction=order.pnlStatusCorrection;
     }
     if (!made) return;
@@ -205,7 +205,7 @@ function buildReport(sources = {}, options = {}) {
         const key = id + '/' + (line.id || index), sku = skuKey(line.sku), qty = number(line.qty);
         const tax = lineTax(line, taxesIncluded);
         const components=(line.pnlComponents||[]).map(component=>({...component,allocation:allocate(skuKey(component.sku),component.qty,made.date,reference,ch,component.inventoryItemId)}));
-        const allocation = components.length?{qty,bundle:true,missing:components.reduce((n,c)=>n+c.allocation.missing,0),cost:money(components.reduce((n,c)=>n+c.allocation.cost,0)),parts:components.flatMap(c=>c.allocation.parts)}:present(line.pnlUnitCost) ? {qty,missing:0,cost:money(qty*number(line.pnlUnitCost)),parts:['shipping','rounding'].includes(line.pnlKind)?[]:[{lotId:'PNL-CORRECTION/'+order.id+'/'+line.id,purchaseId:'User-confirmed P&L custom-item cost',qty,unitCost:line.pnlUnitCost,amount:money(qty*line.pnlUnitCost),exactCost:line.pnlUnitCost,returned:0}]} : allocate(sku, Math.max(0, qty), made.date, reference, ch,line.pnlInventoryItemId);
+        const allocation = components.length?{qty,bundle:true,missing:components.reduce((n,c)=>n+c.allocation.missing,0),cost:money(components.reduce((n,c)=>n+c.allocation.cost,0)),parts:components.flatMap(c=>c.allocation.parts)}:present(line.pnlUnitCost) ? {qty,missing:0,cost:money(qty*number(line.pnlUnitCost)),parts:['shipping','rounding'].includes(line.pnlKind)?[]:[{lotId:'PNL-CORRECTION/'+order.id+'/'+line.id,purchaseId:'User-confirmed Results custom-item cost',qty,unitCost:line.pnlUnitCost,amount:money(qty*line.pnlUnitCost),exactCost:line.pnlUnitCost,returned:0}]} : allocate(sku, Math.max(0, qty), made.date, reference, ch,line.pnlInventoryItemId);
         allocations.set(key, { ...allocation, sku });
         taxAllocations.set(key, { ...tax, qty, taxesIncluded, returnedQty: 0, returnedShare: 0, returnedTax: 0, returnedGross: 0 });
         detail.push({ sku, qty, title:line.title||'', lineId: line.id || index, gross: tax.gross, gst: tax.tax, netSales: tax.valid ? money(tax.gross - tax.tax) : null, cogs: allocation.missing ? null : allocation.cost, correction:line.pnlCorrection||null, itemKind:components.length?'bundle':line.pnlKind||'product', components:components.map(({allocation,...component})=>({...component,cogs:allocation.missing?null:allocation.cost})), allocations: allocation.parts.map(({ exactCost, returned, ...part }) => part) });
@@ -254,7 +254,7 @@ function buildReport(sources = {}, options = {}) {
           let tax = null;
           if (!originalTax?.valid || !(qty > 0) || qty + originalTax.returnedQty > originalTax.qty + 1e-8) taxComplete = false;
           else {
-            // Reverse the original P&L allocation, never the source refund
+            // Reverse the original Results allocation, never the source refund
             // GST or a newly selected slab. Documented value-only partial
             // credits use their fraction of the original source line.
             const quantityShare = qty / originalTax.qty;
@@ -289,7 +289,7 @@ function buildReport(sources = {}, options = {}) {
         }
         if (!costComplete) warning(reference, 'Refund could not be linked to its original SKU cost allocation.', date, 'cogs', ch);
         const reportRefund = money(amount + reportGrossDifference);
-        taxRows.push({ id: rid, date, reference, sku: 'Refund / credit note', qty: 0, channel: ch, gross: -reportRefund, tax: taxComplete ? -money(refundGst) : null, recorded: recordedRefundKnown ? -money(recordedRefundGst) : null, calculated: taxComplete ? -money(refundGst) : null, rate: null, valid: taxComplete, status: taxComplete ? 'Original P&L GST reversed' : 'Refund tax needs review' });
+        taxRows.push({ id: rid, date, reference, sku: 'Refund / credit note', qty: 0, channel: ch, gross: -reportRefund, tax: taxComplete ? -money(refundGst) : null, recorded: recordedRefundKnown ? -money(recordedRefundGst) : null, calculated: taxComplete ? -money(refundGst) : null, rate: null, valid: taxComplete, status: taxComplete ? 'Original Results GST reversed' : 'Refund tax needs review' });
         add(row({ id: rid, date, kind: 'return', category: 'Returns / refunds', channel: ch, particulars: 'Refund / credit note for ' + reference, reference, source, sourceRefundAmount: money(amount), returns: reportRefund, gst: -money(refundGst), netSales: taxComplete ? -money(reportRefund - refundGst) : null, cogs: -money(reversedCost), taxComplete, costComplete, details: detail }));
       } });
     }
@@ -324,8 +324,17 @@ function buildReport(sources = {}, options = {}) {
       const included = Math.min(remaining, number(payment.amount)); remaining -= included;
       if (included > 0) paymentExpense(expense, payment, included);
     }
-    if (number(expense.paidAmount) > money(payments.reduce((sum, p) => sum + number(p.amount), 0))) warning(expense.id, 'Paid total exceeds available payment evidence. Only documented payments are included.', day(expense.date), 'expense');
-    if (!payments.length && number(expense.paidAmount) > 0) warning(expense.id, 'Paid amount has no payment record. It is excluded until amount/date evidence is restored.', day(expense.date), 'expense');
+    const confirmation=resolveExpenseConfirmation(expense,sources);
+    for(const message of confirmation.issues)warning(expense.id,message,confirmation.entry?.paymentDate||day(expense.date),'expense');
+    if(confirmation.amount>0){
+      const fact=confirmation.entry,type=['fixed','running','variable','marketing'].includes(expense.type)?expense.type:'variable';
+      // Management-report evidence only. Do not add a payment ID, refund
+      // allocation, salary link, account debit or reconciliation marker.
+      add(row({id:'RESULTS-CONFIRMATION/'+expense.id,date:confirmation.date,kind:'expense_confirmation',category:expense.ledger||expense.category||'Unclassified paid expense',group:type,channel:['POS','Website'].includes(expense.channel)?expense.channel:'Shared',particulars:expense.particulars||expense.vendor||'',reference:expense.id+'/RESULTS-CONFIRMED',expenseDate:day(expense.date),method:'User-confirmed reimbursement/payment; report only',source:'Results-only paid-expense confirmation',expenses:confirmation.amount,details:[{expenseId:expense.id,reportOnly:true,confirmedTotal:fact.amount,includedAmount:confirmation.amount,eligibleSourcePaidAmount:confirmation.eligiblePaidAmount,confirmedPaymentDate:fact.paymentDate,adjustmentReference:fact.adjustmentReference||'',adjustmentReferenceBasis:'User-reported only; not verified bank or adjustment evidence',actor:fact.updatedBy||'',confirmedAt:fact.updatedAt||'',reason:fact.note||'',sourceFinancialRecordsUnchanged:true}]}));
+    }
+    const evidenceTotal=money(payments.reduce((sum,p)=>sum+number(p.amount),0)+confirmation.amount);
+    if (number(expense.paidAmount) > evidenceTotal) warning(expense.id, 'Paid total exceeds available payment evidence. Only documented payments or an audited Results-only confirmation are included.', day(expense.date), 'expense');
+    if (!payments.length && !confirmation.amount && number(expense.paidAmount) > 0) warning(expense.id, 'Paid amount has no eligible payment record. It is excluded until evidence is restored or an audited Results-only confirmation is supplied.', day(expense.date), 'expense');
   }
   for (const expense of list(books.reconciliationExpenses)) {
     if (!business(expense.nature) || expense.accountingExcluded || activeDraft(expense)) continue;
@@ -435,12 +444,12 @@ function buildReport(sources = {}, options = {}) {
   const previousRows = events.filter(e => inRange(e, previousFrom < start ? start : previousFrom, previousTo));
   const previous = previousTo < start ? null : { from: previousFrom < start ? start : previousFrom, to: previousTo, partial: previousFrom < start, totals: summarize(previousRows, [...warnings.filter(w => (!w.date || w.date >= previousFrom && w.date <= previousTo) && choose(w)), ...scopedWarnings.filter(w => w.scope === 'source')]) };
   const categories = new Map();
-  for (const entry of included.filter(e => ['expense', 'expense_refund', 'salary', 'incentive'].includes(e.kind))) {
+  for (const entry of included.filter(e => ['expense', 'expense_confirmation', 'expense_refund', 'salary', 'incentive'].includes(e.kind))) {
     const key = entry.group + '/' + entry.category, group = categories.get(key) || { id: key, group: entry.group, category: entry.category, amount: 0, count: 0 };
     group.amount = money(group.amount + entry.expenses); group.count++; categories.set(key, group);
   }
   const months = [...new Set(included.map(e => e.date.slice(0, 7)))].sort();
-  return { success: true, range: { from, to, requestedFrom: options.from || from, partial: from !== options.from && !!options.from, start }, channel: selectedChannel, basis: shopifyCostMode ? 'Completed sales excluding P&L-calculated GST − synced Shopify SKU COGS − approved paid operating expenses' : 'Completed sales excluding P&L-calculated GST − FIFO SKU COGS − approved paid operating expenses', totals: summarize(included, scopedWarnings), previous, categories: [...categories.values()].sort((a, b) => a.group.localeCompare(b.group) || a.category.localeCompare(b.category)), transactions: included.sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id)), taxes: taxRows.filter(e => inRange(e, from, to)), collections: collections.filter(e => inRange(e, from, to)), trends: months.map(month => ({ month, ...summarize(included.filter(e => e.date.startsWith(month)), scopedWarnings.filter(w => !w.date || w.date.startsWith(month))) })), warnings: scopedWarnings, feeds: sources.feeds || [], costSource: shopifyCostMode ? { name: 'Shopify Cost per item', at: sources.shopifyCosts?.at || null } : { name: 'Verified FIFO' }, policy: { operatingExpenses: 'Approved payments only, including paid portions. Reimbursements and vendor advances are not counted twice.', cogs: shopifyCostMode ? 'Shopify Cost per item by SKU from the synced local snapshot. Current stock quantities and supplier payments do not limit COGS. Refunds reverse the original sale allocation. Missing or duplicate costs remain exceptions. Cost changes restate management P&L history.' : 'Received inventory allocated by SKU using FIFO, irrespective of supplier payment. Missing opening costs are never estimated.', gst: 'P&L only: final per-piece selling value after discounts ≤ ₹2,500 uses 5%; above ₹2,500 uses 18%. Invoice GST and exempt flags do not override this calculation. Refunds reverse original P&L GST. Inclusive GST is extracted from the final selling amount; exclusive GST is added. Missing price basis and non-garment tax still require review. Invoices, Shopify, collections and ledgers remain unchanged.', sales: 'POS completion or recorded delivery date. Customer advances and courier/bank settlements are not extra sales.', channels: selectedChannel === 'All' ? 'All channels and Shared overhead included.' : 'Direct channel only. Shared overhead is excluded, not silently allocated.' } };
+  return { success: true, range: { from, to, requestedFrom: options.from || from, partial: from !== options.from && !!options.from, start }, channel: selectedChannel, basis: shopifyCostMode ? 'Completed sales excluding Results-calculated GST − synced Shopify SKU COGS − approved paid operating expenses' : 'Completed sales excluding Results-calculated GST − FIFO SKU COGS − approved paid operating expenses', totals: summarize(included, scopedWarnings), previous, categories: [...categories.values()].sort((a, b) => a.group.localeCompare(b.group) || a.category.localeCompare(b.category)), transactions: included.sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id)), taxes: taxRows.filter(e => inRange(e, from, to)), collections: collections.filter(e => inRange(e, from, to)), trends: months.map(month => ({ month, ...summarize(included.filter(e => e.date.startsWith(month)), scopedWarnings.filter(w => !w.date || w.date.startsWith(month))) })), warnings: scopedWarnings, feeds: sources.feeds || [], costSource: shopifyCostMode ? { name: 'Shopify Cost per item', at: sources.shopifyCosts?.at || null } : { name: 'Verified FIFO' }, policy: { operatingExpenses: 'Approved paid portions, including explicitly audited Results-only paid-expense confirmations. Source payments take priority across all dates, so restored payments supersede report-only amounts. Reimbursements and vendor advances are not counted twice. Report-only confirmations never post bank movements or alter financial approvals.', cogs: shopifyCostMode ? 'Shopify Cost per item by SKU from the synced local snapshot. Current stock quantities and supplier payments do not limit COGS. Refunds reverse the original sale allocation. Missing or duplicate costs remain exceptions. Cost changes restate management Results history.' : 'Received inventory allocated by SKU using FIFO, irrespective of supplier payment. Missing opening costs are never estimated.', gst: 'Results only: final per-piece selling value after discounts ≤ ₹2,500 uses 5%; above ₹2,500 uses 18%. Invoice GST and exempt flags do not override this calculation. Refunds reverse original Results GST. Inclusive GST is extracted from the final selling amount; exclusive GST is added. Missing price basis and non-garment tax still require review. Invoices, Shopify, collections and ledgers remain unchanged.', sales: 'POS completion or recorded delivery date. Customer advances and courier/bank settlements are not extra sales.', channels: selectedChannel === 'All' ? 'All channels and Shared overhead included.' : 'Direct channel only. Shared overhead is excluded, not silently allocated.' } };
 }
 function linesIndex(lines, id) { return (lines || []).findIndex(line => String(line.id) === String(id)); }
 module.exports = { START, validDate, day, money, gstRate, lineTax, completion, costLots, buildReport };
