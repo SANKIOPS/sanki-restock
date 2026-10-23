@@ -232,7 +232,7 @@ test('return reversal requires an authorized actor and reason and is blocked aft
 
 test('source enrichment of either paired transaction is refused before any preview is saved', () => {
   for (const id of [IDS.receipt, IDS.refund]) {
-    setup(); assert.equal(resolve().status, 200); const tx = current().paytmReportTransactions[id];
+    setup(); const resolution = resolve(); assert.equal(resolution.status, 200, JSON.stringify(resolution.body)); const tx = current().paytmReportTransactions[id];
     const csv = ['Transaction_ID,Transaction_Type,Transaction_Date,Status,Amount,Commission,GST,Platform_Fee,Settled_Amount,Payout_ID,UTR_No.,Settled_Date,Comments', [tx.transactionId, tx.transactionType, tx.time, 'SUCCESS', tx.amount, 0, 0, 0, tx.settledAmount, tx.payoutId, tx.utr, tx.settledDate, 'New source comment supplied after audited return'].join(',')].join('\n');
     const before = fs.readFileSync(expenseFile, 'utf8'), result = invoke('/api/expenses/paytm-reports/preview', { method: 'POST', files: [{ originalname: 'synthetic-enriched-report.csv', buffer: Buffer.from(csv) }] });
     assert.ok(result.status >= 400, JSON.stringify(result.body)); assert.match(result.body.error, /locked by an audited return/i); assert.equal(fs.readFileSync(expenseFile, 'utf8'), before);
