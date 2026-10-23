@@ -64,6 +64,18 @@ function harness(overrides = {}) {
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test('bulk draft entity assignment supplies expense category context but never changes transfer account context', () => {
+  const h = harness();
+  h.context.bankReconView.rows[0].entityAssignment = { nature: 'SAMAST' };
+  h.context.openBankAssignment('bank-1', 'category');
+  assert.equal(h.nodes.brExpenseNature.value, 'SAMAST');
+  assert.match(h.nodes.brLedgerList.innerHTML, /SAMAST Category/);
+  h.context.openBankAssignment('bank-1', 'internal_transfer');
+  assert.equal(h.nodes.brExpenseNatureWrap.style.display, 'none');
+  assert.equal(h.context.bankTransferNature(h.context.bankReconView.rows[0]), 'PERSONAL');
+  assert.equal(h.calls.length, 0);
+});
+
 test('expense category assignment has its own selector; transfers and links hide it', () => {
   const h = harness();
   h.context.openBankAssignment('bank-1', 'category');

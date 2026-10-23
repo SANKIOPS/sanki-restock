@@ -12,6 +12,19 @@ const present = value => value !== null && value !== undefined && value !== '' &
 const skuKey = value => String(value || '').trim().toUpperCase();
 const list = value => Array.isArray(value) ? value : Object.values(value || {});
 const business = value => ['SANKI', 'A3'].includes(String(value || '').toUpperCase());
+// New reconciliation receipts may carry a deliberate Results classification
+// separately from their bank-account owner. Legacy receipts and manual sales
+// keep their existing interpretation and correction fingerprints unchanged.
+const RECONCILIATION_RECEIPT_TYPES = new Set(['asset_sale', 'other_income', 'refund', 'owner_contribution', 'bank_interest', 'rental_income', 'rental_security', 'personal_income', 'home_received', 'other_personal_received', 'loan_received']);
+function receiptReportScope(receipt, books) {
+  const explicit = Object.prototype.hasOwnProperty.call(receipt, 'reportingNature');
+  if (!RECONCILIATION_RECEIPT_TYPES.has(receipt.receiptType) || !explicit && !Object.prototype.hasOwnProperty.call(receipt, 'receiptAccount')) return { nature: receipt.nature };
+  const evidence = receipt.bankReconciliationEvidence;
+  if (!evidence || typeof evidence.draftId !== 'string' || !evidence.draftId || typeof evidence.rowId !== 'string' || !/^bank-\d+$/.test(evidence.rowId)) return { invalid: true };
+  if (books.bankReconciliationDrafts?.[evidence.draftId]) return { provisional: true };
+  if (explicit && (typeof receipt.reportingNature !== 'string' || !['SANKI', 'SAMAST', 'PERSONAL'].includes(receipt.reportingNature))) return { invalid: true };
+  return { nature: explicit ? receipt.reportingNature : receipt.nature };
+}
 function validDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value)) && !Number.isNaN(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value;
 }
@@ -385,7 +398,11 @@ function buildReport(sources = {}, options = {}) {
   }
   const manualReceipts = new Map();
   for (const receipt of list(books.receipts)) {
-    if (!business(receipt.nature) || receipt.accountingExcluded || activeDraft(receipt)) continue;
+    if (receipt.accountingExcluded || activeDraft(receipt)) continue;
+    const reportScope = receiptReportScope(receipt, books);
+    if (reportScope.provisional) continue;
+    if (reportScope.invalid) { warning(receipt.id, 'Incoming receipt Results classification or bank evidence is invalid. Review its explicit classification; no income has been assumed.', day(receipt.date), 'income'); continue; }
+    if (!business(reportScope.nature)) continue;
     const linkedRefundAmount=receivedRefunds.reduce((sum,refund)=>sum+(refund.date===receipt.date?(refund.components||[]).filter(c=>c.externalMovementId===receipt.id||c.receiptId===receipt.id).reduce((n,c)=>n+number(c.amount),0):0),0);
     if(receipt.receiptType==='refund'&&number(receipt.amount)>0&&money(linkedRefundAmount)>=money(receipt.amount))continue;
     if (['bank_interest', 'other_income'].includes(receipt.receiptType)) add(row({ id: 'RECEIPT/' + receipt.id, date: day(receipt.date), kind: 'income', category: receipt.category || 'Other income', particulars: receipt.source || '', reference: receipt.id, account: receipt.account || '', proof: receipt.proof || '', source: 'Receipts', otherIncome: money(receipt.amount) }));

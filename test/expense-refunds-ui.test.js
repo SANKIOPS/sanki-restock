@@ -38,7 +38,7 @@ function uiHarness(component = formComponent()) {
     fmtBank: value => '₹' + Number(value).toFixed(2), proofGallery: () => '',
     api: async (url, options) => { posted = JSON.parse(options.body); return { success: true, preview: { amount: 1512,
       components: [{ mode: 'voucher', amount: 1512, receiver: 'company', account: '', issuer: 'Server-approved merchant', reference: '00001234' }] }, impact: { billCredit: 1512 } }; } };
-  const instrumented = source.replace(/\}\(\)\);\s*$/, 'window.refundTest = { componentFromForm, componentDestination, previewComponent, accounts, doPreview, recordRow, setup: function () { data = { sources: [], existingMovements: [] }; draft = { sources: [], proofs: [] }; } }; }());');
+  const instrumented = source.replace(/\}\(\)\);\s*$/, 'window.refundTest = { componentFromForm, componentDestination, previewComponent, accounts, doPreview, recordRow, setup: function () { data = formData = { sources: [], existingMovements: [] }; formNature = "SANKI"; draft = { sources: [], proofs: [] }; } }; }());');
   vm.runInNewContext(instrumented, sandbox);
   sandbox.window.refundTest.setup();
   return { ...sandbox.window.refundTest, nodes, posted: () => posted };

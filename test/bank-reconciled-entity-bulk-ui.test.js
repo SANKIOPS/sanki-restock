@@ -14,9 +14,9 @@ function section() {
   return page.slice(start, end);
 }
 function node() {
-  const item = { value: '', checked: false, disabled: false, style: {}, listeners: {}, textContent: '', className: '', open: false, html: '', options: [], boxes: [] };
+  const item = { value: '', checked: false, disabled: false, style: {}, listeners: {}, textContent: '', className: '', open: false, html: '', options: [], boxes: [], assignmentBoxes: [] };
   item.addEventListener = (type, fn) => { (item.listeners[type] ||= []).push(fn); };
-  item.querySelectorAll = selector => selector === '.bank-entity-bulk-row' ? item.boxes : [];
+  item.querySelectorAll = selector => selector === '.bank-entity-bulk-row' ? item.boxes : selector === '.bank-entity-assignment-row' ? item.assignmentBoxes : [];
   item.querySelector = () => null;
   item.showModal = () => { item.open = true; };
   item.close = () => { item.open = false; };
@@ -58,7 +58,7 @@ function harness(overrides = {}) {
   h.event = (id, type, event = {}) => { for (const fn of context.el(id).listeners[type] || []) fn.call(context.el(id), { preventDefault() {}, ...event }); };
   h.select = (items = [{ draftId: 'DRAFT-1', rowId: 'bank-1' }], options = {}) => {
     const scope = options.scope || 'draft';
-    context.el(scope === 'history' ? 'bs_history' : 'bs_table').boxes = items.map(item => checkbox(item, { checked: true, ...options }));
+    context.el(scope === 'history' ? 'bs_history' : 'bs_table')[scope === 'pending' ? 'assignmentBoxes' : 'boxes'] = items.map(item => checkbox(item, { checked: true, ...options }));
     return h;
   };
   h.open = (scope = 'draft') => { context.openBankEntityBulk(scope); return h; };
@@ -290,4 +290,153 @@ test('history wrapper captures the original declaration even when that declarati
   assert.notEqual(context.renderBankHistoryBeforeEntityBulk, context.renderBankHistory);
   assert.match(context.renderBankHistory([], 'Other Bank 8181', 'SANKI'), /No finalized reconciliation history yet/);
   assert.equal(context.bankHistoryLogs.length, 0);
+});
+
+function pendingHarness(overrides = {}) {
+  return harness({
+    bankNature: 'SANKI',
+    bankReconView: { account: 'Axis Bank 3448', rows: [
+      { id: 'bank-1', status: 'missing_in_app', bank: { date: '2026-10-15', debit: 955, credit: 0, reference: 'REF-1' }, entityAssignmentEditable: true },
+      { id: 'bank-2', status: 'missing_in_app', bank: { date: '2026-10-15', debit: 0, credit: 955, reference: 'REF-2' }, entityAssignmentEditable: true }
+    ] },
+    ...overrides
+  });
+}
+const pendingItems = [{ draftId: 'DRAFT-1', rowId: 'bank-1' }, { draftId: 'DRAFT-1', rowId: 'bank-2' }];
+
+test('new assignment choices work on nonshared accounts but retain shared/private permissions', () => {
+  const h = pendingHarness();
+  assert.equal(h.context.bankEntityAssignmentAllowed('Axis Bank 3448'), true);
+  assert.deepEqual(Array.from(h.context.bankEntityAssignmentTargets('Axis Bank 3448')), ['SANKI', 'SAMAST', 'PERSONAL']);
+  assert.deepEqual(Array.from(h.context.bankEntityAssignmentTargets('IndusInd Bank 7883')), ['SAMAST', 'PERSONAL']);
+  h.context.cfg.canManagePersonalAccounting = false;
+  assert.deepEqual(Array.from(h.context.bankEntityAssignmentTargets('Axis Bank 3448')), ['SANKI', 'SAMAST']);
+  h.context.cfg.isAdmin = false;
+  assert.equal(h.context.bankEntityAssignmentAllowed('Axis Bank 3448'), false);
+  h.context.cfg.isOwner = true;
+  assert.equal(h.context.bankEntityAssignmentAllowed('Axis Bank 3448'), true);
+  assert.equal(h.context.bankEntityAssignmentAllowed(''), false);
+});
+
+test('pending-row assignment never exposes reviewed, finalized, linked, excluded, conflicting or reversal rows', () => {
+  const h = pendingHarness(), row = h.context.bankReconView.rows[0];
+  assert.equal(h.context.bankEntityAssignmentEligible(row), true);
+  for (const patch of [
+    { entityAssignmentEditable: false }, { entityAssignmentEditable: undefined }, { bank: null },
+    { status: 'resolved' }, { status: 'already_reconciled' }, { status: 'matched' }, { status: 'possible_match' },
+    { status: 'excluded' }, { app: { id: 'EX-00974/PAY-001' } }, { resolution: { action: 'exclude' } },
+    { bankClaimedElsewhere: true }, { reversalReviewRequired: true }, { reversalPairCandidate: true },
+    { bankReversalPair: {} }, { entityTag: { sourceConflict: true } }
+  ]) assert.equal(h.context.bankEntityAssignmentEligible({ ...row, ...patch }), false, JSON.stringify(patch));
+  assert.match(h.context.bankEntityBulkCheckbox(pendingItems[0], false, 'pending'), /class="bank-entity-assignment-row"/);
+  assert.doesNotMatch(h.context.bankEntityBulkCheckbox(pendingItems[0], false, 'pending'), /optional entity correction/);
+  const toolbar = h.context.bankEntityBulkToolbar('pending');
+  assert.match(toolbar, /Assign selected entity/);
+  assert.match(toolbar, /Expenses require an entity for Results/);
+  assert.match(toolbar, /transfers and incoming receipts can be reconciled without this step/);
+});
+
+test('select all visible assignment rows cannot select legacy corrections or hidden unselected rows', () => {
+  const h = pendingHarness(), host = h.context.el('bs_table');
+  host.assignmentBoxes = [checkbox(pendingItems[0]), checkbox(pendingItems[1], { hidden: true })];
+  host.boxes = [checkbox({ draftId: 'DRAFT-1', rowId: 'reviewed-row' })];
+  h.context.selectBankEntityBulkRows('pending', true);
+  assert.deepEqual(host.assignmentBoxes.map(box => box.checked), [true, false]);
+  assert.deepEqual(host.boxes.map(box => box.checked), [false]);
+  assert.equal(h.nodes.bankEntityBulkCount_pending.textContent, '1 selected');
+  host.assignmentBoxes[1].checked = true;
+  h.context.selectBankEntityBulkRows('pending', false);
+  assert.deepEqual(host.assignmentBoxes.map(box => box.checked), [false, false]);
+});
+
+test('assignment opens with no write and reviews exactly the selected draft row IDs', async () => {
+  const h = pendingHarness().select([...pendingItems, pendingItems[0]], { scope: 'pending' }).open('pending').valid();
+  const before = JSON.stringify(h.context.bankReconView);
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.nodes.bankEntityBulkDlg.open, true);
+  assert.equal(h.context.bankEntityBulkState.items.length, 2);
+  assert.match(h.nodes.bankEntityBulkTitle.textContent, /Assign entity/);
+  assert.match(h.nodes.bankEntityBulkHelp.textContent, /does not create an expense/);
+  h.event('bankEntityBulkPreview', 'click');
+  await flush();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].url, '/api/expenses/bank-statements/assign-entity-bulk');
+  assert.deepEqual(h.calls[0].body, { account: 'Axis Bank 3448', nature: 'SANKI', targetNature: 'SAMAST', reason: 'Correct verified entity assignment', draftId: 'DRAFT-1', rowIds: ['bank-1', 'bank-2'], dryRun: true });
+  assert.equal(h.nodes.bankEntityBulkSave.disabled, false);
+  assert.equal(JSON.stringify(h.context.bankReconView), before);
+  assert.equal(h.refreshes.length, 0);
+});
+
+test('assignment rejects tampered selections, another draft or newly protected rows without making requests', async () => {
+  for (const items of [[{ draftId: 'OTHER', rowId: 'bank-1' }], [{ recordId: 'FINAL', rowId: 'bank-1' }], [{ draftId: 'DRAFT-1', rowId: 'unknown' }]]) {
+    const h = pendingHarness().select(items, { scope: 'pending' }).open('pending');
+    assert.equal(h.nodes.bankEntityBulkDlg?.open || false, false);
+    assert.equal(h.calls.length, 0);
+  }
+  for (const mutate of [
+    h => { h.context.bankDraftId = 'NEW-DRAFT'; },
+    h => { h.context.bankReconView.rows[0].resolution = { action: 'exclude' }; },
+    h => { h.context.bankReconView.rows[0].entityAssignmentEditable = false; },
+    h => { h.context.cfg.isAdmin = false; h.context.cfg.isOwner = false; }
+  ]) {
+    const h = pendingHarness().select(pendingItems, { scope: 'pending' }).open('pending').valid();
+    h.context.bankEntityBulkRequest(false); await flush();
+    mutate(h); h.context.bankEntityBulkRequest(true);
+    assert.equal(h.calls.length, 1, 'stale/protected batch cannot apply');
+    assert.equal(h.context.bankEntityBulkState.fingerprint, '');
+    assert.equal(h.nodes.bankEntityBulkSave.disabled, true);
+  }
+});
+
+test('assignment commit requires reviewed fingerprint, sends once and clears only the applied selection', async () => {
+  let release;
+  const h = pendingHarness({ api(url, options) { const body = JSON.parse(options.body); h.calls.push({ url, body }); if (body.dryRun) return Promise.resolve({ success: true, fingerprint: 'assignment-fingerprint', updated: 2, changes: [] }); return new Promise(resolve => { release = resolve; }); } }).select(pendingItems, { scope: 'pending' }).open('pending').valid();
+  const before = JSON.stringify(h.context.bankReconView);
+  h.context.el('bs_table').boxes = [checkbox({ draftId: 'DRAFT-1', rowId: 'reviewed-row' }, { checked: true })];
+  h.context.bankEntityBulkRequest(true); assert.equal(h.calls.length, 0);
+  h.context.bankEntityBulkRequest(false); await flush();
+  h.event('bankEntityBulkSave', 'click'); h.event('bankEntityBulkSave', 'click');
+  assert.equal(h.calls.length, 2); assert.equal(h.calls[1].body.fingerprint, 'assignment-fingerprint');
+  assert.equal(h.calls[1].body.dryRun, false);
+  release({ success: true, updated: 2 }); await flush();
+  assert.deepEqual(h.refreshes, [['statement', 'DRAFT-1']], 'assignment does not edit or refresh source ledgers');
+  assert.deepEqual(h.context.el('bs_table').assignmentBoxes.map(box => box.checked), [false, false]);
+  assert.equal(h.context.el('bs_table').boxes[0].checked, true, 'legacy correction selection is not applied or cleared');
+  assert.equal(h.context.bankEntityBulkState, null);
+  assert.equal(JSON.stringify(h.context.bankReconView), before);
+  assert.match(h.nodes.bs_msg.textContent, /Existing records and reconciliations are unchanged/);
+});
+
+test('rendering adds unchecked assignment controls only to server-approved pending rows and never sends a request', () => {
+  const h = pendingHarness(), originalEl = h.context.el, toolbars = [];
+  h.context.bankReconView.rows.push(
+    { id: 'bank-3', bank: { debit: 100 }, status: 'resolved', entityAssignmentEditable: false, resolution: { action: 'create_expense' } },
+    { id: 'bank-4', bank: { debit: 100 }, status: 'already_reconciled', entityAssignmentEditable: false },
+    { id: 'bank-5', bank: { credit: 100 }, status: 'missing_in_app', entityAssignmentEditable: false }
+  );
+  const cells = new Map(h.context.bankReconView.rows.map(row => [row.id, {
+    html: '',
+    insertAdjacentHTML(position, html) { this.html += html; },
+    querySelector(selector) { return selector.split(',').some(part => this.html.includes('class="' + part.replace(/^\./, '') + '"')) ? {} : null; }
+  }]));
+  const table = {
+    querySelectorAll(selector) { return selector === 'td .muted' ? [...cells].map(([id, cell]) => ({ textContent: id, parentElement: cell })) : []; },
+    querySelector(selector) { return [...cells.values()].find(cell => cell.querySelector(selector)) || null; },
+    insertAdjacentHTML(position, html) { toolbars.push(html); const id = html.match(/id="([^"]+)"/)[1]; originalEl(id); }
+  };
+  h.context.el = id => id.startsWith('bankEntityBulkToolbar_') ? h.nodes[id] || null : originalEl(id);
+  h.context.el('bs_table').querySelector = selector => selector === 'table' ? table : null;
+  h.context.renderBankEntityBulkTools();
+  for (const id of ['bank-1', 'bank-2']) {
+    assert.match(cells.get(id).html, /class="bank-entity-assignment-row"/);
+    assert.doesNotMatch(cells.get(id).html, /\bchecked\b/);
+  }
+  for (const id of ['bank-3', 'bank-4', 'bank-5']) assert.equal(cells.get(id).html, '');
+  assert.equal(toolbars.length, 1);
+  assert.match(toolbars[0], /id="bankEntityBulkToolbar_pending"/);
+  const before = [...cells.values()].map(cell => cell.html);
+  h.context.renderBankEntityBulkTools();
+  assert.deepEqual([...cells.values()].map(cell => cell.html), before, 're-render cannot duplicate a checkbox');
+  assert.equal(toolbars.length, 1);
+  assert.equal(h.calls.length, 0);
 });
