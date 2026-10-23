@@ -491,9 +491,11 @@ function applyAxis3448PaytmBankTruthSettlements(s) {
 }
 function applyOwnerConfirmedAxis3645Cases(s) {
   const migrationKey='owner-confirmed-axis-3645-cases-2026-08-22-to-2026-08-27-v1',account='Prashant Axis 3645',now=new Date().toISOString();
+  const initialized=!s.oneTimeMigrations||!Array.isArray(s.vendorAdvances)||!Array.isArray(s.transfers)||!Array.isArray(s.adjustments)||!Array.isArray(s.salesRefunds)||!s.bankDateOverrides;
   s.oneTimeMigrations=s.oneTimeMigrations||{};s.vendorAdvances=Array.isArray(s.vendorAdvances)?s.vendorAdvances:[];s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.adjustments=Array.isArray(s.adjustments)?s.adjustments:[];s.salesRefunds=Array.isArray(s.salesRefunds)?s.salesRefunds:[];s.bankDateOverrides=s.bankDateOverrides||{};
-  const state=s.oneTimeMigrations[migrationKey]||{appliedAt:now,account,completed:{},results:{},preservedUnrelatedResolutions:true};
-  let changed=false;
+  const priorState=JSON.stringify(s.oneTimeMigrations[migrationKey]);
+  const state=priorState?JSON.parse(priorState):{appliedAt:now,account,completed:{},results:{},preservedUnrelatedResolutions:true};
+  let changed=initialized;
   const drafts=Object.values(s.bankReconciliationDrafts||{}).filter(d=>!d.originalStatementPeriod&&d.account===account&&normalizedNature(d.nature)==='SANKI');
   const findRows=(draft,predicate)=>(draft.transactions||[]).map((row,index)=>({row,index,rowId:'bank-'+index})).filter(x=>predicate(x.row,x.index));
   const setResolution=(draft,rowId,resolution)=>{draft.resolutions=draft.resolutions||{};const before=draft.resolutions[rowId];if(JSON.stringify(before)!==JSON.stringify(resolution)){draft.resolutions[rowId]=resolution;changed=true;}return{draftId:draft.id,rowId};};
@@ -563,7 +565,11 @@ function applyOwnerConfirmedAxis3645Cases(s) {
 
   if(!state.completed.rounding){const principal=exactPayment('EX-00120','PAY-001');if(principal&&Math.abs(num(principal.payment.amount)-652)<.01){s.adjSeq=num(s.adjSeq)+1;const adjustment={id:'ADJ-'+String(s.adjSeq).padStart(4,'0'),nature:'SANKI',account,amount:.10,date:'2026-08-27',note:'Rounding off: ₹652 logged expense settled by ₹651.90 bank debit',reconciliationDraft:'owner-confirmed',bankReference:'660545756771',createdBy:'prashant',createdAt:now,ownerConfirmedMigration:migrationKey};s.adjustments.push(adjustment);linkReference('660545756771',651.90,'debit',()=>decision('link_multiple_existing','₹652 expense linked to ₹651.90 bank debit with ₹0.10 Rounding Off credit',{appIds:[principal.id,adjustment.id],description:'Vi Recharge · expense + rounding off'}));state.completed.rounding=true;state.results.rounding={expensePaymentId:principal.id,adjustmentId:adjustment.id,roundingCredit:.10};changed=true;}else if(principal&&Math.abs(num(principal.payment.amount)-651.90)<.01&&s.oneTimeMigrations['correct-ex-00120-to-651-90-remove-adj-0003-v1']){state.completed.rounding=true;state.results.rounding={expensePaymentId:principal.id,result:'superseded_by_exact_bank_amount_correction'};changed=true;}}
 
-  state.complete=['haryanaPersonal','kaluAdvance','alokCombined','cashPaytmRoute','duplicateTransfer','shivamReimbursement','rounding'].every(k=>state.completed[k]);state.updatedAt=now;s.oneTimeMigrations[migrationKey]=state;
+  state.complete=['haryanaPersonal','kaluAdvance','alokCombined','cashPaytmRoute','duplicateTransfer','shivamReimbursement','rounding'].every(k=>state.completed[k]);
+  // A read with no migration progress must not change the store fingerprint.
+  // Persist genuine progress (including initial/changed diagnostic metadata)
+  // once, keeping its actual audit time on all later no-op reads.
+  if(changed||JSON.stringify(state)!==priorState){state.updatedAt=now;s.oneTimeMigrations[migrationKey]=state;changed=true;}
   return changed;
 }
 function vendorBalanceForNames(s,nature,names){
@@ -1344,13 +1350,16 @@ function loadStore() {
     if(syncClaimantFundedSalaryAdvanceReimbursements(s))saveStore(s);
     if(mergeSharedIndus7883BankBook(s))saveStore(s);
     if(ledgerConnections.repairCreatedTransferLinks(s,({transfer,record,row,key,before})=>audit(s,null,'BANK_CREATED_TRANSFER_LINK_RESTORED','transfer',transfer.id,{nature:transfer.nature,account:key,before,after:{recordId:record.id,rowId:row.id,linkedRecordIds:row.linkedRecordIds},note:'Restored by exact finalized bank-row provenance; amounts, approvals and bank evidence unchanged.'})))saveStore(s);
-    try{const apiFile=path.join(DATA_DIR,'gokwik_api_evidence.json');if(fs.existsSync(apiFile)){const evidence=JSON.parse(fs.readFileSync(apiFile,'utf8')),orders=JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};require('./gokwik-api-accounting').stage(s,Object.values(evidence.days||{}).flat(),Object.values(orders));}}catch(e){console.error('[gokwik-accounting-api] '+e.message);}
+    try{const apiFile=path.join(DATA_DIR,'gokwik_api_evidence.json');if(fs.existsSync(apiFile)){const evidence=JSON.parse(fs.readFileSync(apiFile,'utf8')),orders=JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};require('./gokwik-api-accounting').stage(s,Object.values(evidence.days||{}).flat(),Object.values(orders),{readOnly:true});}}catch(e){console.error('[gokwik-accounting-api] '+e.message);}
     return s;
   }
   catch(error) { console.error('[expenses] Store repair failed; serving the original financial records:',error);return s; }
 }
 function saveStore(s, options = {}) {
   if (!options.skipCategoryNormalization) sankiCategories.attachGroups(s);
+  // Transient API evidence gets a real audit timestamp only when it is saved;
+  // read-only projections remain deterministic for source-preview validation.
+  require('./gokwik-api-accounting').finalizeStagedAudit(s);
   // Once a reconciliation records the ledger's original date, later views may
   // expose the authoritative bank date as the row date. Never let a subsequent
   // save replace the audit/undo date with that displayed bank date.
@@ -2286,6 +2295,9 @@ router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{
   if(earlier)return res.status(409).json({success:false,earlierDraftId:earlier.id,error:'Complete the earlier reconciliation from '+earlier.summary.from+' to '+earlier.summary.to+' first. Later periods cannot be finalized out of order.'});
   if(!isOwner(req)){
     if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot request finalization for this reconciliation.'});
+    // This request will save the evidence with the approval. Capture its real
+    // audit metadata before fingerprinting so the same save cannot stale it.
+    require('./gokwik-api-accounting').finalizeStagedAudit(s);
     const view=draftReconciliation(s,draft);if(view.unresolved)return res.status(409).json({success:false,error:view.unresolved+' difference(s) still need a decision.'});
     const request=pending||{id:'BRA-'+Date.now(),draftId:draft.id,nature:draft.nature,account:draft.account,from:draft.summary&&draft.summary.from||'',to:draft.summary&&draft.summary.to||'',status:'pending',requestedBy:req.user.username,requestedAt:new Date().toISOString()};request.gokwikFingerprint=view.gokwik.fingerprint;request.ownerPersonalTransferFingerprint=ownerPersonalTransferApprovalFingerprint(draft);request.bankAmountAuthorityFingerprint=view.bankAmountAuthorityFingerprint;s.bankReconciliationApprovals[request.id]=request;
     if(!pending)audit(s,req,'BANK_RECONCILIATION_FINALIZATION_REQUESTED','bank_reconciliation',draft.id,{nature:draft.nature,account:draft.account,after:request,note:'Owner approval required before final reconciliation'});saveStore(s);
@@ -6483,6 +6495,9 @@ router.post('/api/expenses/bank-statements/finalize',(req,res)=>{
   if(draft.account===gokwikAccounting.BANK&&!isOwner(req))return res.status(403).json({success:false,error:'Owner approval is required for final bank posting.'});
   const transferError=stagedOwnerPersonalTransferError(draft);if(transferError)return res.status(409).json({success:false,error:transferError+' Review the transfer again; nothing was posted.'});
   const duplicateError=stagedManagedPersonalTransferDuplicateError(s,draft);if(duplicateError)return res.status(409).json({success:false,error:duplicateError+' Nothing was posted.'});
+  // Capture the same real audit metadata in posting fingerprints and the save.
+  // Existing persisted API audit times are never replaced.
+  require('./gokwik-api-accounting').finalizeStagedAudit(s);
   const view=draftReconciliation(s,draft),deferClosingBalance=b.deferClosingBalance===true;
   if(view.unresolved)return res.status(409).json({success:false,error:view.unresolved+' difference(s) still need a decision.',reconciliation:view});
   if(!view.balanceResolved&&!deferClosingBalance)return res.status(409).json({success:false,error:'Ledger closing balance differs from the bank by ₹'+Math.abs(view.balanceDifference).toFixed(2)+'. Resolve the opening/carry-forward balance first.',reconciliation:view});
