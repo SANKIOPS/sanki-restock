@@ -184,6 +184,176 @@ test('same-cutoff partial reconciliation derives Oct18 opening from prior ledger
   assert.equal(read().bankReconciliationDrafts[draftId].openingResolution, undefined);
 });
 
+// Reproduce the live topology, not a lifetime ledger invented to equal the
+// statement: an Oct15 verified closing, Oct16/17 activity subsequently covered
+// by a partial Oct18 finalization, and unreconciled Oct18 transfer decisions.
+function seedEarlierAnchor() {
+  const stored = seed();
+  delete stored.expenses['EX-PRIOR-SUPPLIER'];
+  stored.receipts[0].amount = 550000;
+  const book = stored.bankStatements[account];
+  const anchor = { id: 'BST-OCT15', draftId: 'BRD-OCT15', from: '2026-10-15', to: '2026-10-15',
+    balanceReconciled: true, balanceDifference: 0, closingBalanceDeferred: false,
+    statementSummary: { from: '2026-10-15', to: '2026-10-15', closingBalance: 264515.82 },
+    ledgerClosingBalance: 264515.82, reconciliationRows: [] };
+  book.imports.push(anchor);
+  const later = book.imports[0];
+  const movement = (id, day, debit, credit = 0, fee = false) => {
+    const d = '2026-10-' + day;
+    if (fee) stored.adjustments.push({ id, date: d, account, nature: 'SANKI', amount: -debit,
+      automaticAxisTransferCharge: id === 'ADJ-GAP-AUTO', reconciliationDraft: previousDraftId,
+      note: 'Verified transfer fee' });
+    else if (credit) stored.receipts.push({ id, date: d, account, nature: 'SANKI', amount: credit, source: 'Verified prior receipt' });
+    else stored.expenses[id] = { id, date: d, nature: 'SANKI', status: 'paid', approvedAt: d,
+      vendor: 'Verified prior payment', amount: debit, paidAmount: debit,
+      payments: [{ id: 'PAY-001', date: d, amount: debit, account, proof: '/fixture.jpg' }] };
+    const appId = fee || credit ? id : id + '/PAY-001';
+    later.reconciliationRows.push({ id: 'covered-' + id, linkedRecordIds: [appId],
+      ledger: { id: appId, date: d, debit, credit } });
+  };
+  // Synthetic bridge amounts preserve the accounting shape without publishing
+  // a customer's historical statement transactions.
+  movement('FIXTURE-LOAN-PAYMENT', '16', 50000);
+  movement('FIXTURE-CONTRIBUTION', '16', 0, 50000);
+  movement('PRIOR-TRANSFER-A', '16', 1200);
+  movement('ADJ-GAP-A', '16', 5.9, 0, true);
+  movement('PRIOR-PAYTM', '17', 0, 7423.6);
+  movement('EX-BNA', '17', 200);
+  movement('EX-GST', '17', 100);
+  movement('PRIOR-ADVANCE', '17', 2900);
+  movement('ADJ-GAP-AUTO', '17', 5.9, 0, true);
+  movement('PRIOR-TRANSFER-B', '17', 23000);
+  movement('ADJ-GAP-B', '17', 5.9, 0, true);
+  movement('PRIOR-TRANSFER-C', '17', 10000);
+  movement('ADJ-GAP-C', '17', 5.9, 0, true);
+  const draft = stored.bankReconciliationDrafts[draftId];
+  Object.assign(draft.resolutions['bank-2'], { principalAmount: 71118, chargeAmount: 5.9,
+    postingNature: 'SANKI', otherNature: 'PERSONAL', classification: 'owner_withdrawal', chargeCategory: 'BANK CHARGES' });
+  Object.assign(draft.resolutions['bank-3'], { principalAmount: 960, chargeAmount: 2.95, chargeCategory: 'BANK CHARGES' });
+  write(stored);
+  return stored;
+}
+
+test('Axis Oct18 overlap uses Oct15 verified closing and includes later finalized principal and fees once', async () => {
+  seedEarlierAnchor();
+  const before = financialSnapshot(read());
+  const view = await preview();
+  assertBalancedPeriod(view);
+  assert.equal(view.openingSource, 'previous_reconciliation');
+  assert.equal(view.openingBaselineDate, '2026-10-15');
+  assert.equal(view.previousClosing, 264515.82);
+  assert.equal(view.carryForwardNet, -30000);
+  assert.equal(view.carryForwardMovements.filter(row => row.id === 'ADJ-GAP-AUTO').length, 1);
+  assert.equal(view.historicalOpeningNet, 0, 'legacy activity before the verified anchor is already represented');
+  assert.equal(view.openingAnchorRecordId, 'BST-OCT15');
+  assert.deepEqual(await preview(), view);
+  assert.equal(financialSnapshot(read()), before);
+});
+
+test('earlier-anchor overlap finalization keeps reviewed principal/fee splits and posts each exactly once', async () => {
+  seedEarlierAnchor();
+  const before = read();
+  const finalized = await invoke('POST', '/api/expenses/bank-statements/finalize', { body: { draftId } });
+  assert.equal(finalized.status, 200, JSON.stringify(finalized.body));
+  assert.equal(finalized.body.balanceDifference, 0);
+  const after = read();
+  assert.equal(after.openingBalances[account], baseOpening);
+  assert.deepEqual(JSON.parse(financialSnapshot(after)).expenses, JSON.parse(financialSnapshot(before)).expenses);
+  assert.deepEqual(after.receipts, before.receipts);
+  assert.deepEqual(after.transfers.filter(row => row.reconciliationDraft === draftId).map(row => row.amount).sort((a,b)=>a-b), [960,71118]);
+  const fees = after.adjustments.filter(row => row.reconciliationDraft === draftId);
+  assert.deepEqual(fees.map(row=>row.amount).sort((a,b)=>a-b), [-5.9,-5.9,-2.95]);
+  assert.equal(after.transfers.filter(row=>row.id==='TR-00181').length,1);
+  assert.equal(after.transfers.find(row=>row.id==='TR-00181').amount,10444);
+  assert.equal(after.paytmSettlements.length,1);
+  const completeImport = after.bankStatements[account].imports.find(row=>row.draftId===draftId);
+  assert.ok(completeImport.carryForwardMovements.every(row=>row.bankEvidencePending===false));
+  assert.equal(completeImport.reconciliationBankCoverageComplete,true);
+  assert.equal(completeImport.reconciliationBankTransactionIds.length,4);
+  assert.ok(completeImport.reconciliationBankTransactionIds.includes('BTX-PAYTM-OCT18'));
+  const saved = financialSnapshot(after);
+  assert.equal((await invoke('POST','/api/expenses/bank-statements/finalize',{body:{draftId}})).status,404);
+  assert.equal(financialSnapshot(read()),saved);
+});
+
+test('an earlier anchor never conceals an actual missing movement or creates a balancing adjustment', async () => {
+  const stored = seedEarlierAnchor();
+  stored.expenses['EX-BNA'].payments[0].amount = 225;
+  write(stored);
+  const before = financialSnapshot(read());
+  const view = await preview();
+  assert.equal(view.currentOpening, periodOpening - 25);
+  assert.equal(view.balanceDifference,25);
+  assert.equal(view.canFinalize,false);
+  assert.equal((await invoke('POST','/api/expenses/bank-statements/finalize',{body:{draftId}})).status,409);
+  assert.equal(financialSnapshot(read()),before);
+});
+
+test('the next day uses the completed statement instead of its superseded partial closing', async () => {
+  seedEarlierAnchor();
+  const finalized = await invoke('POST','/api/expenses/bank-statements/finalize',{body:{draftId}});
+  assert.equal(finalized.status,200,JSON.stringify(finalized.body));
+  const stored = read(), nextId = 'BRD-OCT19-AFTER-COMPLETE';
+  stored.receipts.push({id:'REC-NEXT-DAY',nature:'SANKI',account,date:'2026-10-19',amount:1000,
+    source:'Next day receipt',receiptType:'other_income',category:'Other Income',bankReference:'629200000099'});
+  stored.bankReconciliationDrafts[nextId]={id:nextId,nature:'SANKI',account,
+    transactions:[{date:'2026-10-19',reference:'629200000099',description:'Next day receipt',debit:0,credit:1000,balance:closing+1000}],
+    summary:{from:'2026-10-19',to:'2026-10-19',openingBalance:closing,closingBalance:closing+1000,totalDebits:0,totalCredits:1000,validated:true},
+    resolutions:{},matchingPolicy:'balanced_date_amount_v5',temporaryFile:'',createdBy:'owner-opening-regression'};
+  write(stored);
+  const before=financialSnapshot(read()),view=await preview(nextId);
+  assert.equal(view.currentOpening,closing);
+  assert.equal(view.ledgerClosing,closing+1000);
+  assert.equal(view.balanceDifference,0);
+  assert.deepEqual(view.reconciliationConflicts,[]);
+  assert.equal(view.canFinalize,true);
+  assert.equal(financialSnapshot(read()),before);
+});
+
+test('an overlapping statement cannot bypass a deferred earlier closing', async () => {
+  const stored=seedEarlierAnchor();
+  const book=stored.bankStatements[account];
+  book.imports[1].balanceReconciled=false;
+  book.imports[1].closingBalanceDeferred=true;
+  write(stored);
+  const before=financialSnapshot(read()),view=await preview();
+  assert.equal(view.canFinalize,false);
+  assert.ok(view.reconciliationConflicts.some(row=>row.type==='ambiguous_opening_anchor'));
+  assert.equal(financialSnapshot(read()),before);
+});
+
+test('a spanning-tail statement cannot bypass its deferred cutoff closing', async () => {
+  const stored=seedEarlierAnchor(),book=stored.bankStatements[account];
+  book.imports[0].balanceReconciled=false;
+  book.imports[0].closingBalanceDeferred=true;
+  book.lastReconciliation.balanceReconciled=false;
+  book.lastReconciliation.closingBalanceDeferred=true;
+  const draft=stored.bankReconciliationDrafts[draftId];
+  draft.summary.from='2026-10-17';
+  draft.summary.to='2026-10-19';
+  write(stored);
+  const before=financialSnapshot(read()),view=await preview();
+  assert.equal(view.canFinalize,false);
+  assert.ok(view.reconciliationConflicts.some(row=>row.type==='ambiguous_opening_anchor'));
+  assert.equal(financialSnapshot(read()),before);
+});
+
+test('conflicting earlier finalized closings block an overlapping statement without replacing history', async () => {
+  const stored = seedEarlierAnchor();
+  const conflict = clone(stored.bankStatements[account].imports[1]);
+  conflict.id = 'BST-OCT15-CONFLICT';
+  conflict.statementSummary.closingBalance += 100;
+  conflict.ledgerClosingBalance += 100;
+  stored.bankStatements[account].imports.push(conflict);
+  write(stored);
+  const before = financialSnapshot(read());
+  const view = await preview();
+  assert.equal(view.canFinalize,false);
+  assert.ok(view.reconciliationConflicts.some(row=>row.type==='ambiguous_opening_anchor'));
+  assert.equal((await invoke('POST','/api/expenses/bank-statements/finalize',{body:{draftId}})).status,409);
+  assert.equal(financialSnapshot(read()),before);
+});
+
 test('a first partial statement with no finalized cutoff includes all earlier ledger movements', async () => {
   seed({ cutoff: '' });
   const before = financialSnapshot(read());
