@@ -7144,6 +7144,16 @@ module.exports.applyAxis3448PaytmBankTruthSettlements = applyAxis3448PaytmBankTr
 module.exports.stagePaytmSettlementsFromAxisDraft = stagePaytmSettlementsFromAxisDraft;
 module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;
 module.exports.applyFinalizedBankTruth = applyFinalizedBankTruth;
+// Reuse the same account/privacy policy for card-settlement source links.
+// This exports policy functions only; it grants no new accounting access.
+module.exports.creditCardSettlementPolicy = {
+  accountVisibleToReq, allowedPayingAccount, canManagePersonalAccounting,
+  isTrackedAccount: account => {
+    const candidate=canonicalAccountName(account).toLowerCase();
+    const accounts=NATURES.flatMap(transferAccountsForNature).concat(...Object.values(CLAIMANT_ACCOUNTS)),digits=candidate.replace(/\D/g,'');
+    return !!candidate&&accounts.some(name=>canonicalAccountName(name).toLowerCase()===candidate||(digits&&canonicalAccountName(name).replace(/\D/g,'').endsWith(digits)));
+  }
+};
 module.exports.mergeActiveBankReconciliationDrafts = mergeActiveBankReconciliationDrafts;
 module.exports.extendPendingDraftThroughFinalizedCoverage = extendPendingDraftThroughFinalizedCoverage;
 module.exports.bankFinalizationImportPlan = bankFinalizationImportPlan;
