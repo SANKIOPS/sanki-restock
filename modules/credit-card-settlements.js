@@ -3,6 +3,7 @@
 // withdrawal or a negative expense. This module is deliberately read-only.
 const crypto = require('crypto');
 const { activeRow, rowMatches } = require('./credit-card-accounting');
+const legacySources = require('./credit-card-legacy-settlement-sources');
 const NATURES = ['SANKI', 'SAMAST', 'PERSONAL'];
 const text = value => String(value == null ? '' : value).trim();
 const ref = value => text(value).replace(/[^a-z0-9]/ig, '').toLowerCase();
@@ -78,7 +79,7 @@ function catalog(store, exp, statement) {
     else if (transfer.creditCardPaymentId) blockedReason = 'The associated card-payment record is missing or inactive.';
     out.push({ id: 'transfer:' + transfer.id, source: transfer, transfer, date: transfer.date, amount: transfer.amount, account: text(transfer.fromAccount), nature: text(transfer.fromNature || transfer.nature), reference: paymentReference(null, transfer), blockedReason, fingerprint: fingerprint({ card: { id: card.id, name: card.name, last4: card.last4 }, transfer }) });
   }
-  return out;
+  return out.concat(legacySources.sources(store, exp, statement, out));
 }
 function sameSource(a, b, sources) {
   if (a === b) return true;
@@ -90,11 +91,15 @@ function sameSource(a, b, sources) {
 }
 function claimed(store, statement, row, source, sources) {
   return values(store.statements).some(other => {
-    if (other.cardId !== statement.cardId || !active(other) || ['discarded', 'archived'].includes(other.status)) return false;
+    if (!active(other) || ['discarded', 'archived'].includes(other.status)) return false;
     return (other.rows || []).some(previous => {
-      if (!activeRow(previous) || previous.classification !== 'card_payment' || previous.settlementMode !== 'link_existing' || !sameSource(previous.settlementSourceId, source.id, sources)) return false;
+      if (!activeRow(previous) || previous.classification !== 'card_payment' || previous.settlementMode !== 'link_existing') return false;
+      const legacy = source.sourceKind === 'legacy_expense_payment' || text(previous.settlementSourceId).startsWith('legacy_expense_payment:');
+      if (other.cardId !== statement.cardId && !legacy) return false;
+      const physicalAlias = legacy && text(previous.payingAccount).toLowerCase() === source.account.toLowerCase() && cents(previous.amount) === cents(source.amount) && day(previous.date) !== null && day(source.date) !== null && Math.abs(day(previous.date) - day(source.date)) <= 3;
+      if (!sameSource(previous.settlementSourceId, source.id, sources) && !physicalAlias) return false;
       if (other.id === statement.id && previous.id === row.id) return false;
-      if (row.replaces && row.replaces.statementId === other.id && row.replaces.rowId === previous.id && rowMatches(row, previous)) return false;
+      if (other.cardId === statement.cardId && row.replaces && row.replaces.statementId === other.id && row.replaces.rowId === previous.id && rowMatches(row, previous)) return false;
       return true;
     });
   });
@@ -114,13 +119,13 @@ function candidates(store, exp, statement, row, canViewAccount) {
   const sources = catalog(store, exp, statement);
   return sources.filter(s => sourcePermitted(canViewAccount, s)).map(source => {
     const blockedReason = sourceProblem(store, statement, row, source, sources);
-    return { id: source.id, label: source.id.slice(source.id.indexOf(':') + 1) + ' · ' + source.account, date: source.date, amount: source.amount, account: source.account, nature: source.nature, reference: source.reference, fingerprint: source.fingerprint, eligible: !blockedReason, blockedReason, dateReasonRequired: source.date !== row.date, bankMovementRecorded: !!source.transfer, status: source.transfer ? 'Existing recorded settlement; bank verification is separate' : 'Legacy card payment; bank movement not verified here' };
+    return { id: source.id, label: source.id.slice(source.id.indexOf(':') + 1) + ' · ' + source.account, date: source.date, amount: source.amount, account: source.account, nature: source.nature, reference: source.reference, fingerprint: source.fingerprint, eligible: !blockedReason, blockedReason, dateReasonRequired: source.date !== row.date, bankMovementRecorded: source.bankMovementRecorded === true || !!source.transfer, status: source.status || (source.transfer ? 'Existing recorded settlement; bank verification is separate' : 'Legacy card payment; bank movement not verified here'), ...(source.sourceKind ? { sourceKind: source.sourceKind, legacyConfirmationRequired: source.legacyConfirmationRequired === true } : {}) };
   });
 }
 function reviewSettlement(store, exp, statement, row, input = {}, canViewAccount) {
   const mode = text(input.settlementMode) || 'pending';
   const reason = text(input.settlementReason);
-  const fields = { settlementMode: mode, settlementSourceId: '', settlementSourceFingerprint: '', settlementReason: reason, payingNature: '', payingAccount: '', settlementReference: '' };
+  const fields = { settlementMode: mode, settlementSourceId: '', settlementSourceFingerprint: '', settlementReason: reason, payingNature: '', payingAccount: '', settlementReference: '', settlementLegacyConfirmed: false };
   const error = message => ({ fields: null, error: message });
   const amount = cents(row.amount);
   if (amount === null || amount <= 0 || cents(row.credit) !== amount || cents(row.debit || 0) !== 0 || day(row.date) === null) return error('A card-payment settlement must be a valid dated, positive statement credit.');
@@ -132,8 +137,9 @@ function reviewSettlement(store, exp, statement, row, input = {}, canViewAccount
     const source = matching[0], problem = sourceProblem(store, statement, row, source, sources);
     if (problem) return error(problem);
     if (!text(input.settlementSourceFingerprint) || input.settlementSourceFingerprint !== source.fingerprint) return error('The payment source changed after it was displayed. Refresh and review it again.');
+    if (source.legacyConfirmationRequired && (input.settlementLegacyConfirmed !== true || reason.length < 10)) return error('Explicitly confirm this legacy PERSONAL card repayment and explain the existing source (at least 10 characters). Its expense and bank history will remain unchanged.');
     if (source.date !== row.date && reason.length < 10) return error('Explain the payment-versus-statement date difference (at least 10 characters).');
-    Object.assign(fields, { settlementSourceId: source.id, settlementSourceFingerprint: source.fingerprint, payingNature: source.nature, payingAccount: source.account, settlementReference: source.reference });
+    Object.assign(fields, { settlementSourceId: source.id, settlementSourceFingerprint: source.fingerprint, payingNature: source.nature, payingAccount: source.account, settlementReference: source.reference, settlementLegacyConfirmed: source.legacyConfirmationRequired === true });
     return { fields, error: '' };
   }
   if (mode === 'external') {
@@ -154,6 +160,7 @@ function validateStatement(store, exp, statement, canViewAccount) {
     const result = reviewSettlement(store, exp, statement, row, row, canViewAccount);
     if (result.error) return result.error;
     for (const key of ['settlementSourceId', 'settlementSourceFingerprint', 'payingNature', 'payingAccount', 'settlementReference']) if (text(row[key]) !== text(result.fields[key])) return 'The saved settlement fields no longer agree with the authoritative payment. Review the source again.';
+    if ((row.settlementLegacyConfirmed === true) !== (result.fields.settlementLegacyConfirmed === true)) return 'The saved legacy repayment confirmation no longer agrees with its source. Review it again.';
   }
   return '';
 }
