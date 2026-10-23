@@ -241,6 +241,7 @@ const PRASHANT_VISIBLE_OWNER_ACCOUNTS = ['Services'];
 // Transfer counterpart selection is intentionally separate from payment,
 // ledger and reconciliation access to the Owner's private accounts.
 const OWNER_PERSONAL_TRANSFER_ACCOUNTS = ['IndusInd Bank 7883','ICICI Bank 0992','ICICI Bank 0993'];
+const OWN_ACCOUNT_TRANSFER_REGISTRY_VERSION = 'own-account-transfer-v1';
 const ACCOUNT_RENAMES = { 'Axis Bank 3645':'Prashant Axis 3645', 'Cash':'Counter Cash', 'prashant Cash':'Prashant Cash' };
 
 function canonicalAccountName(value) {
@@ -2023,7 +2024,81 @@ function canRecordOwnerPersonalTransfer(req,fromNature,toNature,fromAccount,toAc
 function canRecordManagedPersonalInternalTransfer(req,fromNature,toNature,fromAccount,toAccount,classification){
   return canManagePersonalAccounting(req)&&fromNature==='PERSONAL'&&toNature==='PERSONAL'&&classification==='internal_transfer'&&approvalNatures(req).includes('PERSONAL')&&accountVisibleToReq(req,fromAccount)&&accountVisibleToReq(req,toAccount);
 }
-function stagedOwnerPersonalTransferError(draft){
+function knownOwnTransferAccount(nature,account){
+  const name=canonicalAccountName(account),n=String(nature||'').trim().toUpperCase();
+  if(OWNER_PERSONAL_TRANSFER_ACCOUNTS.includes(name))return n==='PERSONAL'?name:'';
+  return NATURES.includes(n)&&companyAccountsForNature(n).includes(name)?name:'';
+}
+function ownTransferAccountsForReq(req){
+  if(!isOwner(req)&&!(isAdmin(req)&&isPrashant(req))&&!canManagePersonalAccounting(req))return[];
+  return NATURES.flatMap(nature=>companyAccountsForNature(nature).filter(account=>knownOwnTransferAccount(nature,account)&&approvalNatures(req).includes(nature)&&(nature!=='PERSONAL'||canManagePersonalAccounting(req))&&accountVisibleToReq(req,account)).map(account=>({nature,account,label:(nature==='PERSONAL'?'Gagan Sir Personal':nature)+' · '+account}))).concat(canSelectOwnerPersonalTransferAccounts(req)?OWNER_PERSONAL_TRANSFER_ACCOUNTS.filter(account=>!canManagePersonalAccounting(req)||!accountVisibleToReq(req,account)).map(account=>({nature:'PERSONAL',account,label:'Gagan Sir Personal · '+account})):[]);
+}
+function ownAccountTransferClassification(fromNature,toNature){return fromNature===toNature?'internal_transfer':fromNature==='PERSONAL'?'owner_contribution':toNature==='PERSONAL'?'owner_withdrawal':'inter_entity_loan';}
+function ownBankOwnership(draft,row,nature){
+  const tag=row&&row.entityTag;if(!isSharedBankReconciliationAccount(draft.account)||nature!=='SAMAST'||!tag||tag.nature!==nature||tag.sourceConflict||!['manual','linked_ledger','finalized_bank_record'].includes(tag.source))return null;
+  return{nature,account:draft.account,fingerprint:crypto.createHash('sha256').update(JSON.stringify(tag)).digest('hex')};
+}
+function validOwnAccountSelection(selection){
+  const valid=(nature,account)=>knownOwnTransferAccount(nature,account)===account||selection.bankOwnership&&selection.bankOwnership.nature===nature&&selection.bankOwnership.account===account&&nature==='SAMAST'&&isSharedBankReconciliationAccount(account)&&/^[a-f0-9]{64}$/.test(String(selection.bankOwnership.fingerprint||''));
+  return !!selection&&selection.version===OWN_ACCOUNT_TRANSFER_REGISTRY_VERSION&&valid(selection.fromNature,selection.fromAccount)&&valid(selection.toNature,selection.toAccount)&&selection.fromAccount!==selection.toAccount&&selection.classification===ownAccountTransferClassification(selection.fromNature,selection.toNature);
+}
+function prepareOwnAccountSelection(req,fromNature,toNature,fromAccount,toAccount,bankOwnership){
+  const selection={version:OWN_ACCOUNT_TRANSFER_REGISTRY_VERSION,fromNature,toNature,fromAccount,toAccount,classification:ownAccountTransferClassification(fromNature,toNature),...(bankOwnership?{bankOwnership}:{})};
+  if(!validOwnAccountSelection(selection))return null;
+  const choices=ownTransferAccountsForReq(req).concat(bankOwnership&&canManagePersonalAccounting(req)&&approvalNatures(req).includes(bankOwnership.nature)&&accountVisibleToReq(req,bankOwnership.account)?[bankOwnership]:[]);if(![ [fromNature,fromAccount],[toNature,toAccount] ].every(([nature,account])=>choices.some(choice=>choice.nature===nature&&choice.account===account)))return null;
+  const managed=canManagePersonalAccounting(req)&&approvalNatures(req).includes(fromNature)&&approvalNatures(req).includes(toNature)&&accountVisibleToReq(req,fromAccount)&&accountVisibleToReq(req,toAccount),special=canRecordOwnerPersonalTransfer(req,fromNature,toNature,fromAccount,toAccount,selection.classification),business=isPrashant(req)&&isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,selection.classification);
+  return managed||special||business?selection:null;
+}
+function ownTransferInference(draft,row,otherNature,otherAccount){
+  if(!isSharedBankReconciliationAccount(draft&&draft.account)||!OWNER_PERSONAL_TRANSFER_ACCOUNTS.includes(draft.account)||!row||!row.bank||row.app||row.resolution||row.status!=='missing_in_app')return null;
+  if(reconciliationPostingNature(draft,row.id,row)||row.entityTag&&(row.entityTag.sourceConflict||row.entityTag.source==='mixed_linked_entries'||row.entityTag.source==='ambiguous_candidates'))return null;
+  const counterpart=knownOwnTransferAccount(otherNature,otherAccount);if(!counterpart||counterpart===draft.account)return null;
+  return{version:OWN_ACCOUNT_TRANSFER_REGISTRY_VERSION,nature:'PERSONAL',account:draft.account,otherNature,otherAccount:counterpart,bankSignature:reconciliationBankStrongSignature(row.bank)};
+}
+function ownTransferReviewRow(s,draft,rowId,resolution){
+  const index=Number(String(rowId).replace('bank-','')),cleanDraft=JSON.parse(JSON.stringify(draft));delete cleanDraft.resolutions[rowId];
+  const cleanStore=Object.assign({},s,{transfers:(s.transfers||[]).filter(t=>!(resolution.action==='create_transfer'&&t.id===resolution.transferId&&t.bankReconciliationEvidence&&t.bankReconciliationEvidence.draftId===draft.id&&t.bankReconciliationEvidence.rowId===rowId&&JSON.stringify(t.ownAccountSelection)===JSON.stringify(resolution.ownAccountSelection)&&JSON.stringify(t.ownAccountTransfer)===JSON.stringify(resolution.ownAccountTransfer)))});
+  cleanStore.bankStatements=Object.fromEntries(Object.entries(s.bankStatements||{}).map(([key,book])=>[key,Object.assign({},book,{transactions:Object.fromEntries(Object.entries(book.transactions||{}).filter(([,transaction])=>!(transaction.reconciliationDraftId===draft.id&&transaction.reconciliationDraftRowIndex===index&&reconciliationBankStrongSignature(transaction)===reconciliationBankStrongSignature(draft.transactions[index]))))})]));
+  return{draft:cleanDraft,row:draftReconciliation(cleanStore,cleanDraft,{readOnly:true}).rows.find(value=>value.id===rowId)};
+}
+function ownTransferEvidenceError(s,draft){
+  for(const[rowId,resolution]of Object.entries(draft.resolutions||{})){
+    const selection=resolution&&resolution.ownAccountSelection;
+    if(selection){
+      const bankIndex=String(rowId).match(/^bank-(\d+)$/),bank=bankIndex&&(draft.transactions||[])[Number(bankIndex[1])],incoming=bank&&num(bank.credit)>0,postingNature=reconciliationPostingNature(draft,rowId),otherNature=incoming?selection.fromNature:selection.toNature,otherAccount=incoming?selection.fromAccount:selection.toAccount;
+      if(!validOwnAccountSelection(selection)||!bank||selection.bankSignature!==reconciliationBankStrongSignature(bank)||!['create_internal_transfer','create_transfer'].includes(resolution.action)||(incoming?selection.toAccount:selection.fromAccount)!==draft.account||(incoming?selection.toNature:selection.fromNature)!==postingNature||resolution.action==='create_internal_transfer'&&(resolution.otherNature!==otherNature||resolution.otherAccount!==otherAccount||resolution.classification!==selection.classification))return 'The selected own-account transfer route no longer matches this statement. Review the accounts again.';
+      if(resolution.action==='create_transfer'){
+        const matches=(s.transfers||[]).filter(t=>t.id===resolution.transferId&&!t.accountingExcluded),transfer=matches[0];
+        if(matches.length!==1||JSON.stringify(transfer.ownAccountSelection)!==JSON.stringify(selection)||transfer.fromNature!==selection.fromNature||transfer.toNature!==selection.toNature||transfer.fromAccount!==selection.fromAccount||transfer.toAccount!==selection.toAccount||transfer.classification!==selection.classification||transfer.date!==bank.date||Math.abs(num(transfer.amount)-num(bank.credit))>.005||!transfer.bankReconciliationEvidence||transfer.bankReconciliationEvidence.draftId!==draft.id||transfer.bankReconciliationEvidence.rowId!==rowId||String(transfer.bankReconciliationEvidence.reference||'')!==String(bank.reference||'')||String(transfer.bankReconciliationEvidence.description||'')!==String(bank.description||''))return 'The created own-account transfer no longer matches its recorded selection and bank evidence.';
+      }
+      const clean=ownTransferReviewRow(s,draft,rowId,resolution);
+      if(!clean.row||clean.row.app||clean.row.status==='already_reconciled'||clean.row.entityTag&&clean.row.entityTag.sourceConflict)return 'An existing or conflicting source now affects this own-account transfer. Review or link it instead.';
+      if(isSharedBankReconciliationAccount(draft.account)){
+        const authoritativeNature=reconciliationPostingNature(clean.draft,rowId,clean.row);
+        if(authoritativeNature&&authoritativeNature!==postingNature||!authoritativeNature&&!resolution.ownAccountTransfer)return 'This own-account transfer has no retained authoritative bank-side ownership or verified registry inference. Review the original evidence again.';
+      }
+      if(selection.bankOwnership&&JSON.stringify(ownBankOwnership(clean.draft,clean.row,postingNature))!==JSON.stringify(selection.bankOwnership))return 'The authoritative bank-side entity changed after the own-account selection. Review the transfer again.';
+    }
+    const provenance=resolution&&resolution.ownAccountTransfer;if(!provenance)continue;
+    if(!['create_internal_transfer','create_transfer'].includes(resolution.action))return 'The own-account transfer decision is no longer active.';
+    const otherNature=String(provenance.otherNature||'').trim().toUpperCase(),otherAccount=knownOwnTransferAccount(otherNature,provenance.otherAccount),index=String(rowId).match(/^bank-(\d+)$/),bank=index&&(draft.transactions||[])[Number(index[1])];
+    if(!bank||!otherAccount||provenance.version!==OWN_ACCOUNT_TRANSFER_REGISTRY_VERSION||provenance.account!==draft.account||provenance.nature!=='PERSONAL'||provenance.bankSignature!==reconciliationBankStrongSignature(bank)||resolution.postingNature!=='PERSONAL')return 'The own-account registry or bank evidence changed. Review the transfer again.';
+    if(resolution.action==='create_internal_transfer'&&(resolution.otherNature!==otherNature||resolution.otherAccount!==otherAccount))return 'The own-account transfer counterpart changed. Review the transfer again.';
+    const clean=ownTransferReviewRow(s,draft,rowId,resolution),current=ownTransferInference(clean.draft,clean.row,otherNature,otherAccount);
+    if(!current||JSON.stringify(current)!==JSON.stringify(provenance))return 'The own-account transfer has conflicting or changed ownership evidence. Review or link its existing source.';
+    const incoming=num(bank.credit)>0,fromNature=incoming?otherNature:'PERSONAL',toNature=incoming?'PERSONAL':otherNature,fromAccount=incoming?otherAccount:draft.account,toAccount=incoming?draft.account:otherAccount,classification=fromNature===toNature?'internal_transfer':ownerPersonalTransferClassification(fromNature,toNature);
+    if(!selection&&(fromNature!==toNature&&!isOwnerPersonalTransferRoute(fromNature,toNature,fromAccount,toAccount,classification)||fromNature===toNature&&fromNature!=='PERSONAL'))return 'The own-account transfer route is invalid.';
+    if(resolution.action==='create_transfer'){
+      const matches=(s.transfers||[]).filter(t=>t.id===resolution.transferId&&!t.accountingExcluded);
+      if(matches.length!==1)return 'The created own-account transfer is missing or ambiguous.';
+      const transfer=matches[0];if(transfer.fromNature!==fromNature||transfer.toNature!==toNature||transfer.fromAccount!==fromAccount||transfer.toAccount!==toAccount||transfer.classification!==(selection?selection.classification:classification)||transfer.date!==bank.date||Math.abs(num(transfer.amount)-num(bank.credit))>.005||JSON.stringify(transfer.ownAccountTransfer)!==JSON.stringify(provenance))return 'The recorded own-account transfer no longer matches its verified bank evidence.';
+    }
+  }
+  return '';
+}
+function stagedOwnerPersonalTransferError(draft,store,req){
+  const ownError=ownTransferEvidenceError(store||loadStore(),draft);if(ownError)return ownError;
+  if(req&&Object.values(draft.resolutions||{}).some(resolution=>{const selection=resolution&&resolution.ownAccountSelection;return selection&&!prepareOwnAccountSelection(req,selection.fromNature,selection.toNature,selection.fromAccount,selection.toAccount,selection.bankOwnership);}))return 'Your current account permissions no longer authorize this own-account transfer route.';
   for(const [rowId,resolution] of Object.entries(draft.resolutions||{})){
     if(!resolution||resolution.action!=='create_internal_transfer')continue;
     const explicitNature=resolution.otherNature!=null;
@@ -2034,7 +2109,7 @@ function stagedOwnerPersonalTransferError(draft){
     const otherAccount=allowedTransferAccount(otherNature,resolution.otherAccount),index=String(rowId).match(/^bank-(\d+)$/),bank=index&&(draft.transactions||[])[Number(index[1])];
     if(!bank||!otherAccount||!allowedTransferAccount(reconciledNature,draft.account)||(otherNature===reconciledNature&&otherAccount===draft.account))return 'The transfer counterpart no longer matches this bank statement.';
     const incoming=num(bank.credit)>0,fromNature=incoming?otherNature:reconciledNature,toNature=incoming?reconciledNature:otherNature,fromAccount=incoming?otherAccount:draft.account,toAccount=incoming?draft.account:otherAccount;
-    if(fromNature!==toNature&&!isOwnerPersonalTransferRoute(fromNature,toNature,fromAccount,toAccount,resolution.classification)||fromNature===toNature&&resolution.classification&&resolution.classification!=='internal_transfer')return 'The Owner transfer direction, counterpart or classification is invalid.';
+    if(!resolution.ownAccountSelection&&(fromNature!==toNature&&!isOwnerPersonalTransferRoute(fromNature,toNature,fromAccount,toAccount,resolution.classification)||fromNature===toNature&&resolution.classification&&resolution.classification!=='internal_transfer'))return 'The Owner transfer direction, counterpart or classification is invalid.';
     const split=ledgerConnections.transferSplit(bank,resolution.principalAmount,resolution.chargeAmount);
     if(!split)return 'The transfer principal and confirmed bank charge must exactly equal the statement row.';
     if(fromNature!==toNature&&split.charge>0&&(reconciledNature!=='SANKI'||!isBankLedgerName(draft.account)))return 'The transfer bank charge must remain in the reconciled business bank account.';
@@ -2042,9 +2117,9 @@ function stagedOwnerPersonalTransferError(draft){
   return '';
 }
 function ownerPersonalTransferApprovalFingerprint(draft){
-  const entries=Object.entries(draft.resolutions||{}).filter(([rowId,resolution])=>resolution&&resolution.action==='create_internal_transfer'&&resolution.otherNature&&String(resolution.otherNature).trim().toUpperCase()!==(reconciliationPostingNature(draft,rowId)||normalizedNature(draft.nature)));
+  const entries=Object.entries(draft.resolutions||{}).filter(([rowId,resolution])=>resolution&&(resolution.ownAccountSelection||resolution.ownAccountTransfer||resolution.action==='create_internal_transfer'&&resolution.otherNature&&String(resolution.otherNature).trim().toUpperCase()!==(reconciliationPostingNature(draft,rowId)||normalizedNature(draft.nature))));
   if(!entries.length)return '';
-  return crypto.createHash('sha256').update(JSON.stringify({nature:draft.nature,account:draft.account,entries:entries.sort(([a],[b])=>a.localeCompare(b)).map(([rowId,resolution])=>({rowId,resolution,bank:(draft.transactions||[])[Number(String(rowId).replace('bank-',''))]}))})).digest('hex');
+  return crypto.createHash('sha256').update(JSON.stringify({registryVersion:OWN_ACCOUNT_TRANSFER_REGISTRY_VERSION,registry:OWNER_PERSONAL_TRANSFER_ACCOUNTS,nature:draft.nature,account:draft.account,entries:entries.sort(([a],[b])=>a.localeCompare(b)).map(([rowId,resolution])=>({rowId,resolution,ownership:draft.transactionOwnership&&draft.transactionOwnership[rowId],bank:(draft.transactions||[])[Number(String(rowId).replace('bank-',''))]}))})).digest('hex');
 }
 const PRASHANT_RECONCILIATION_TRANSFER_ACCOUNTS=new Set(['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','IndusInd Bank 8181']);
 const ADMIN_OWNER_CONTRIBUTION_SOURCE={nature:'PERSONAL',account:'ICICI Bank 0993',toNature:'SANKI',toAccount:'Axis Bank 3448',classification:'owner_contribution',label:"Sir's personal bank account · ICICI Bank 0993",verifiedBankReferences:['IN12628960317832']};
@@ -2246,7 +2321,7 @@ router.use((req,res,next)=>{if(req.method!=='GET'||!['/api/expenses/bank-stateme
 router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{
   const s=loadStore(),draft=(s.bankReconciliationDrafts||{})[String(req.body&&req.body.draftId||'')];
   if(!draft||!canAccessBankDraft(req,s,draft))return next();
-  const error=stagedOwnerPersonalTransferError(draft);
+  const error=stagedOwnerPersonalTransferError(draft,s,req);
   if(error)return res.status(409).json({success:false,error:error+' Review the transfer again; nothing was posted.'});
   const duplicateError=stagedManagedPersonalTransferDuplicateError(s,draft);
   if(duplicateError)return res.status(409).json({success:false,error:duplicateError+' Nothing was posted.'});
@@ -2262,7 +2337,7 @@ router.use('/api/expenses/bank-statements/finalize',async(req,res,next)=>{
     const latest=loadStore(),latestDraft=(latest.bankReconciliationDrafts||{})[draftId];
     if(!latestDraft||JSON.stringify(latestDraft)!==guard)return res.status(409).json({success:false,error:'This reconciliation changed while its original statement was being verified. Reload it and try again; no ledger posting has been made.'});
     if(!validateApprovalTrimmedDraftExternalRows(latest,candidate,trimmedAt))return res.status(409).json({success:false,error:'This reconciliation was affected by the earlier Owner-approval issue, but one or more linked ledger records no longer match the retained statement. Discard this temporary preview and upload the original statement again; no ledger posting has been made.'});
-    const transferError=stagedOwnerPersonalTransferError(candidate);if(transferError)return res.status(409).json({success:false,error:transferError+' Review the transfer again; nothing was posted.'});
+    const transferError=stagedOwnerPersonalTransferError(candidate,latest,req);if(transferError)return res.status(409).json({success:false,error:transferError+' Review the transfer again; nothing was posted.'});
     const duplicateError=stagedManagedPersonalTransferDuplicateError(latest,candidate);if(duplicateError)return res.status(409).json({success:false,error:duplicateError+' Nothing was posted.'});
     latestDraft.transactions=candidate.transactions;latestDraft.resolutions=candidate.resolutions;latestDraft.matchingExclusions=candidate.matchingExclusions;latestDraft.summary=candidate.summary;latestDraft.approvalTrimRecovery=candidate.approvalTrimRecovery;delete latestDraft.originalStatementPeriod;
     Object.entries(latest.bankDateOverrides||{}).forEach(([id,value])=>{if(value&&value.provisional&&value.reconciliationDraft===latestDraft.id)delete latest.bankDateOverrides[id];});
@@ -2288,7 +2363,7 @@ router.use((req,res,next)=>{
 router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{
   const s=loadStore(),b=req.body||{},draft=(s.bankReconciliationDrafts||{})[b.draftId];
   if(!draft)return next();
-  const transferError=stagedOwnerPersonalTransferError(draft);if(transferError)return res.status(409).json({success:false,error:transferError+' Review the transfer again; nothing was posted.'});
+  const transferError=stagedOwnerPersonalTransferError(draft,s,req);if(transferError)return res.status(409).json({success:false,error:transferError+' Review the transfer again; nothing was posted.'});
   const duplicateError=stagedManagedPersonalTransferDuplicateError(s,draft);if(duplicateError)return res.status(409).json({success:false,error:duplicateError+' Nothing was posted.'});
   s.bankReconciliationApprovals=s.bankReconciliationApprovals||{};
   const pending=Object.values(s.bankReconciliationApprovals).find(x=>x.draftId===draft.id&&x.status==='pending');
@@ -2430,6 +2505,7 @@ router.get('/api/expenses/config', (req, res) => {
     ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, n==='SANKI'&&isPrashant(req)&&!isAdmin(req)?[DEFAULT_COUNTER_CASH].concat(PRASHANT_VISIBLE_OWNER_ACCOUNTS):(allowed.includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).filter(name=>accountBelongsInLedgerBook(n,name)).sort((a,b)=>a.localeCompare(b)) : [])])),
     transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req)&&n!=='PERSONAL' ? (n==='SANKI'&&approvalNatures(req).includes(n)?visibleAccountsForReq(req,transferAccountsForNature(n)):[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
     ownerPersonalTransferAccounts: canSelectOwnerPersonalTransferAccounts(req)?OWNER_PERSONAL_TRANSFER_ACCOUNTS.map(account=>({nature:'PERSONAL',account,label:'Gagan Sir Personal · '+account})):[],
+    ownTransferAccounts: ownTransferAccountsForReq(req),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
     vendorPaymentAccountsByNature: Object.fromEntries(NATURES.map(n => [n, vendorPaymentAccountsForReq(req,n)])),
     claimantAccountOwners: claimantAccountOwnersForReq(req),
@@ -4181,8 +4257,11 @@ router.post('/api/expenses/transfers', (req, res) => {
   const s = loadStore(); const b = req.body || {};
   const fromNature = normalizedNature(b.fromNature || b.nature), toNature = normalizedNature(b.toNature || b.nature);
   const fromAccount = allowedTransferAccount(fromNature, b.fromAccount), toAccount = allowedTransferAccount(toNature, b.toAccount);
+  const ownAccountSelection=b.ownAccountTransfer===true?prepareOwnAccountSelection(req,fromNature,toNature,fromAccount,toAccount):null;
+  if(b.ownAccountTransfer===true&&!ownAccountSelection)return res.status(403).json({success:false,error:'Choose two different authorized own accounts from the account list.'});
   const amount = num(b.amount), proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'',note=String(b.note||'').trim(),routedThroughIntermediary=b.routedThroughIntermediary===true||b.routedThroughIntermediary==='true',intermediary=String(b.intermediary||'').trim();
   let classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
+  if(ownAccountSelection)classification=ownAccountSelection.classification;
   const toNamita=toNature==='PERSONAL'&&(toAccount==='Namita 5464'||toAccount==='Namita Cash');
   if(isOwner(req)&&toNamita)classification=fromNature==='PERSONAL'?'internal_transfer':'owner_withdrawal';
   const ownerPersonalAllowed=canRecordOwnerPersonalTransfer(req,fromNature,toNature,fromAccount,toAccount,classification);
@@ -4201,7 +4280,7 @@ router.post('/api/expenses/transfers', (req, res) => {
   s.transferSeq = (s.transferSeq || 0) + 1;
   const transfer = { id: 'TR-' + String(s.transferSeq).padStart(5, '0'), nature:fromNature, fromNature, toNature, classification, fromAccount, toAccount, amount,
     date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10), proof, proofs, note, intermediary:routedThroughIntermediary?intermediary:'',routedThroughIntermediary,
-    createdBy: (req.user && req.user.username) || 'admin', createdAt: new Date().toISOString() };
+    createdBy: (req.user && req.user.username) || 'admin', createdAt: new Date().toISOString(),...(ownAccountSelection?{ownAccountSelection}:{}) };
   s.transfers = Array.isArray(s.transfers) ? s.transfers : []; s.transfers.push(transfer);audit(s,req,'TRANSFER_RECORDED','transfer',transfer.id,{nature:fromNature,account:fromAccount,after:transfer});saveStore(s);
   res.json({ success: true, transfer });
 });
@@ -5029,6 +5108,8 @@ function reconciliationTransactionOwnership(draft,row,movements){
   const candidateNatures=reconciliationCandidateOwnershipNatures(row,movements),ambiguous=candidateNatures.length>1&&!explicitLink&&!referenceVerified;
   if(ambiguous)return{nature:'',status:'needs_review',source:'ambiguous_candidates',confidence:'unknown',sourceNature:'',candidateNatures,linkedRecordIds,reason:'Plausible SAMAST and PERSONAL ledger entries both exist for this bank transaction.',sourceConflict:false};
   if(sourceNature&&(explicitLink||referenceVerified))return{nature:sourceNature,status:'derived',source:'linked_ledger',confidence:referenceVerified?'exact':'strong',sourceNature,linkedRecordIds,candidateNatures,reason:'Derived from the explicitly confirmed or reference-verified ledger entry.',sourceConflict:false};
+  const own=row.resolution&&row.resolution.ownAccountTransfer;
+  if(own&&['create_internal_transfer','create_transfer'].includes(row.resolution.action)&&own.version===OWN_ACCOUNT_TRANSFER_REGISTRY_VERSION&&own.account===draft.account&&OWNER_PERSONAL_TRANSFER_ACCOUNTS.includes(draft.account)&&own.nature==='PERSONAL'&&own.bankSignature===reconciliationBankStrongSignature(row.bank))return{nature:'PERSONAL',status:'derived',source:'own_account_transfer',confidence:'registry',sourceNature:'',linkedRecordIds,reason:'Explicit own-account transfer; this account is registered as PERSONAL for transfers only.',sourceConflict:false};
   return{nature:'',status:sourceNatures.length>1?'needs_review':'unknown',source:sourceNatures.length>1?'mixed_linked_entries':'unlinked',confidence:'unknown',sourceNature:'',candidateNatures:Array.from(new Set(candidateNatures.concat(sourceNatures))),linkedRecordIds,reason:sourceNatures.length>1?'Linked entries belong to different entities. Review the transaction ownership.':'No reliable linked SAMAST or PERSONAL source exists yet.',sourceConflict:false};
 }
 function reconciliationPostingNature(draft,rowId,row){
@@ -5268,6 +5349,7 @@ function draftReconciliationBase(s,draft,options={}){
   const groupOrder={possible_match:0,amount_mismatch:0,matched:1,resolved:1,already_reconciled:1,missing_in_app:2,missing_in_bank:2},rowDate=x=>String((x.bank&&x.bank.date)||(x.app&&x.app.date)||''),rowTime=x=>String((x.bank&&x.bank.timestamp)||(x.bank&&x.bank.date)||(x.app&&x.app.createdAt)||(x.app&&x.app.date)||''),rowSequence=x=>{const match=String(x.id||'').match(/(\d+)$/);return match?Number(match[1]):-1;};rows.sort((x,y)=>{const gx=groupOrder[x.status]??9,gy=groupOrder[y.status]??9;if(gx!==gy)return gx-gy;if(gx===2)return rowDate(x).localeCompare(rowDate(y))||(x.status==='missing_in_app'?0:1)-(y.status==='missing_in_app'?0:1)||rowTime(x).localeCompare(rowTime(y))||rowSequence(x)-rowSequence(y);return Number(!!y.matchingExclusion)-Number(!!x.matchingExclusion)||rowDate(y).localeCompare(rowDate(x))||rowTime(y).localeCompare(rowTime(x))||rowSequence(y)-rowSequence(x);});
   rows.forEach(x=>{if(x.resolution&&x.status!=='already_reconciled')x.originalStatus=x.status,x.status='resolved';});
   const sharedOwnership=isSharedBankReconciliationAccount(draft.account);rows.forEach(row=>{const tag=reconciliationTransactionOwnership(draft,row,allApp);if(!tag)return;row.entityTag=tag;row.ownershipTag=tag;row.transactionNature=tag.nature;row.ownershipEditable=row.status!=='already_reconciled';row.ownershipRequired=row.status!=='already_reconciled'&&!(row.resolution&&row.resolution.action==='bank_reversal_pair');row.ownershipUnresolved=!!tag.sourceConflict||row.ownershipRequired&&!tag.nature;});
+  rows.forEach(row=>{const resolution=row.resolution,selection=resolution&&resolution.ownAccountSelection;if(row.bank&&selection&&['create_internal_transfer','create_transfer'].includes(resolution.action)&&validOwnAccountSelection(selection)&&selection.bankSignature===reconciliationBankStrongSignature(row.bank)&&!(row.entityTag&&row.entityTag.sourceConflict))row.transferAccountNature=reconciliationPostingNature(draft,row.id,row);});
   addPersonalHistoricalSuggestions(s,draft,rows);
   const summary=rows.reduce((o,x)=>(o[x.status]=(o[x.status]||0)+1,o),{}),unresolvedRows=rows.filter(x=>!['matched','resolved','already_reconciled'].includes(x.status)||x.ownershipUnresolved),unresolved=unresolvedRows.length,ownershipUnresolvedRows=rows.filter(x=>x.ownershipUnresolved).map(x=>x.id);
   const card=creditCardByAccount(draft.account),baseOpening=card?num(card.openingOutstanding):reconciliationOpeningBalance(s,draft),priorClosing=openingAnchor.previousClosing;
@@ -6013,13 +6095,18 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
   if(row&&row.reversalReviewRequired)return res.status(409).json({success:false,error:'This credit is marked as a bank reversal. Review its matching debit; do not record it as incoming money or an account transfer.'});
   if(!row||!bank||!(amount>0))return res.status(400).json({success:false,error:'Choose an incoming bank transaction that is missing in the app.'});
   if(!note)return res.status(400).json({success:false,error:'Enter a note explaining the incoming money.'});
-  const now=new Date().toISOString(),user=req.user&&req.user.username||'system',toNature=reconciliationPostingNature(draft,b.rowId,row);
+  const now=new Date().toISOString(),user=req.user&&req.user.username||'system',ownAccountTransfer=sourceKind==='internal'&&b.ownAccountTransfer===true?ownTransferInference(draft,row,String(b.fromNature||'').trim().toUpperCase(),b.fromAccount):null;
+  let toNature=reconciliationPostingNature(draft,b.rowId,row);if(!toNature&&ownAccountTransfer)toNature=ownAccountTransfer.nature;
   if(!toNature)return res.status(409).json({success:false,error:sourceKind==='internal'?'This shared-bank receipt has no reliable bank-side entity. The source account alone cannot prove whether it belongs to SAMAST or PERSONAL. Link an existing verified transaction or review the bank-side ownership evidence; nothing has been recorded.':'This shared-bank receipt has no reliable SAMAST or PERSONAL ownership. Review the receipt evidence before recording it; nothing has been recorded.'});
   const toAccount=allowedTransferAccount(toNature,draft.account);
   if(!toAccount)return res.status(400).json({success:false,error:'The receiving account is not valid for this entity.'});
   let transfer=null,receipt=null;
   if(sourceKind==='internal'){
-    const fromNature=normalizedNature(b.fromNature),fromAccount=allowedTransferAccount(fromNature,b.fromAccount),classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
+    if(b.ownAccountTransfer===true&&b.classification==='salary_advance_funding')return res.status(400).json({success:false,error:'Use the salary-advance funding workflow so its advance and amount checks remain intact.'});
+    const fromNature=normalizedNature(b.fromNature),fromAccount=allowedTransferAccount(fromNature,b.fromAccount),ownAccountSelection=b.ownAccountTransfer===true?prepareOwnAccountSelection(req,fromNature,toNature,fromAccount,toAccount,ownBankOwnership(draft,row,toNature)):null,classification=ownAccountSelection?ownAccountSelection.classification:String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
+    if(b.ownAccountTransfer===true&&!ownAccountSelection)return res.status(403).json({success:false,error:'Choose an authorized own-account transfer route.'});
+    if(ownAccountSelection)ownAccountSelection.bankSignature=reconciliationBankStrongSignature(bank);
+    if(row.entityTag&&(row.entityTag.sourceConflict||row.entityTag.source==='mixed_linked_entries'))return res.status(409).json({success:false,error:'Resolve the conflicting bank-side ownership before recording this transfer.'});
     const adminOwnerContribution=isAdminOwnerContributionTransfer(req,fromNature,toNature,fromAccount,toAccount,classification,bank);
     const ownerPersonalAllowed=canRecordOwnerPersonalTransfer(req,fromNature,toNature,fromAccount,toAccount,classification);
     if((!approvalNatures(req).includes(fromNature)||!approvalNatures(req).includes(toNature))&&!adminOwnerContribution&&!ownerPersonalAllowed)return res.status(403).json({success:false,error:'You cannot transfer funds for one of these accounting entities.'});
@@ -6027,7 +6114,7 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
     if(fromNature===toNature&&fromAccount.toLowerCase()===toAccount.toLowerCase())return res.status(400).json({success:false,error:'Source and receiving accounts must be different.'});
     if(fromNature!==toNature&&!['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement','salary_advance_funding'].includes(classification))return res.status(400).json({success:false,error:'Choose why money is moving between these entities.'});
     const managedPersonalAllowed=canRecordManagedPersonalInternalTransfer(req,fromNature,toNature,fromAccount,toAccount,classification);
-    if(!isOwner(req)&&!(isPrashant(req)&&isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification))&&!adminOwnerContribution&&!ownerPersonalAllowed&&!managedPersonalAllowed)return res.status(403).json({success:false,error:'This reconciliation can use only an approved internal-transfer route.'});
+    if(!isOwner(req)&&!(isPrashant(req)&&isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification))&&!adminOwnerContribution&&!ownerPersonalAllowed&&!managedPersonalAllowed&&!ownAccountSelection)return res.status(403).json({success:false,error:'This reconciliation can use only an approved internal-transfer route.'});
     let salaryStore=null,salaryAdvance=null;
     if(classification==='salary_advance_funding'){
       if(fromNature!=='SANKI'||toNature!=='SANKI')return res.status(400).json({success:false,error:'A salary advance funding transfer must stay inside the SANKI entity.'});
@@ -6045,7 +6132,8 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
     if((draft.resolutions||{})[b.rowId])return res.status(409).json({success:false,error:'This incoming bank transaction has already been recorded.'});
     s.transferSeq=(s.transferSeq||0)+1;transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:fromNature,fromNature,toNature,classification,fromAccount,toAccount,amount,date:bank.date,proof:'',note,createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:b.rowId,reference:String(bank.reference||''),description:String(bank.description||'')}};
     if(salaryAdvance){transfer.salaryAdvanceId=salaryAdvance.id;transfer.employeeId=salaryAdvance.empId||'';transfer.employeeName=salaryAdvance.employeeName||((salaryStore.employees||{})[salaryAdvance.empId]||{}).name||'';transfer.advanceDate=salaryAdvance.date;salaryAdvance.fundingTransferId=transfer.id;salaryAdvance.fundingToAccount=toAccount;salaryAdvance.fundingLinkedAt=now;salaryAdvance.fundingLinkedBy=user;salaryStore.advanceAudit=salaryStore.advanceAudit||[];salaryStore.advanceAudit.push({at:now,by:user,action:'FUNDING_TRANSFER_LINKED',advanceId:salaryAdvance.id,details:{transferId:transfer.id,fromAccount,toAccount,amount,bankDate:bank.date,draftId:draft.id,rowId:b.rowId}});}
-    s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_transfer',reason:note,remark:note,appId:transfer.id,transferId:transfer.id,postingNature:toNature,by:user,at:now};
+    if(ownAccountSelection)transfer.ownAccountSelection=ownAccountSelection;if(ownAccountTransfer)transfer.ownAccountTransfer=ownAccountTransfer;
+    s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_transfer',reason:note,remark:note,appId:transfer.id,transferId:transfer.id,postingNature:toNature,by:user,at:now,...(ownAccountSelection?{ownAccountSelection}:{}),...(ownAccountTransfer?{ownAccountTransfer}:{})};
     audit(s,req,'CREATED_FROM_BANK_RECONCILIATION','transfer',transfer.id,{nature:fromNature,account:fromAccount,after:transfer,note,draftId:draft.id,bankRowId:b.rowId});
     if(salaryStore)saveSalaryStore(salaryStore);
   }else if(sourceKind==='external'){
@@ -6099,7 +6187,8 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId),allowed=['bank_reversal_pair','accept_match','unmatch_suggestion','link_existing','link_multiple_existing','link_multiple_bank_entries','link_with_rounding','vendor_advance_split','create_adjustment','create_split_adjustment','create_internal_transfer','paytm_settlement','split_allocation','opening_vendor_payable_split','timing_difference','exclude'];
   if(!row)return res.status(404).json({success:false,error:'Difference was not found.'});
   if(!allowed.includes(b.action))return res.status(400).json({success:false,error:'Choose a valid resolution.'});
-  let postingNature=reconciliationPostingNature(draft,b.rowId,row),expenseOwnershipChange=null;const postingActions=['link_with_rounding','vendor_advance_split','create_adjustment','create_split_adjustment','create_internal_transfer','split_allocation','opening_vendor_payable_split','exclude'];
+  if(row.resolution&&(row.resolution.ownAccountTransfer||row.resolution.ownAccountSelection))return res.status(409).json({success:false,error:'Undo this own-account transfer decision before choosing a different transaction action. Its transfer-only ownership must not be reused for an expense or receipt.'});
+  let postingNature=reconciliationPostingNature(draft,b.rowId,row),expenseOwnershipChange=null,ownAccountTransfer=null,ownAccountSelection=null;const postingActions=['link_with_rounding','vendor_advance_split','create_adjustment','create_split_adjustment','create_internal_transfer','split_allocation','opening_vendor_payable_split','exclude'];
   const categoryExpenseAction=['create_adjustment','create_split_adjustment'].includes(b.action),hasExpenseNature=categoryExpenseAction&&Object.prototype.hasOwnProperty.call(b,'nature');
   if(hasExpenseNature){
     const requestedNature=typeof b.nature==='string'?b.nature.trim().toUpperCase():'',shared=isSharedBankReconciliationAccount(draft.account);
@@ -6218,15 +6307,22 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
     b.paytmTransferTargets=transferTargets;b.paytmOrderTargets=orderTargets;
   }
   if(b.action==='create_internal_transfer'){
+    if(b.ownAccountTransfer===true){
+      if(row.entityTag&&(row.entityTag.sourceConflict||row.entityTag.source==='mixed_linked_entries')||row.app||row.resolution)return res.status(409).json({success:false,error:'Review or unmatch the existing source before creating an own-account transfer.'});
+      ownAccountTransfer=ownTransferInference(draft,row,String(b.otherNature||'').trim().toUpperCase(),b.otherAccount);if(!postingNature&&ownAccountTransfer)postingNature=ownAccountTransfer.nature;
+    }
     if(isSharedBankReconciliationAccount(draft.account)&&!postingNature)return res.status(409).json({success:false,error:'This shared-bank transfer has no reliable bank-side entity. The other account alone cannot prove whether this side belongs to SAMAST or PERSONAL. Link an existing verified transfer or review the bank-side ownership evidence; nothing has been recorded.'});
     if(b.otherNature!=null&&!NATURES.includes(String(b.otherNature).trim().toUpperCase()))return res.status(400).json({success:false,error:'Choose a valid transfer counterpart entity.'});
     const reconciledNature=postingNature||normalizedNature(draft.nature),otherNature=String(b.otherNature||reconciledNature).trim().toUpperCase(),otherAccount=allowedTransferAccount(otherNature,b.otherAccount),amount=num(row.bank&&row.bank.debit||row.bank&&row.bank.credit);
     if(!row.bank||!(amount>0)||!otherAccount||(otherNature===reconciledNature&&otherAccount===draft.account))return res.status(400).json({success:false,error:'Choose the other account for this bank-confirmed internal transfer.'});
     const incoming=num(row.bank.credit)>0,fromNature=incoming?otherNature:reconciledNature,toNature=incoming?reconciledNature:otherNature,fromAccount=incoming?otherAccount:draft.account,toAccount=incoming?draft.account:otherAccount;
-    const classification=fromNature===toNature?'internal_transfer':ownerPersonalTransferClassification(fromNature,toNature);
+    ownAccountSelection=b.ownAccountTransfer===true?prepareOwnAccountSelection(req,fromNature,toNature,fromAccount,toAccount,ownBankOwnership(draft,row,reconciledNature)):null;
+    if(b.ownAccountTransfer===true&&!ownAccountSelection)return res.status(403).json({success:false,error:'Choose an authorized own-account transfer route.'});
+    if(ownAccountSelection)ownAccountSelection.bankSignature=reconciliationBankStrongSignature(row.bank);
+    const classification=ownAccountSelection?ownAccountSelection.classification:fromNature===toNature?'internal_transfer':ownerPersonalTransferClassification(fromNature,toNature);
     if(b.classification&&String(b.classification)!==classification)return res.status(400).json({success:false,error:'The transfer classification must match the direction of the Owner contribution or withdrawal.'});
     const ownerPersonalAllowed=canRecordOwnerPersonalTransfer(req,fromNature,toNature,fromAccount,toAccount,classification);
-    if(otherNature!==reconciledNature&&!ownerPersonalAllowed)return res.status(403).json({success:false,error:'Choose a listed Gagan Sir personal bank account and an accessible SANKI business account.'});
+    if(otherNature!==reconciledNature&&!ownerPersonalAllowed&&!ownAccountSelection)return res.status(403).json({success:false,error:'Choose a listed Gagan Sir personal bank account and an accessible SANKI business account.'});
     if((!accountVisibleToReq(req,fromAccount)||!accountVisibleToReq(req,toAccount))&&!ownerPersonalAllowed)return res.status(403).json({success:false,error:'One of these accounts is restricted to the Owner.'});
     const managedPersonalAllowed=canRecordManagedPersonalInternalTransfer(req,fromNature,toNature,fromAccount,toAccount,classification);
     if(!isOwner(req)&&isPrashant(req)&&!isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification)&&!ownerPersonalAllowed&&!managedPersonalAllowed)return res.status(403).json({success:false,error:'Choose an approved business internal transfer, an authorized PERSONAL transfer, or Gagan Sir personal contribution/withdrawal.'});
@@ -6272,7 +6368,7 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:b.action,reason:String(b.reason||'').trim(),category,chargeCategory,postingNature:postingNature||undefined,appId:['opening_vendor_payable_split','link_existing','split_allocation'].includes(b.action)?String(b.appId||'').trim():row.app&&row.app.id,excludedEntry:b.action==='exclude'&&row.app?Object.assign({},row.app):null,appIds:Array.isArray(b.appIds)?b.appIds:[],appNet:num(b.appNet),roundingAmount:num(b.roundingAmount),advanceAmount:num(b.advanceAmount),advanceExpenseIds:Array.isArray(b.advanceExpenseIds)?b.advanceExpenseIds:[],advanceApplications:Array.isArray(b.advanceApplications)?b.advanceApplications:[],otherAccount:String(b.otherAccount||'').trim(),grossAmount:num(b.grossAmount),chargeAmount:num(b.chargeAmount),paytmChargeAmount:num(b.paytmChargeAmount),hiddenChargeAmount:num(b.hiddenChargeAmount),orderIds:Array.isArray(b.orderIds)?b.orderIds.map(String).filter(Boolean):[],transferIds:Array.isArray(b.transferIds)?b.transferIds.map(String).filter(Boolean):[],paytmOrderTargets:Array.isArray(b.paytmOrderTargets)?b.paytmOrderTargets:[],paytmTransferTargets:Array.isArray(b.paytmTransferTargets)?b.paytmTransferTargets:[],otherReceipts:Array.isArray(b.otherReceipts)?b.otherReceipts:[],principalAmount:num(b.principalAmount),openingPayableAmount:num(b.openingPayableAmount),openingNature:normalizedNature(b.openingNature||postingNature||draft.nature),vendor:String(b.vendor||'').trim(),preSystemDates:String(b.preSystemDates||'').trim(),linkedRowId:b.action==='opening_vendor_payable_split'?(view.rows.find(x=>x.app&&x.app.id===String(b.appId||'').trim())||{}).id||'':String(b.linkedRowId||''),remark:String(b.remark||''),linkedTransferAmount:(Array.isArray(b.transferIds)?b.transferIds:[]).reduce((n,id)=>{const t=(s.transfers||[]).find(x=>x.id===id);return n+num(t&&t.amount);},0),by:req.user.username,at:new Date().toISOString()};
   draft.resolutions[b.rowId].bankTruth=b.action==='exclude'&&!!row.bank;
   if(preparedBankAmountAuthorityPlan){s.bankAmountAuthorityProposals=s.bankAmountAuthorityProposals||{};s.bankAmountAuthorityProposals[preparedBankAmountAuthorityPlan.id]=preparedBankAmountAuthorityPlan;draft.resolutions[b.rowId].bankAmountAuthority={planId:preparedBankAmountAuthorityPlan.id};}
-  if(b.action==='create_internal_transfer')Object.assign(draft.resolutions[b.rowId],{otherNature:b.otherNature,classification:b.classification});
+  if(b.action==='create_internal_transfer')Object.assign(draft.resolutions[b.rowId],{otherNature:b.otherNature,classification:b.classification,...(ownAccountSelection?{ownAccountSelection}:{}),...(ownAccountTransfer?{ownAccountTransfer}:{})});
   applyReviewedBankDates(s,draft);saveStore(s);res.json(draftReconciliation(s,draft));
 });
 router.post('/api/expenses/bank-statements/create-expense',(req,res)=>{
@@ -6383,14 +6479,14 @@ function applyFinalizedInternalTransfers(draft,username){
     const index=Number(String(bankRowId).replace('bank-','')),bank=(draft.transactions||[])[index];if(!bank||!other||!finalizedRows.has(index))return;
     const incoming=num(bank.credit)>0,fromNature=incoming?otherNature:reconciledNature,toNature=incoming?reconciledNature:otherNature,fromAccount=incoming?other:draft.account,toAccount=incoming?draft.account:other;
     const classification=r.classification||(fromNature===toNature?'internal_transfer':ownerPersonalTransferClassification(fromNature,toNature));
-    if(fromNature!==toNature&&!isOwnerPersonalTransferRoute(fromNature,toNature,fromAccount,toAccount,classification)||fromNature===toNature&&classification!=='internal_transfer')throw new Error('Invalid bank-confirmed transfer counterpart entity or classification.');
+    if(!r.ownAccountSelection&&(fromNature!==toNature&&!isOwnerPersonalTransferRoute(fromNature,toNature,fromAccount,toAccount,classification)||fromNature===toNature&&classification!=='internal_transfer'))throw new Error('Invalid bank-confirmed transfer counterpart entity or classification.');
     const split=ledgerConnections.transferSplit(bank,num(r.principalAmount)>0?r.principalAmount:undefined,r.chargeAmount);if(!split)throw new Error('Invalid bank-confirmed transfer split; principal plus charge must equal bank amount.');
     if(fromNature!==toNature&&split.charge>0&&(reconciledNature!=='SANKI'||!isBankLedgerName(draft.account)))throw new Error('A confirmed transfer charge must remain in the reconciled business bank account.');
     const personalCandidate=bankConfirmedPersonalTransferCandidate({fromNature,toNature,fromAccount,toAccount,classification,date:bank.date,amount:split.principal,draftId:draft.id,rowId:bankRowId,stagedAt:r.at,draftCreatedAt:draft.createdAt,bankAccount:draft.account,bank}),duplicate=managedPersonalTransferDuplicateConflict(s,personalCandidate,{allowDeterministicWinner:true});
     if(duplicate){const error=managedPersonalTransferConflictMessage(duplicate);result.blocked.push({bankRowId,error});audit(s,null,'BANK_CONFIRMED_PERSONAL_TRANSFER_DUPLICATE_BLOCKED','bank_reconciliation',draft.id,{user:username,device:'Web',nature:reconciledNature,account:draft.account,after:personalCandidate,note:error});return;}
     let transfer=(s.transfers||[]).find(x=>!x.accountingExcluded&&x.reconciliationDraft===draft.id&&x.bankRowId===bankRowId);
     const created=!transfer;
-    if(created){s.transferSeq=num(s.transferSeq)+1;transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:fromNature,fromNature,toNature,classification,fromAccount,toAccount,amount:split.principal,date:bank.date,proof:'',bankStatementEvidence:true,bankReference:bank.reference||'',note:r.reason,bankRowId,reconciliationDraft:draft.id,createdBy:username,createdAt:now};s.transfers.push(transfer);}
+    if(created){s.transferSeq=num(s.transferSeq)+1;transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:fromNature,fromNature,toNature,classification,fromAccount,toAccount,amount:split.principal,date:bank.date,proof:'',bankStatementEvidence:true,bankReference:bank.reference||'',note:r.reason,bankRowId,reconciliationDraft:draft.id,createdBy:username,createdAt:now,...(r.ownAccountSelection?{ownAccountSelection:r.ownAccountSelection}:{}),...(r.ownAccountTransfer?{ownAccountTransfer:r.ownAccountTransfer}:{})};s.transfers.push(transfer);}
     const chargeRow={id:bankRowId,bank,status:'resolved',resolution:{action:'split_allocation',chargeAmount:split.charge}};
     const pendingCharge=-pendingReconciliationAmount({row:chargeRow,postedMovements:postedBankRowMovements({store:s,draft,rowId:bankRowId,bank,movements:appBankMovements(s,draft.account,draft.nature)})});
     if(pendingCharge>.005){
@@ -6523,7 +6619,7 @@ router.post('/api/expenses/bank-statements/finalize',(req,res)=>{
   if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});
   if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot finalize this bank reconciliation.'});
   if(draft.account===gokwikAccounting.BANK&&!isOwner(req))return res.status(403).json({success:false,error:'Owner approval is required for final bank posting.'});
-  const transferError=stagedOwnerPersonalTransferError(draft);if(transferError)return res.status(409).json({success:false,error:transferError+' Review the transfer again; nothing was posted.'});
+  const transferError=stagedOwnerPersonalTransferError(draft,s,req);if(transferError)return res.status(409).json({success:false,error:transferError+' Review the transfer again; nothing was posted.'});
   const duplicateError=stagedManagedPersonalTransferDuplicateError(s,draft);if(duplicateError)return res.status(409).json({success:false,error:duplicateError+' Nothing was posted.'});
   // Capture the same real audit metadata in posting fingerprints and the save.
   // Existing persisted API audit times are never replaced.
