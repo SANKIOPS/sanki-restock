@@ -1842,11 +1842,12 @@ test('money exchange records unequal received cash as an explicit historical-led
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Amount actually received/);assert.match(html,/Previous-balance ledger/);assert.match(html,/Edit exchange/);
 });
 
-test('owner can edit manual money-trail entries while reconciled and generated rows stay protected',()=>{
+test('Manage-authorized Admin can edit previewed manual money-trail entries while reconciled and generated rows stay protected',()=>{
   const receipt=invoke('POST','/api/expenses/receipts',{role:'owner',body:{nature:'SANKI',account:'Counter Cash',receiptType:'other_income',source:'Original source',amount:700,date:'2099-07-01',note:'Original note',proof:'/api/expenses/photo/receipt-edit.jpg'}});
   assert.equal(receipt.status,200,JSON.stringify(receipt.body));const id=receipt.body.receipt.id;
-  const denied=invoke('PATCH','/api/expenses/ledger-entry',{role:'admin',body:{id,kind:'receipt',amount:750,date:'2099-07-02',source:'Correct source',note:'Correct note',reason:'Correction'}});assert.equal(denied.status,403);
-  const edited=invoke('PATCH','/api/expenses/ledger-entry',{role:'owner',body:{id,kind:'receipt',nature:'SANKI',account:'Counter Cash',amount:750,date:'2099-07-02',source:'Correct source',note:'Correct note',reason:'Corrected receipt'}});
+  const denied=invoke('PATCH','/api/expenses/ledger-entry',{role:'admin',body:{id,kind:'receipt',amount:750,date:'2099-07-02',source:'Correct source',note:'Correct note',reason:'Correction'}});assert.equal(denied.status,409);
+  const preview=invoke('GET','/api/expenses/ledger-entry/edit-preview',{role:'admin',query:{id,kind:'receipt',nature:'SANKI',account:'Counter Cash'}});assert.equal(preview.status,200,JSON.stringify(preview.body));
+  const edited=invoke('PATCH','/api/expenses/ledger-entry',{role:'admin',body:{id,kind:'receipt',fingerprint:preview.body.fingerprint,nature:'SANKI',account:'Counter Cash',amount:750,date:'2099-07-02',source:'Correct source',note:'Correct note',reason:'Corrected receipt'}});
   assert.equal(edited.status,200,JSON.stringify(edited.body));assert.equal(edited.body.entry.amount,750);assert.equal(edited.body.entry.source,'Correct source');assert.equal(edited.body.entry.date,'2099-07-02');
   const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Counter Cash',from:'2099-07-02',to:'2099-07-02'}}).body.entries.find(x=>x.id===id);assert.equal(ledger.credit,750);assert.equal(ledger.editable,true);assert.equal(ledger.source,'Correct source');
   const expenseStorePath=path.join(path.dirname(process.env.DATA_PATH),'expenses.json'),saved=JSON.parse(fs.readFileSync(expenseStorePath,'utf8'));saved.bankDateOverrides=saved.bankDateOverrides||{};saved.bankDateOverrides[id]={bankDate:'2099-07-02'};fs.writeFileSync(expenseStorePath,JSON.stringify(saved));
