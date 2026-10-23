@@ -1,5 +1,6 @@
 'use strict';
 const g = require('./gokwik-accounting');
+const {finalizeStagedAudit} = require('./gokwik-api-accounting');
 
 function registerGoKwikReports(router,deps) {
   const {loadStore,saveStore,audit,upload,orders,isOwner,canAccess,registerVendor} = deps;
@@ -59,7 +60,11 @@ function registerGoKwikReports(router,deps) {
     s.gokwikOrderLinks[id]={...link,...(identityReview?{identityReview}:{}),reason,at,by:req.user.username};invalidateApproval(s,tx);event(s,req,'GOKWIK_ORDER_LINKED',id,{after:s.gokwikOrderLinks[id]});saveStore(s);respond(res,s);
   }));
   router.post(base+'/unmatch',run((req,res)=>{
-    const s=loadStore(),id=String(req.body.paymentId || ''),tx=(s.gokwikTransactions || {})[id],reason=String(req.body.reason || '').trim();if(!tx)throw Error('Payment not found.');if(reason.length<10)throw Error('Enter an unmatch reason of at least 10 characters.');assertNotPosted(s,tx);const before=s.gokwikOrderLinks?.[id];if(s.gokwikOrderLinks)delete s.gokwikOrderLinks[id];invalidateApproval(s,tx);event(s,req,'GOKWIK_ORDER_UNMATCHED',id,{before,note:reason});saveStore(s);respond(res,s);
+    const s=loadStore(),id=String(req.body.paymentId || ''),tx=(s.gokwikTransactions || {})[id],reason=String(req.body.reason || '').trim();if(!tx)throw Error('Payment not found.');if(reason.length<10)throw Error('Enter an unmatch reason of at least 10 characters.');assertNotPosted(s,tx);
+    // Stamp transient API evidence before the removed link becomes a detached
+    // audit snapshot that the normal live-map save finalizer cannot visit.
+    finalizeStagedAudit(s);
+    const before=s.gokwikOrderLinks?.[id];if(s.gokwikOrderLinks)delete s.gokwikOrderLinks[id];invalidateApproval(s,tx);event(s,req,'GOKWIK_ORDER_UNMATCHED',id,{before,note:reason});saveStore(s);respond(res,s);
   }));
   // Old clients must not bypass bank reconciliation or post a single batch.
   for(const action of ['/submit','/withdraw','/approve'])router.post(base+action,run((req,res)=>res.status(409).json({success:false,error:'GoKwik settlements are reconciled only with Owner finalization of IndusInd 0437. Use the universal bank reconciliation; nothing was posted.'})));
