@@ -2,7 +2,7 @@ const sankiCategories = require('./sanki-categories');
 const categoryFinalization = require('./sanki-category-finalization');
 const { purchaseBillingAmount } = require('./purchase-payment-status');
 const { finalizedByPo } = require('./lg-invoices');
-const { calculateReconciliationOpening, verifiedReconciliationAnchor, finalizedMovementCoverageIds, pendingCarryForwardCandidates } = require('./reconciliation-opening');
+const { calculateReconciliationOpening, verifiedReconciliationAnchor, reconciliationCoverageBook, finalizedMovementCoverageIds, pendingCarryForwardCandidates } = require('./reconciliation-opening');
 const { postedBankRowMovements, pendingReconciliationAmount, postedReconciliationConflicts, findTransferCreationConflicts } = require('./reconciliation-staging');
 const { recoverReversalSourceMetadata } = require('./reconciliation-source-metadata');
 const registerBankImportSourceRepair = require('./bank-import-source-repair-routes');
@@ -5199,7 +5199,13 @@ function draftReconciliation(s,draft,options={}){
 function draftReconciliationBase(s,draft,options={}){
   if(!draft.originalStatementPeriod&&repairScreenshotDraftDates(draft)&&!options.readOnly)saveStore(s);
   if(!draft.originalStatementPeriod&&stagePaytmSettlementsFromAxisDraft(s,draft)&&!options.readOnly)saveStore(s);
-  const statement=draft.summary||(draft.summary={}),bank=draft.transactions||[],book=(s.bankStatements||{})[bankStatementBookKey(draft.nature,draft.account)]||{},continuityCutoff=String(book.reconciledThrough||''),openingAnchor=verifiedReconciliationAnchor(book),effectiveFrom=openingAnchor.cutoffDate&&(!statement.to||openingAnchor.cutoffDate<statement.to)?openingAnchor.cutoffDate:'',priorLinkedIds=new Set();
+  const statement=draft.summary||(draft.summary={}),bank=draft.transactions||[],book=(s.bankStatements||{})[bankStatementBookKey(draft.nature,draft.account)]||{},continuityCutoff=String(book.reconciledThrough||''),latestAnchor=verifiedReconciliationAnchor(book);
+  // Matching still respects every finalized statement. Opening arithmetic for
+  // a historical/same-day overlap must instead start from the latest verified
+  // closing strictly before that statement, not a future/partial-day closing.
+  const anchorBefore=statement.from&&statement.to&&continuityCutoff>=statement.from&&continuityCutoff<statement.to?statement.to:statement.from;
+  const openingAnchor=anchorBefore?verifiedReconciliationAnchor(book,{before:anchorBefore,nature:draft.nature,account:draft.account}):latestAnchor;
+  const effectiveFrom=openingAnchor.cutoffDate&&(!statement.to||openingAnchor.cutoffDate<statement.to)?openingAnchor.cutoffDate:'',priorLinkedIds=new Set();
   (book.imports||[]).forEach(record=>[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).forEach(x=>(x.linkedRecordIds||[]).forEach(id=>priorLinkedIds.add(id))));
   // A later statement can reveal a bank row on the already-finalized cutoff
   // date after its ledger entry was recorded. Admit only unused cutoff-day
@@ -5252,14 +5258,22 @@ function draftReconciliationBase(s,draft,options={}){
   addPersonalHistoricalSuggestions(s,draft,rows);
   const summary=rows.reduce((o,x)=>(o[x.status]=(o[x.status]||0)+1,o),{}),unresolvedRows=rows.filter(x=>!['matched','resolved','already_reconciled'].includes(x.status)||x.ownershipUnresolved),unresolved=unresolvedRows.length,ownershipUnresolvedRows=rows.filter(x=>x.ownershipUnresolved).map(x=>x.id);
   const card=creditCardByAccount(draft.account),baseOpening=card?num(card.openingOutstanding):reconciliationOpeningBalance(s,draft),priorClosing=openingAnchor.previousClosing;
-  // A spanning statement only accounts for the unfinished tail after its saved
-  // cutoff. A same-cutoff/historical statement accounts for its whole period:
-  // rebuild that opening from earlier ledger movements, never a future close.
+  // A spanning statement accounts for its unfinished tail. Historical opening
+  // coverage must be scoped to the selected anchor: later finalized entries
+  // still belong in the bridge from that earlier closing to statement start.
   const tailOnly=!!effectiveFrom&&!!statement.from&&effectiveFrom>=statement.from;
   const accountingFrom=tailOnly?new Date(Date.parse(effectiveFrom+'T00:00:00Z')+86400000).toISOString().slice(0,10):statement.from;
-  const coveredOpeningIds=new Set([...finalizedMovementCoverageIds(s,book),...priorCutoffAppIds]);
+  const openingBook=reconciliationCoverageBook(book,openingAnchor);
+  const openingLinkedIds=new Set();
+  (openingBook.imports||[]).forEach(record=>[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).forEach(row=>(row.linkedRecordIds||[]).forEach(id=>openingLinkedIds.add(id))));
+  const coveredOpeningIds=new Set([...finalizedMovementCoverageIds(s,openingBook),...priorCutoffAppIds]);
   if(tailOnly)app.forEach(x=>[x.id].concat(x.sourceIds||[]).forEach(id=>coveredOpeningIds.add(id)));
-  const companyAdjusted=usesCompanyAdjustedBankTruth(draft.nature,draft.account),openingContinuity=calculateReconciliationOpening({baseOpening,previousClosing:priorClosing,cutoffDate:effectiveFrom,statementFrom:accountingFrom,statementOpening:companyAdjusted||tailOnly?null:statement.openingBalance,movements:allApp,previouslyLinkedIds:priorLinkedIds,coveredMovementIds:coveredOpeningIds});
+  const companyAdjusted=usesCompanyAdjustedBankTruth(draft.nature,draft.account),openingContinuity=calculateReconciliationOpening({baseOpening,previousClosing:priorClosing,cutoffDate:effectiveFrom,statementFrom:accountingFrom,statementOpening:companyAdjusted||tailOnly?null:statement.openingBalance,movements:allApp,previouslyLinkedIds:openingLinkedIds,coveredMovementIds:coveredOpeningIds});
+  if(openingAnchor.anchorConflict)reconciliationConflicts.push({...openingAnchor.anchorConflict,bankRowIds:[]});
+  openingContinuity.openingAnchorSource=openingAnchor.anchorSource;
+  openingContinuity.openingAnchorRecordId=openingAnchor.anchorRecordId;
+  const allFinalizedCoverage=finalizedMovementCoverageIds(s,book);
+  openingContinuity.carryForwardMovements.forEach(movement=>{movement.bankEvidencePending=![movement.id].concat(movement.sourceIds||[]).some(id=>allFinalizedCoverage.has(id));});
   const currentOpening=openingContinuity.currentOpening,openingResolutionStale=!!draft.openingResolution&&(draft.openingResolution.previousAmount==null||Math.abs(num(draft.openingResolution.previousAmount)-currentOpening)>.005);
   if(openingResolutionStale)reconciliationConflicts.push({type:'stale_opening_resolution',bankRowIds:[],message:'The calculated opening changed after the opening decision was saved. Review the opening/carry-forward again; no balancing adjustment has been posted.'});
   const proposedOpening=draft.openingResolution&&!openingResolutionStale?num(draft.openingResolution.amount):currentOpening,movements=roundMoney(app.reduce((n,x)=>n+num(x.credit)-num(x.debit),0));
@@ -6551,7 +6565,12 @@ router.post('/api/expenses/bank-statements/finalize',(req,res)=>{
   }
   let storedFile='';
   try{const ext=path.extname(draft.originalName||draft.temporaryFile),name=importId+ext.toLowerCase();fs.renameSync(draft.temporaryFile,path.join(STATEMENT_DIR,name));storedFile=name;}catch{}
-  const finalizedAt=new Date().toISOString(),record={id:importId,draftId:draft.id,file:storedFile,originalName:draft.originalName,hash:draft.fileHash,from:importPlan.from,to:draft.summary.to,rows:importPlan.rows.length,uploadedAt:draft.createdAt,finalizedAt,finalizedBy:req.user.username,periodRemark:draft.periodRemark||'',balanceReconciled:view.balanceResolved,balanceDifference:view.balanceDifference,closingBalanceDeferred:!view.balanceResolved,carryForwardMovements:(view.carryForwardMovements||[]).map(x=>Object.assign({},x,{bankEvidencePending:true})),carryForwardNet:view.carryForwardNet||0};
+  // Preserve physical coverage of the complete statement, including rows that
+  // were already finalized in a partial statement. New rows alone cannot prove
+  // that a later closing supersedes a different partial closing on the same day.
+  const finalizedCoverage=matchFinalizedBankRows(Object.values(book.transactions||{}),draft.transactions||[]);
+  const reconciliationBankTransactionIds=Array.from(new Set(Array.from(finalizedCoverage.matches.values()).map(row=>row.id).filter(Boolean)));
+  const finalizedAt=new Date().toISOString(),record={id:importId,draftId:draft.id,file:storedFile,originalName:draft.originalName,hash:draft.fileHash,from:importPlan.from,to:draft.summary.to,rows:importPlan.rows.length,uploadedAt:draft.createdAt,finalizedAt,finalizedBy:req.user.username,periodRemark:draft.periodRemark||'',balanceReconciled:view.balanceResolved,balanceDifference:view.balanceDifference,closingBalanceDeferred:!view.balanceResolved,reconciliationBankTransactionIds,reconciliationBankCoverageComplete:!finalizedCoverage.ambiguousLegacy&&finalizedCoverage.matches.size===(draft.transactions||[]).length,carryForwardMovements:(view.carryForwardMovements||[]).map(x=>Object.assign({},x,{bankEvidencePending:x.bankEvidencePending!==false})),carryForwardNet:view.carryForwardNet||0};
   book.imports.push(record);book.reconciledThrough=draft.summary.to;book.lastReconciliation={at:finalizedAt,by:req.user.username,summary:view.summary,reconciled:view.balanceResolved,transactionsReconciled:true,balanceReconciled:view.balanceResolved,balanceDifference:view.balanceDifference,closingBalanceDeferred:!view.balanceResolved,closingBalance:draft.summary.closingBalance,ledgerClosingBalance:view.ledgerClosing,through:draft.summary.to,draftId:draft.id,periodRemark:draft.periodRemark||''};
   audit(s,req,'BANK_RECONCILIATION_FINALIZED','account',draft.account,{nature:draft.nature,account:draft.account,after:book.lastReconciliation,resolutions:draft.resolutions,transactionOwnership:draft.transactionOwnership||{},openingResolution:draft.openingResolution||null,periodRemark:draft.periodRemark||''});
   delete s.bankReconciliationDrafts[draft.id];saveStore(s);

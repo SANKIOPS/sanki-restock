@@ -195,15 +195,15 @@ test('eligible carry-forward is not discarded or adjusted just because a genuine
   assert.equal(opening.carryForwardMovements.length, 1);
 });
 
-test('previous automatic Axis fees and accounting-excluded rows never become fresh carry-forward', () => {
+test('cutoff automatic fees stay covered while later gap fees carry forward exactly once', () => {
   const opening = calculateReconciliationOpening(octoberOptions({ statementFrom: '2026-10-09', movements: [
     { id: 'ADJ-FEE-CUT', date: '2026-10-06', debit: 5.9, automaticAxisTransferCharge: true },
     { id: 'ADJ-FEE-GAP', date: '2026-10-08', debit: 5.9, automaticAxisTransferCharge: true },
     { id: 'VOID', date: '2026-10-06', debit: 500, accountingExcluded: true },
     { id: 'EX-00733/PAY-001', date: '2026-10-06', debit: 500 },
   ] }));
-  assert.equal(opening.currentOpening, 97.67);
-  assert.deepEqual(opening.carryForwardMovements.map(row => row.id), ['EX-00733/PAY-001']);
+  assert.equal(opening.currentOpening, 91.77);
+  assert.deepEqual(opening.carryForwardMovements.map(row => row.id), ['EX-00733/PAY-001', 'ADJ-FEE-GAP']);
 });
 
 test('duplicate IDs and payment aliases count the same ledger money once', () => {
