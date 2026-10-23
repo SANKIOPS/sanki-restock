@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const OwnAccountTransfers = require('../public/own-account-transfers');
 const page = fs.readFileSync(path.join(__dirname, '../public/expenses.html'), 'utf8');
 const personal = ['IndusInd Bank 7883', 'ICICI Bank 0992', 'ICICI Bank 0993'];
 const descriptors = () => personal.map(account => ({ nature: 'PERSONAL', account, label: 'Gagan Sir Personal · ' + account }));
@@ -26,13 +27,19 @@ function harness(overrides = {}) {
     bankReconView: { account: 'Business Bank', rows: [{ id: 'bank-1', bank: { debit: 100, date: '2099-01-01' } }] },
     el(id) { return nodes[id] ||= { value: '', innerHTML: '', style: {}, files: [], listeners: {}, open: false, addEventListener(event, fn, capture) { (this.listeners[event] ||= []).push({ fn, capture }); }, querySelector() { return {}; }, showModal() { this.open = true; }, close() { this.open = false; } }; },
     sessionStorage: { setItem(key, value) { storage.set(key, value); }, getItem(key) { return storage.get(key) || null; } },
-    esc, fmt: String, categorySuggestions: () => '',
+    esc, fmt: String, categorySuggestions: () => '', OwnAccountTransfers,
     api(url, options) { calls.push({ url, body: JSON.parse(options.body) }); return Promise.resolve({ success: false, error: 'Synthetic response: no live writes' }); },
     finishBankReconForm() {}, syncBankIncomingClassification() {},
+    bankReconRow(id) { return context.bankReconView.rows.find(row => row.id === id); },
     loadCash() {}, loadAccountLedger() {}, renderBankReconciliation() {},
     setMsg() {}, ExpenseLoans: { refresh() {} },
     ...overrides
   };
+  Object.defineProperty(context.cfg, 'ownTransferAccounts', { get() {
+    const personalRows = context.cfg.ownerPersonalTransferAccounts || [], names = new Set(personalRows.map(item => item.account));
+    const byNature = Object.assign({}, context.cfg.accountsByNature, context.cfg.transferAccountsByNature);
+    return Object.entries(byNature).flatMap(([nature, accounts]) => accounts.filter(account => !names.has(account)).map(account => ({ nature, account, label: account + ' · ' + nature }))).concat(personalRows);
+  } });
   context.window = context;
   vm.createContext(context);
   vm.runInContext(section('    function opts(', '    function payingAccountsForNature('), context);
@@ -100,8 +107,8 @@ test('personal transfer classifications distinguish owner contribution and owner
   assert.equal(h.context.transferClassification('SANKI', 'SANKI', 'owner_contribution'), 'internal_transfer');
   assert.equal(h.context.transferClassification('SANKI', 'SAMAST', 'inter_entity_loan'), 'inter_entity_loan');
   h.run(line('function syncTransferClass()'));
-  h.context.el('tr_from_nature').value = 'PERSONAL';
-  h.context.el('tr_to_nature').value = 'SANKI';
+  h.context.el('tr_from').value = 'PERSONAL|' + personal[0];
+  h.context.el('tr_to').value = 'SANKI|Business Bank';
   h.context.el('tr_class').value = 'internal_transfer';
   h.context.syncTransferClass();
   assert.equal(h.nodes.tr_class.value, 'owner_contribution');
@@ -135,7 +142,7 @@ test('reconciliation transfer save sends explicit PERSONAL entity and canonical 
   h.context.el('brRemark').value = 'Verified owner withdrawal';
   h.context.el('brPrincipal').value = '100';
   h.context.el('brCharge').value = '0';
-  h.run(line("other=transferCounterpart(el('brOtherAccount').value"));
+  h.run(line("other=bankTransferCounterpart(el('brOtherAccount').value"));
   const listener = h.nodes.brSave.listeners.click[0];
   assert.equal(listener.capture, true);
   const event = { preventDefault() {}, stopImmediatePropagation() {} };
@@ -159,7 +166,7 @@ test('reconciliation transfer save sends explicit PERSONAL entity and canonical 
 
 test('incoming transfer derives PERSONAL source and owner contribution from the single tagged account selector', () => {
   const h = harness();
-  ['bankIncomingSources', 'bankIncomingSource', 'syncBankIncomingSource', 'syncBankIncomingAccount'].forEach(name => h.run(line('function ' + name + '(')));
+  ['bankIncomingTransferNature', 'bankIncomingSources', 'bankIncomingSource', 'syncBankIncomingSource', 'syncBankIncomingAccount'].forEach(name => h.run(line('function ' + name + '(')));
   h.context.syncBankIncomingAccount();
   for (const account of personal) assert.ok(h.nodes.biFromAccount.innerHTML.includes(account));
   h.context.el('biFromAccount').value = 'PERSONAL|' + personal[0];
@@ -185,8 +192,8 @@ test('direct transfer submits selected PERSONAL source with business-scoped proo
   assert.equal(h.calls[0].body.fromAccount, personal[0]);
   assert.equal(h.calls[0].body.toNature, 'SANKI');
   assert.equal(h.calls[0].body.classification, 'owner_contribution');
-  assert.match(line('<select id="tr_from_nature">'), /transferNatureOptions\(selectedNature\)/);
-  assert.match(line('<select id="tr_from_nature">'), /id="tr_to_nature"[^]*transferNatureOptions\(selectedNature\)/);
+  assert.match(line('<select id="tr_from">'), /ownTransferOptions\(\)/);
+  assert.doesNotMatch(line('<select id="tr_from">'), /tr_from_nature|tr_to_nature/);
 });
 
 test('Prashant unsupported personal/entity combinations are explained and rejected before proof upload; Owner rights stay intact', () => {
@@ -200,8 +207,8 @@ test('Prashant unsupported personal/entity combinations are explained and reject
   h.context.el('tr_intermediary').value = '';
   h.context.el('tr_proof').files = [{}];
   for (const [fromNature, toNature] of [['PERSONAL', 'SAMAST'], ['SAMAST', 'PERSONAL'], ['PERSONAL', 'PERSONAL']]) {
-    h.context.el('tr_from_nature').value = fromNature;
-    h.context.el('tr_to_nature').value = toNature;
+    h.context.el('tr_from').value = fromNature + '|' + (fromNature === 'PERSONAL' ? personal[0] : 'Samast Bank');
+    h.context.el('tr_to').value = toNature + '|' + (toNature === 'PERSONAL' ? personal[1] : 'Samast Bank');
     h.context.recordTransfer();
     assert.match(messages.at(-1), /only with a SANKI business account/);
   }
@@ -212,7 +219,7 @@ test('Prashant unsupported personal/entity combinations are explained and reject
   assert.equal(h.context.personalTransferScopeAllowed('SAMAST', 'PERSONAL'), true);
   h.context.cfg.isOwner = false;
   h.context.selectedNature = 'SANKI'; h.context.today = () => '2099-01-01';
-  const card = line('<select id="tr_from_nature">').trim().replace(/\+$/, '');
+  const card = line('<select id="tr_from">').trim().replace(/\+$/, '');
   h.run('var transferCard = ' + card + ';');
   assert.match(h.context.transferCard, /only with a SANKI business account/);
   assert.doesNotMatch(h.context.transferCard, /\+\(!cfg/);
@@ -234,8 +241,7 @@ test('Owner PERSONAL-to-SANKI transfers use business proof scope while PERSONAL-
   assert.deepEqual(uploads, ['SANKI']);
   assert.equal(h.calls[0].body.fromNature, 'PERSONAL');
   assert.equal(h.calls[0].body.toNature, 'SANKI');
-  h.context.el('tr_to_nature').value = 'PERSONAL';
-  h.context.el('tr_to').value = personal[1];
+  h.context.el('tr_to').value = 'PERSONAL|' + personal[1];
   h.context.el('tr_class').value = 'internal_transfer';
   h.context.recordTransfer();
   await flush();

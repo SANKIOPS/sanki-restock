@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const OwnAccountTransfers = require('../public/own-account-transfers');
 const page = fs.readFileSync(path.join(__dirname, '../public/expenses.html'), 'utf8');
 const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 function line(marker) { const value = page.split('\n').find(item => item.includes(marker)); assert.ok(value, 'source marker exists: ' + marker); return value; }
@@ -11,7 +12,7 @@ function section(start, end) { const from = page.indexOf(start), to = page.index
 function harness(overrides = {}) {
   const nodes = {}, calls = [], saved = new Map();
   const context = {
-    cfg: { isAdmin: true, isOwner: false, approvalNatures: ['SANKI', 'SAMAST', 'PERSONAL'] },
+    cfg: { isAdmin: true, isOwner: false, approvalNatures: ['SANKI', 'SAMAST', 'PERSONAL'], ownTransferAccounts: [{ nature: 'PERSONAL', account: 'IndusInd Bank 7883' }, { nature: 'SANKI', account: 'Counter Cash' }] },
     bankNature: 'PERSONAL', bankDraftId: 'DRAFT-1', bankReconForm: null,
     bankReconView: { account: 'IndusInd Bank 7883', rows: [{ id: 'bank-1', bank: { date: '2026-08-25', debit: 500, credit: 0, reference: 'REF-1', description: 'Verified bank payment' } }, { id: 'bank-2', bank: { date: '2026-08-26', debit: 600, credit: 0, reference: 'REF-2', description: 'Another payment' } }] },
     bankEntityTaggingActive: () => true,
@@ -22,7 +23,7 @@ function harness(overrides = {}) {
       Object.defineProperty(node, 'innerHTML', { get() { return this.html || ''; }, set(value) { this.html = String(value); this.options = [...this.html.matchAll(/<option\b([^>]*)>([^<]*)/g)].map(match => ({ value: (match[1].match(/value="([^"]*)"/) || [null, match[2]])[1] })); if (this.options.length) this.value = this.options[0].value; } });
       return nodes[id] = node;
     },
-    esc, fmt: String,
+    esc, fmt: String, OwnAccountTransfers,
     sessionStorage: { setItem(key, value) { saved.set(key, value); }, getItem(key) { return saved.get(key) || null; }, removeItem(key) { saved.delete(key); } },
     bankReconRow(id) { return context.bankReconView.rows.find(row => row.id === id); },
     bankRowNature(row) { return row && row.entityTag && row.entityTag.nature || context.bankNature; },
@@ -31,6 +32,12 @@ function harness(overrides = {}) {
     renderBankAppCandidates() {},
     transferCounterpartOptions() { return '<option value="SANKI|Counter Cash">SANKI · Counter Cash</option>'; },
     transferCounterpart(value) { const parts = String(value || '').split('|'); return { nature: parts.length > 1 ? parts[0] : '', account: parts.length > 1 ? parts[1] : '' }; },
+    ownTransferOptions() { return OwnAccountTransfers.options(context.cfg, context.bankReconView.account); },
+    ownTransferAccount(value) { return OwnAccountTransfers.find(context.cfg, value); },
+    bankTransferOptions() { return OwnAccountTransfers.options(context.cfg, context.bankReconView.account); },
+    bankTransferCounterpart(value) { return Object.assign({ own: true }, OwnAccountTransfers.find(context.cfg, value)); },
+    bankTransferNature() { return 'PERSONAL'; },
+    bankOwnAccountRegistered() { return true; },
     api(url, options) { calls.push({ url, body: JSON.parse(options.body) }); return Promise.resolve({ success: false, error: 'Synthetic preview, no write' }); },
     finishBankReconForm() { context.el('brSave').disabled = false; },
     prepareBankAmountAuthority: payload => Promise.resolve(payload),
@@ -67,6 +74,17 @@ test('expense category assignment has its own selector; transfers and links hide
   assert.equal(h.nodes.brExpenseNatureWrap.style.display, 'none');
   assert.match(page, /<select id="brExpenseNature"/);
   assert.doesNotMatch(page, /<(?:select|input)\b[^>]*id="(?:brTransferNature|brOtherNature|brFromNature|brToNature)"/);
+});
+
+test('own-transfer summary uses account context rather than the reporting-container entity and switches back for expenses', () => {
+  const h = harness({ bankNature: 'SAMAST' });
+  h.context.openBankAssignment('bank-1', 'internal_transfer');
+  assert.match(h.nodes.bankReconDlgSummary.textContent, /IndusInd Bank 7883 · account-based transfer \(PERSONAL\)/);
+  assert.doesNotMatch(h.nodes.bankReconDlgSummary.textContent, /SAMAST/);
+  h.fields({ brKind: 'category' }); h.context.updateBankReconFields();
+  assert.match(h.nodes.bankReconDlgSummary.textContent, /SAMAST/);
+  assert.doesNotMatch(h.nodes.bankReconDlgSummary.textContent, /account-based transfer/);
+  assert.equal(h.calls.length, 0);
 });
 
 test('shared untagged expenses require explicit entity; only authorized choices are offered', () => {

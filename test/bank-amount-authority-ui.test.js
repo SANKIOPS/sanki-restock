@@ -146,7 +146,7 @@ test('ledger-side bank picker admits different amounts but excludes opposite dir
   const data = row(999, 500), ui = harness(data);
   const ledger = { id: 'app-1', status: 'missing_in_bank', app: data.app };
   ui.context.bankReconView.rows.push(ledger, { id: 'credit-bank', status: 'missing_in_app', bank: { date: '2099-10-19', credit: 500 } }, { id: 'finalized-bank', status: 'resolved', bank: { date: '2099-10-19', debit: 500 }, resolution: {} });
-  Object.assign(ui.context, { bankRowNature: () => 'SANKI', categorySuggestions: () => '', transferCounterpartOptions: () => '', updateBankReconFields() {}, opts: () => '' });
+  Object.assign(ui.context, { bankRowNature: () => 'SANKI', categorySuggestions: () => '', transferCounterpartOptions: () => '', ownTransferOptions: () => '', ownTransferAccount: () => ({ account: '' }), bankTransferOptions: () => '', bankTransferCounterpart: () => ({ account: '' }), bankTransferNature: () => 'SANKI', updateBankReconFields() {}, opts: () => '' });
   ui.run(line('function showBankReconForm(form)'));
   ui.context.showBankReconForm({ draftId: 'TEST-DRAFT', rowId: 'app-1', mode: 'link', side: 'ledger' });
   assert.match(ui.nodes.brBankRow.innerHTML, /bank-1.*₹999.00/);

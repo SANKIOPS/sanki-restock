@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const OwnAccountTransfers = require('../public/own-account-transfers');
 const page = fs.readFileSync(path.join(__dirname, '../public/expenses.html'), 'utf8');
 const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 function line(marker) { const result = page.split('\n').find(value => value.includes(marker)); assert.ok(result, 'source marker exists: ' + marker); return result; }
@@ -20,7 +21,7 @@ function harness(overrides = {}) {
       Object.defineProperty(node, 'innerHTML', { get() { return this._html; }, set(value) { this._html = String(value); this.options = [...this._html.matchAll(/<option\b([^>]*)>([^<]*)/g)].map(match => ({ value: (match[1].match(/value="([^"]*)"/) || [null, match[2]])[1], selected: /\bselected\b/.test(match[1]) })); if (this.options.length) this.value = (this.options.find(item => item.selected) || this.options[0]).value; } });
       return nodes[id] = node;
     },
-    esc, fmt: String, encodeURIComponent,
+    esc, fmt: String, encodeURIComponent, OwnAccountTransfers,
     categoryChoices(nature) { categoryReads.push(nature); return [{ name: nature + ' Category', group: nature + ' Group' }]; },
     categorySuggestions(nature) { categoryReads.push(nature); return '<option value="' + nature + ' Category">'; },
     vendorSuggestions(nature) { vendorReads.push(nature); return '<option value="' + nature + ' Vendor">'; },
@@ -35,6 +36,10 @@ function harness(overrides = {}) {
     ExpenseLoans: { sync() {}, reset() {}, refresh() {}, receiptFields: () => ({ loanTerms: {} }) },
     ...overrides
   };
+  Object.defineProperty(context.cfg, 'ownTransferAccounts', { get() {
+    const personal = context.cfg.ownerPersonalTransferAccounts || [], names = new Set(personal.map(item => item.account)), byNature = context.cfg.transferAccountsByNature || {};
+    return Object.entries(byNature).flatMap(([nature, accounts]) => accounts.filter(account => !names.has(account)).map(account => ({ nature, account, label: account + ' · ' + nature }))).concat(personal);
+  } });
   context.window = context;
   vm.createContext(context);
   const run = code => vm.runInContext(code, context);
@@ -42,7 +47,7 @@ function harness(overrides = {}) {
   run(line('function bankRowNature('));
   return { context, nodes, calls, uploads, categoryReads, vendorReads, run,
     expense() { ['bankExpenseNatures', 'syncBankExpenseNature'].forEach(name => run(line('function ' + name + '('))); run(line('window.openBankExpense=function')); run(line("el('beSave').addEventListener")); },
-    incoming() { ['bankIncomingSources', 'bankIncomingSource', 'loadSalaryAdvanceCandidates', 'syncBankIncomingClassification', 'syncBankIncomingSource', 'syncBankIncomingAccount', 'syncBankIncoming'].forEach(name => run(line('function ' + name + '('))); run(line("el('biSave').addEventListener")); }
+    incoming() { ['bankIncomingTransferNature', 'bankIncomingSources', 'bankIncomingSource', 'loadSalaryAdvanceCandidates', 'syncBankIncomingClassification', 'syncBankIncomingSource', 'syncBankIncomingAccount', 'syncBankIncoming'].forEach(name => run(line('function ' + name + '('))); run(line("el('biSave').addEventListener")); }
   };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -52,7 +57,7 @@ function click(h, id) { const node = h.context.el(id); return node.listeners.cli
 test('only reconciliation expense entity becomes an authorized selector; incoming transfer has one account picker', () => {
   assert.match(page, /<select id="beNature"/); assert.doesNotMatch(page, /<(?:input|select)[^>]*id="biFromNature"/);
   assert.match(page, /<select id="biFromAccount"/); assert.match(page, /id="beDate"[^>]*readonly/); assert.match(page, /id="beAmount"[^>]*readonly/);
-  assert.match(page, /<select id="tr_from_nature"/); assert.match(page, /<select id="tr_to_nature"/);
+  assert.doesNotMatch(page, /<select id="tr_(?:from|to)_nature"/); assert.match(page, /<select id="tr_from"/); assert.match(page, /<select id="tr_to"/);
 });
 test('expense entity choices use approval permissions, not broader submission natures', () => {
   const h = harness(); h.expense();
@@ -91,28 +96,28 @@ test('shared 7883 expense forms expose only authorized shared entities and do no
   h.context.cfg.isOwner = true; h.context.cfg.approvalNatures.push('PERSONAL'); assert.deepEqual(Array.from(h.context.bankExpenseNatures()), ['SAMAST', 'PERSONAL']);
   h.context.bankReconView.rows[0].entityTag = { nature: 'PERSONAL' }; h.context.openBankExpense('bank-1'); assert.equal(h.nodes.beNature.value, 'PERSONAL');
 });
-test('incoming account labels and encoded values distinguish shared account names across entities', () => {
+test('incoming account labels are canonical and ambiguous shared names remain unavailable until the registry is reviewed', () => {
   const h = harness(); h.context.cfg.isOwner = true; h.context.cfg.approvalNatures.push('PERSONAL'); h.context.cfg.transferAccountsByNature.PERSONAL = ['Shared Bank', 'ICICI Bank 0992']; h.incoming(); h.context.syncBankIncomingAccount();
   const sources = h.context.bankIncomingSources();
-  assert.ok(sources.some(row => row.nature === 'SAMAST' && row.account === 'Shared Bank'));
-  assert.ok(sources.some(row => row.nature === 'PERSONAL' && row.account === 'Shared Bank'));
-  assert.match(h.nodes.biFromAccount.innerHTML, /value="SAMAST\|Shared Bank"/); assert.match(h.nodes.biFromAccount.innerHTML, /value="PERSONAL\|Shared Bank"/);
-  fields(h, { biFromAccount: 'SAMAST|Shared Bank' }); assert.equal(h.context.bankIncomingSource().nature, 'SAMAST');
-  fields(h, { biFromAccount: 'PERSONAL|Shared Bank' }); assert.equal(h.context.bankIncomingSource().nature, 'PERSONAL');
+  assert.ok(!sources.some(row => row.account === 'Shared Bank'));
+  assert.doesNotMatch(h.nodes.biFromAccount.innerHTML, /value="(?:SAMAST|PERSONAL)\|Shared Bank"/);
+  fields(h, { biFromAccount: 'SAMAST|Shared Bank' }); assert.equal(h.context.bankIncomingSource().account, '');
+  fields(h, { biFromAccount: 'PERSONAL|Shared Bank' }); assert.equal(h.context.bankIncomingSource().account, '');
   assert.ok(!sources.some(row => row.account === 'Business Bank'), 'same physical receiving account is excluded');
   fields(h, { biFromAccount: 'PERSONAL|Private Unlisted Bank' }); assert.equal(h.context.bankIncomingSource().account, '');
 });
 test('Admin PERSONAL source choices remain restricted to the known SANKI-pair exception', () => {
   const h = harness(); h.incoming();
   assert.deepEqual(Array.from(h.context.bankIncomingSources().filter(row => row.nature === 'PERSONAL').map(row => row.account)), ['IndusInd Bank 7883', 'ICICI Bank 0992', 'ICICI Bank 0993']);
-  h.context.bankIncomingNature = 'SAMAST'; assert.equal(h.context.bankIncomingSources().filter(row => row.nature === 'PERSONAL').length, 0);
-  h.context.bankIncomingNature = 'SANKI'; h.context.cfg.ownerPersonalTransferAccounts = []; assert.equal(h.context.bankIncomingSources().filter(row => row.nature === 'PERSONAL').length, 0);
+  h.context.bankReconView.account = 'Samast Bank'; assert.equal(h.context.bankIncomingSources().filter(row => row.nature === 'PERSONAL').length, 0);
+  h.context.bankReconView.account = 'Business Bank'; h.context.cfg.ownerPersonalTransferAccounts = []; assert.equal(h.context.bankIncomingSources().filter(row => row.nature === 'PERSONAL').length, 0);
 });
 test('incoming transfer submits entity decoded from its selected account, never a removed entity dropdown', async () => {
   const h = harness(); h.incoming(); h.context.syncBankIncomingAccount();
   fields(h, { biSourceKind: 'internal', biFromAccount: 'PERSONAL|ICICI Bank 0993', biClassification: 'owner_contribution', biNote: 'Verified contribution', biExternalSource: '', biSalaryAdvance: '' });
   click(h, 'biSave'); await flush(); assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0].body.fromNature, 'PERSONAL'); assert.equal(h.calls[0].body.fromAccount, 'ICICI Bank 0993'); assert.equal(h.calls[0].body.classification, 'owner_contribution');
+  assert.equal(h.calls[0].body.ownAccountTransfer, true);
   assert.ok(!h.nodes.biFromNature, 'no removed entity input was read');
   fields(h, { biFromAccount: '' }); click(h, 'biSave'); await flush(); assert.equal(h.calls.length, 1, 'empty source is not submitted');
   fields(h, { biFromAccount: 'ICICI Bank 0993' }); click(h, 'biSave'); await flush(); assert.equal(h.calls.length, 1, 'an unqualified ambiguous name is not submitted');
@@ -123,6 +128,7 @@ test('salary advance lookup and transfer submit use canonical decoded source acc
   h.context.syncBankIncomingClassification(); await flush(); assert.match(h.calls[0].url, /sourceAccount=Counter%20Cash/); assert.doesNotMatch(h.calls[0].url, /SANKI%7C/);
   h.context.el('biSalaryAdvance').value = 'ADV-001'; click(h, 'biSave'); await flush(); const saved = h.calls.find(call => call.body);
   assert.equal(saved.body.fromNature, 'SANKI'); assert.equal(saved.body.fromAccount, 'Counter Cash'); assert.equal(saved.body.salaryAdvanceId, 'ADV-001'); assert.equal(saved.body.classification, 'salary_advance_funding');
+  assert.equal(Object.hasOwn(saved.body, 'ownAccountTransfer'), false, 'special salary funding retains its own advance-link workflow, not generic ownership treatment');
   assert.match(line('window.openCounterCashBankTransfer=function'), /SANKI\|Counter Cash/); assert.doesNotMatch(line('window.openCounterCashBankTransfer=function'), /biFromNature/);
 });
 test('changing incoming source clears a stale salary advance and refreshes its classification', () => {
