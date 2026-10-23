@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const crypto = require('node:crypto');
 const ExpenseLoans = require('../public/expense-loans.js');
 
 const page = fs.readFileSync(path.join(__dirname, '../public/expenses.html'), 'utf8');
@@ -255,8 +256,12 @@ test('all inline expense-page scripts remain valid JavaScript', () => {
   }
 });
 
-test('the lender selection helper uses a release-specific cache key', () => {
-  assert.match(page, /expense-loans\.js\?v=payables-ledger-compact-20261021/);
+test('the lender selection helper uses its current content-specific cache key', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../public/expense-loans.js'), 'utf8').replace(/\r\n/g, '\n');
+  const version = crypto.createHash('sha256').update(source).digest('hex').slice(0, 12);
+  const scripts = [...page.matchAll(/<script\b[^>]*\bsrc=["']\/expense-loans\.js\?v=([^"']+)["'][^>]*>/gi)];
+  assert.equal(scripts.length, 1, 'expense page must load the lender helper exactly once');
+  assert.equal(scripts[0][1], version, 'expense page must load the exact current lender helper content version');
 });
 
 test('selectors are compact labels beside original cards, not separate visible selection rows', () => {
