@@ -73,6 +73,7 @@
       var b = event.target.closest('[data-rf-action]'); if (!b) return;
       var record = data.refunds.find(function (r) { return r.id === b.dataset.id; });
       if (b.dataset.rfAction === 'receive') return openForm(record);
+      if (b.dataset.rfAction === 'edit') return openCorrection(record);
       if (b.dataset.rfAction === 'void') return correction('/' + encodeURIComponent(record.id) + '/void', 'Reason for reversing this refund/return:');
       if (b.dataset.rfAction === 'redeem') return redemption(record, b.dataset.component);
       if (b.dataset.rfAction === 'undo-use') return correction('/' + encodeURIComponent(record.id) + '/redemptions/' + encodeURIComponent(b.dataset.use) + '/void', 'Reason for reversing this credit redemption:');
@@ -85,6 +86,7 @@
     var components = r.components.map(function (c) { return '<div>' + esc(labels[c.mode]) + ' · ' + amount(c.amount) + '<br><span class="muted">' + esc(componentDestination(c)) + (c.receiver === 'payer' ? ' · original payer' : '') + (c.reference ? ' · ' + esc(c.reference) : '') + '</span></div>'; }).join('') || 'Awaiting receipt — no ledger posting';
     var history = '<p>' + esc(r.reasonType.replaceAll('_', ' ')) + ' · ' + esc(r.reason) + '</p><p class="hint">Logged by ' + esc(r.createdBy) + ' · ' + esc(r.createdAt) + (r.parentId ? ' · pending return ' + esc(r.parentId) : '') + '</p>';
     history += proofGallery(r.proofs || [], 'Refund');
+    if (r.correctionRevision) history += '<p class="hint">Audited correction ' + esc(r.correctionRevision) + ' · ' + esc(r.lastCorrectedBy) + ' · ' + esc(r.lastCorrectedAt) + '. Original source and movement IDs retained.</p>';
     r.components.forEach(function (c) {
       if (c.externalMovementId) history += '<p class="hint">Linked existing receipt ' + esc(c.externalMovementId) + ' — no duplicate account movement.</p>';
       if (!c.vendorAdvanceId) return;
@@ -95,7 +97,7 @@
       });
     });
     if (r.status === 'voided') history += '<p>Voided by ' + esc(r.voidedBy) + ' · ' + esc(r.voidReason) + '</p>';
-    else { if (r.displayStatus === 'pending') history += action('Record received refund', 'receive', r.id); history += action('Reverse with reason', 'void', r.id); }
+    else { if (r.displayStatus === 'pending') history += action('Record received refund', 'receive', r.id); if (cfg.canEditLedgerTransactions === true) history += action('Correct refund', 'edit', r.id); history += action('Reverse with reason', 'void', r.id); }
     return '<tr><td>' + esc(r.date) + '<br><b>' + esc(r.id) + '</b></td><td>' + r.sources.map(function (source) { return esc(source.reference) + ' · ' + amount(source.amount); }).join('<br>') + '</td><td>' + esc(r.vendor) + '<br><span class="muted">' + esc(r.nature) + '</span></td><td class="r">' + amount(r.amount) + (r.pendingAmount ? '<br><small>' + amount(r.pendingAmount) + ' pending</small>' : '') + '</td><td>' + components + '</td><td><details><summary><b>' + esc(r.displayStatus.replaceAll('_', ' ')) + '</b> · Details</summary>' + history + '</details></td></tr>';
   }
   function recoverableView() {
@@ -240,6 +242,55 @@
     var reason = prompt(promptText); if (!reason || !reason.trim()) return;
     var result = await post(path, { reason: reason.trim() }); if (!result.success) return setMsg(result.error, false);
     await load(); draw(); setMsg('Correction saved with its audit history.', true);
+  }
+  async function openCorrection(record) {
+    if (busy || !record || cfg.canEditLedgerTransactions !== true) return;
+    modal(); var dialog = node('rf_dialog'), request = ++formRequest, reviewed = null, baseline = '', original;
+    dialog.oninput = null; dialog.onchange = null;
+    dialog.innerHTML = '<div class="row-actions"><h2 style="margin:0;flex:1">Correct refund · ' + esc(record.id) + '</h2><button class="btn ghost" id="rf_correct_close">Close</button></div><p class="hint">Checking the original source, receiving movement, permissions and reconciliation locks…</p><div class="msg" id="rf_message" role="status"></div>';
+    node('rf_correct_close').onclick = function () { if (!busy) dialog.close(); };
+    if (!dialog.open) dialog.showModal();
+    var path = '/' + encodeURIComponent(record.id);
+    try {
+      var result = await api(endpoint + path + '/correction-preview');
+      if (request !== formRequest || !dialog.open) return;
+      if (!result.success) throw new Error(result.error);
+      if (!result.editable) { message(result.blockedReason || 'This refund is protected by a linked workflow. No records were changed.', false); return; }
+      baseline = result.baseFingerprint; original = result.current.refund;
+      var component = original.components[0];
+      dialog.innerHTML = '<div class="row-actions"><h2 style="margin:0;flex:1">Correct refund · ' + esc(original.id) + '</h2><button class="btn ghost" id="rf_correct_close">Close</button></div><p class="hint">' + esc(original.nature) + ' · ' + esc(original.vendor) + ' · original source ' + esc(original.sources[0].reference) + '. Source, account, entity, mode, proof and movement IDs cannot change. Original bills and payments stay unchanged.</p><div class="grid"><div class="fld"><label>Corrected refund amount ₹</label><input id="rf_correct_amount" type="number" min="0.01" step="0.01" value="' + esc(original.amount) + '"></div><div class="fld"><label>Actual receipt / return date</label><input id="rf_correct_date" type="date" max="' + esc(result.today) + '" value="' + esc(original.date) + '"></div><div class="fld"><label>Transaction / credit reference</label><input id="rf_correct_reference" maxlength="200" value="' + esc(component && component.reference || '') + '"' + (component ? '' : ' disabled') + '></div><div class="fld"><label>Description</label><textarea id="rf_correct_description" maxlength="2000">' + esc(original.reason) + '</textarea></div></div><div class="fld"><label>Correction reason — required for audit</label><textarea id="rf_correct_reason" maxlength="1000"></textarea></div><div class="msg" id="rf_message" role="status"></div><div id="rf_correct_preview"></div><div class="row-actions"><button class="btn primary" id="rf_correct_review">Preview correction</button><button class="btn green" id="rf_correct_apply" disabled>Apply audited correction</button></div>';
+      node('rf_correct_close').onclick = function () { if (!busy) dialog.close(); };
+      function changed() { reviewed = null; node('rf_correct_apply').disabled = true; node('rf_correct_preview').innerHTML = ''; }
+      dialog.oninput = changed; dialog.onchange = changed;
+      node('rf_correct_review').onclick = async function () {
+        if (busy) return;
+        changed(); lockForm(true); message('Validating correction and linked accounting effects…', true);
+        try {
+          var payload = { baseFingerprint: baseline, amount: node('rf_correct_amount').value, date: node('rf_correct_date').value,
+            reference: node('rf_correct_reference').value, description: node('rf_correct_description').value, reason: node('rf_correct_reason').value };
+          var checked = await post(path + '/correction-preview', payload);
+          if (!checked.success) throw new Error(checked.error);
+          reviewed = Object.assign({}, payload, { fingerprint: checked.fingerprint });
+          var before = checked.before.refund, after = checked.after.refund;
+          node('rf_correct_preview').innerHTML = '<div class="rf-preview"><h3>Review exact correction</h3><table><thead><tr><th>Field</th><th>Before</th><th>After</th></tr></thead><tbody>' +
+            [['Amount', amount(before.amount), amount(after.amount)], ['Date', before.date, after.date], ['Reference', before.components[0] && before.components[0].reference || '', after.components[0] && after.components[0].reference || ''], ['Description', before.reason, after.reason]].map(function (row) { return '<tr>' + row.map(function (value) { return '<td>' + esc(value) + '</td>'; }).join('') + '</tr>'; }).join('') +
+            '</tbody></table><p>Bill credit: ' + amount(checked.impact.billCreditBefore) + ' → ' + amount(checked.impact.billCreditAfter) + '</p><p>Updated in place: ' + esc(checked.impact.receiptIds.concat(checked.impact.creditIds).join(', ') || 'pending return / bill-credit record only') + '.</p><p>No new movement. Original expenses, payments and existing reconciliations remain unchanged. Approval and reconciliation locks are checked again on Apply.</p><p><b>Audit reason:</b> ' + esc(payload.reason) + '</p></div>';
+          message('Preview verified. Review every change, then explicitly apply below.', true);
+        } catch (error) { reviewed = null; message(error.message, false); }
+        finally { lockForm(false); node('rf_correct_apply').disabled = !reviewed; }
+      };
+      node('rf_correct_apply').onclick = async function () {
+        if (busy || !reviewed) return;
+        lockForm(true);
+        try {
+          var saved = await api(endpoint + path + '/correction', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reviewed) });
+          if (!saved.success) throw new Error(saved.error);
+          dialog.close(); await load(); draw(); setMsg('Corrected ' + saved.refundId + ' in place with a complete audit trail. Original bills/payments and reconciliations were not changed.', true);
+        } catch (error) { reviewed = null; message(error.message + ' Review again before applying.', false); }
+        finally { lockForm(false); if (node('rf_correct_apply')) node('rf_correct_apply').disabled = !reviewed; }
+      };
+      labelFields(dialog);
+    } catch (error) { if (request === formRequest && dialog.open) message(error.message, false); }
   }
   function simpleForm(title, fields, path) {
     modal(); node('rf_dialog').innerHTML = '<h2>' + esc(title) + '</h2><form id="rf_simple">' + fields + '<div class="fld"><label>Date</label><input name="date" type="date" value="' + data.today + '" max="' + data.today + '" required></div><div class="fld"><label>Reason — required</label><textarea name="reason" required></textarea></div><div class="msg" id="rf_message"></div><div class="row-actions"><button class="btn green">Review &amp; confirm</button><button class="btn ghost" type="button" id="rf_simple_close">Cancel</button></div></form>';
