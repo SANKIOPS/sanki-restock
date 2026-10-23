@@ -142,3 +142,33 @@ test('Counter Cash shortcut still selects the encoded cash source and records no
   assert.equal(h.nodes.biFromAccount.value, 'SANKI|Counter Cash'); assert.equal(h.nodes.biClassification.value, 'internal_transfer'); assert.equal(h.nodes.biSourceKind.value, 'internal'); assert.equal(h.calls.length, 0);
   assert.ok(!h.nodes.biFromNature);
 });
+
+test('bulk draft reporting assignment preselects only an authorized expense entity without altering the account', () => {
+  const h = harness(); h.expense();
+  h.context.bankReconView.rows[0].entityAssignment = { nature: 'SAMAST', source: 'manual_bulk' };
+  const before = JSON.stringify(h.context.bankReconView);
+  h.context.openBankExpense('bank-1');
+  assert.equal(h.nodes.beNature.value, 'SAMAST');
+  assert.equal(h.nodes.beAccount.value, 'Business Bank');
+  assert.match(h.nodes.beLedgerList.innerHTML, /SAMAST Category/);
+  assert.equal(JSON.stringify(h.context.bankReconView), before);
+  assert.equal(h.calls.length, 0, 'opening a form does not apply any transaction or bulk assignment');
+  h.context.bankReconView.rows[0].entityAssignment = { nature: 'PERSONAL' };
+  h.context.openBankExpense('bank-1');
+  assert.doesNotMatch(h.nodes.beNature.innerHTML, /PERSONAL/);
+  assert.notEqual(h.nodes.beNature.value, 'PERSONAL');
+});
+
+test('incoming external receipt needs no entity input or pre-tag request; source and note are still mandatory', async () => {
+  const h = harness({ bankEntityTaggingActive: () => true }); h.incoming();
+  h.context.bankReconView.rows[0].bank = { date: '2098-06-01', debit: 0, credit: 100, reference: 'CREDIT-REF' };
+  fields(h, { biSourceKind: 'external', biExternalSource: 'Supplier refund', biReceiptType: 'refund', biCategory: 'Refund Received', biNote: 'Verified incoming refund reference', biSalaryAdvance: '' });
+  click(h, 'biSave'); await flush();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].url, '/api/expenses/bank-statements/create-incoming');
+  assert.equal(h.calls[0].body.sourceKind, 'external');
+  for (const key of ['nature', 'targetNature', 'postingNature', 'ownAccountTransfer']) assert.equal(Object.hasOwn(h.calls[0].body, key), false, key);
+  fields(h, { biNote: '' }); click(h, 'biSave'); await flush(); assert.equal(h.calls.length, 1);
+  fields(h, { biNote: 'Verified incoming refund', biExternalSource: '' }); click(h, 'biSave'); await flush(); assert.equal(h.calls.length, 1);
+  assert.match(page, /Entity classification is optional for incoming receipts and transfers/);
+});
