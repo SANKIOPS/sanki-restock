@@ -72,6 +72,26 @@ test('only existing Admin finance tabs appear and retired approvals navigation i
   for (const key of ['payables', 'reimbursements', 'audit', 'receivables', 'creditcards', 'approvals']) assert.equal(cashVerifier.includes(key), false, key);
 });
 
+test('Manage transaction edit actions advertise only the explicit server capability without changing destinations', () => {
+  const allowed = items(catalog(prashant, { ...config, isOwner: false, canEditLedgerTransactions: true })).find(item => item.key === 'transactions');
+  assert.equal(allowed.href, '/expenses.html?tab=cash');
+  assert.ok(allowed.actions.includes('Edit permitted payments, transfers and receipts'));
+  assert.match(allowed.description, /Protected entries remain locked/);
+  for (const value of [undefined, false, 'true']) {
+    const denied = items(catalog(owner, { ...config, canEditLedgerTransactions: value })).find(item => item.key === 'transactions');
+    assert.deepEqual(denied.actions, ['Account ledgers', 'Review transactions', 'Reconcile account']);
+    assert.equal(denied.href, allowed.href);
+  }
+});
+
+test('an edit capability alone cannot grant Manage transactions or expand verifier and claimant access', () => {
+  assert.equal(keys(catalog(person('accounting'), { claimantOnly: false, isAdmin: false, canEditLedgerTransactions: true })).includes('transactions'), false);
+  assert.equal(keys(catalog(owner, { ...config, claimantOnly: true, canEditLedgerTransactions: true })).includes('transactions'), false);
+  const verifier = items(catalog(prashant, { ...config, isAdmin: false, isOwner: false, canVerifyCounterCash: true, canEditLedgerTransactions: true })).find(item => item.key === 'transactions');
+  assert.deepEqual(verifier.actions, ['Verify Counter Cash']);
+  assert.equal(verifier.title, 'Counter Cash verification');
+});
+
 test('Prashant catalog retains fixed live modules and excludes private or unrelated tools', () => {
   const actual = keys(catalog(prashant, { ...config, isOwner: false }));
   for (const key of ['vendors', 'categories', 'groups', 'expenses', 'transactions', 'purchases', 'salary', 'incentives']) assert.ok(actual.includes(key), key);

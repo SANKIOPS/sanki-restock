@@ -11,6 +11,12 @@ const section = (from, to) => { const start = page.indexOf(from), end = page.ind
 const config = () => ({ isAdmin: true, isOwner: false, approvalNatures: ['SANKI', 'SAMAST'], natures: ['SANKI', 'SAMAST'], ownTransferAccounts: [{ nature: 'SANKI', account: 'Axis Bank 3448', label: 'Axis Bank 3448 · SANKI' }, { nature: 'SANKI', account: 'Counter Cash' }, { nature: 'SAMAST', account: 'Samast Bank' }, { nature: 'PERSONAL', account: 'IndusInd Bank 7883', label: 'Gagan Sir Personal · IndusInd Bank 7883' }], accountsByNature: { SANKI: ['Axis Bank 3448'], SAMAST: ['IndusInd Bank 7883'] } });
 const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const flush = () => new Promise(resolve => setImmediate(resolve));
+function claimantRoutes() {
+  return [['PERSONAL', 'SANKI'], ['PERSONAL', 'SAMAST'], ['SAMAST', 'SAMAST']].flatMap(([bankNature, claimantNature]) => [
+    { fromNature: bankNature, fromAccount: 'IndusInd Bank 7883', toNature: claimantNature, toAccount: 'Arshpreet 1919', classification: bankNature === 'PERSONAL' ? 'owner_contribution' : 'internal_transfer' },
+    { fromNature: claimantNature, fromAccount: 'Arshpreet 1919', toNature: bankNature, toAccount: 'IndusInd Bank 7883', classification: bankNature === 'PERSONAL' ? 'owner_withdrawal' : 'internal_transfer' }
+  ]);
+}
 function harness(overrides = {}) {
   const nodes = {}, calls = [], uploads = [], messages = [];
   const ctx = vm.createContext({ cfg: config(), OwnAccountTransfers: accounts, bankNature: 'SAMAST', bankDraftId: 'DRAFT-1', bankIncomingRowId: 'bank-1', bankIncomingNature: 'SAMAST', bankReconView: { account: 'IndusInd Bank 7883', rows: [{ id: 'bank-1', transferAccountNature: 'PERSONAL', bank: { debit: 100, credit: 0, date: '2026-10-23' }, entityTag: { nature: 'UNKNOWN' } }] },
@@ -25,6 +31,144 @@ function harness(overrides = {}) {
   vm.runInContext(line('function bankRowNature('), ctx);
   return { ctx, nodes, calls, uploads, messages, run(code) { return vm.runInContext(code, ctx); }, fields(values) { for (const [id, value] of Object.entries(values)) ctx.el(id).value = value; } };
 }
+
+function claimantHarness() {
+  const ui = harness();
+  ui.ctx.bankReconView.rows[0].bank.date = '2098-04-21';
+  ui.ctx.cfg.claimantOnly = false;
+  ui.ctx.cfg.claimantTransferRoutes = claimantRoutes();
+  ui.ctx.cfg.transferAccountsByNature = { SANKI: ['Axis Bank 3448', 'Arshpreet 1919'], SAMAST: [] };
+  return ui;
+}
+
+test('manual SAMAST 7883 rows offer only the SAMAST claimant pair without changing the existing entity', () => {
+  const ui = claimantHarness(), row = ui.ctx.bankReconView.rows[0];
+  row.entityTag = { nature: 'SAMAST', source: 'manual', reason: 'Existing reviewed classification', by: 'original-reviewer' };
+  const original = JSON.stringify({ cfg: ui.ctx.cfg, row });
+  assert.equal(ui.ctx.bankTransferNature(row), 'SAMAST');
+  const choices = ui.ctx.bankTransferChoices(ui.ctx.bankTransferNature(row), 'IndusInd Bank 7883').filter(item => item.claimant);
+  assert.deepEqual(Array.from(choices, item => [item.nature, item.account, item.own]), [['SAMAST', 'Arshpreet 1919', false]]);
+  assert.match(ui.ctx.bankTransferOptions('SAMAST', 'IndusInd Bank 7883'), /Arshpreet 1919 · SAMAST claimant ledger/);
+  assert.equal(JSON.stringify({ cfg: ui.ctx.cfg, row }), original);
+  assert.equal(ui.calls.length, 0);
+});
+
+test('untagged canonical PERSONAL 7883 offers explicit SANKI and SAMAST claimant book choices, never a guessed book', () => {
+  const ui = claimantHarness(), row = ui.ctx.bankReconView.rows[0];
+  const original = JSON.stringify(row);
+  const choices = ui.ctx.bankTransferChoices(ui.ctx.bankTransferNature(row), 'IndusInd Bank 7883').filter(item => item.claimant);
+  assert.deepEqual(Array.from(choices, item => [item.nature, item.account, item.own, item.classification]), [
+    ['SANKI', 'Arshpreet 1919', false, 'owner_contribution'], ['SAMAST', 'Arshpreet 1919', false, 'owner_contribution']
+  ]);
+  assert.equal(ui.ctx.bankTransferCounterpart('Arshpreet 1919', 'PERSONAL', 'IndusInd Bank 7883').account, '', 'unqualified ambiguous claimant book cannot be submitted');
+  for (const nature of ['SANKI', 'SAMAST']) {
+    const selected = ui.ctx.bankTransferCounterpart(nature + '|Arshpreet 1919', 'PERSONAL', 'IndusInd Bank 7883');
+    assert.equal(selected.nature, nature); assert.equal(selected.own, false); assert.equal(selected.claimant, true);
+  }
+  assert.equal(ui.ctx.bankRowNature(row), 'SAMAST', 'expense context is not replaced by transfer ownership');
+  assert.equal(JSON.stringify(row), original);
+  assert.equal(accounts.find(ui.ctx.cfg, 'Arshpreet 1919').account, '', 'claimant stays outside the own-account registry');
+});
+
+test('claimant pair capabilities fail closed for absent/denied config, other accounts, unsupported entities and source conflicts', () => {
+  for (const configChange of [
+    cfg => { delete cfg.claimantTransferRoutes; }, cfg => { cfg.claimantTransferRoutes = []; },
+    cfg => { cfg.isAdmin = false; }, cfg => { cfg.claimantOnly = true; }, cfg => { delete cfg.claimantOnly; },
+    cfg => { cfg.claimantTransferRoutes = [{ ...claimantRoutes()[0], toAccount: 'Other claimant' }]; },
+    cfg => { cfg.claimantTransferRoutes = [{ ...claimantRoutes()[0], fromAccount: 'ICICI Bank 0992' }]; },
+    cfg => { cfg.claimantTransferRoutes = [{ ...claimantRoutes()[0], fromNature: 'SAMAST' }]; },
+    cfg => { cfg.claimantTransferRoutes = [{ ...claimantRoutes()[0], classification: 'reimbursement' }]; }
+  ]) {
+    const ui = claimantHarness(); configChange(ui.ctx.cfg);
+    assert.equal(ui.ctx.approvedClaimantTransferRoutes().length, 0);
+    assert.equal(ui.ctx.bankTransferChoices('PERSONAL', 'IndusInd Bank 7883').some(item => item.claimant), false);
+  }
+  const ui = claimantHarness();
+  assert.equal(ui.ctx.bankTransferChoices('PERSONAL', 'ICICI Bank 0992').some(item => item.claimant), false);
+  assert.equal(ui.ctx.bankTransferChoices('SANKI', 'IndusInd Bank 7883').some(item => item.claimant), false);
+  ui.ctx.bankReconView.rows[0].entityTag = { nature: 'SAMAST', source: 'manual', sourceConflict: true };
+  assert.equal(ui.ctx.bankTransferNature(ui.ctx.bankReconView.rows[0]), '');
+  assert.equal(ui.ctx.bankTransferChoices('', 'IndusInd Bank 7883').some(item => item.claimant), false);
+  assert.equal(ui.calls.length, 0);
+});
+
+test('outgoing claimant reconciliation uses the dedicated flag and retains remarks, amounts and manual SAMAST evidence', async () => {
+  const ui = claimantHarness(), row = ui.ctx.bankReconView.rows[0];
+  row.entityTag = { nature: 'SAMAST', source: 'manual', reason: 'Original classification' };
+  const original = JSON.stringify(row);
+  ui.ctx.bankReconForm = { draftId: 'DRAFT-1', rowId: 'bank-1', mode: 'assign' };
+  ui.ctx.bankReconAmount = () => 100; ui.ctx.finishBankReconForm = () => { ui.ctx.el('brSave').disabled = false; };
+  ui.fields({ brKind: 'internal_transfer', brRemark: 'Verified claimant transfer', brPrincipal: '100', brCharge: '0', brOtherAccount: 'SAMAST|Arshpreet 1919' });
+  ui.run(line("other=bankTransferCounterpart(el('brOtherAccount').value"));
+  const click = () => ui.nodes.brSave.listeners.click[0]({ preventDefault() {}, stopImmediatePropagation() {} });
+  click(); await flush();
+  assert.equal(ui.calls.length, 1);
+  assert.deepEqual(ui.calls[0].body, { draftId: 'DRAFT-1', rowId: 'bank-1', action: 'create_internal_transfer', claimantTransfer: true, otherNature: 'SAMAST', otherAccount: 'Arshpreet 1919', principalAmount: 100, chargeAmount: 0, reason: 'Verified claimant transfer', remark: 'Verified claimant transfer' });
+  assert.equal(JSON.stringify(row), original);
+  ui.fields({ brOtherAccount: 'SANKI|Arshpreet 1919' }); click(); assert.equal(ui.calls.length, 1, 'manual SAMAST cannot silently switch to SANKI claimant book');
+  ui.fields({ brOtherAccount: 'SAMAST|Arshpreet 1919', brPrincipal: '99' }); click(); assert.equal(ui.calls.length, 1, 'original bank amount guard remains');
+});
+
+test('incoming claimant reconciliation keeps the source book explicit and uses only its dedicated transfer flag', async () => {
+  for (const bankNature of ['SAMAST', 'PERSONAL']) {
+    const ui = claimantHarness(), row = ui.ctx.bankReconView.rows[0];
+    row.bank = { date: '2098-04-23', debit: 0, credit: 100 };
+    if (bankNature === 'SAMAST') row.entityTag = { nature: 'SAMAST', source: 'manual' };
+    ['bankIncomingTransferNature', 'bankIncomingSources', 'bankIncomingSource', 'syncBankIncomingSource'].forEach(name => ui.run(line('function ' + name + '(')));
+    ui.ctx.syncBankIncomingClassification = () => {}; ui.ctx.bankOwnerContributionSource = () => null;
+    ui.fields({ biSourceKind: 'internal', biFromAccount: 'SAMAST|Arshpreet 1919', biNote: 'Verified returning claimant money' });
+    ui.ctx.syncBankIncomingSource();
+    assert.equal(ui.nodes.biClassification.value, bankNature === 'PERSONAL' ? 'owner_withdrawal' : 'internal_transfer');
+    ui.run(line("el('biSave').addEventListener"));
+    ui.nodes.biSave.listeners.click[0].call(ui.nodes.biSave); await flush();
+    assert.equal(ui.calls.length, 1);
+    assert.equal(ui.calls[0].body.claimantTransfer, true);
+    assert.equal(ui.calls[0].body.fromNature, 'SAMAST'); assert.equal(ui.calls[0].body.fromAccount, 'Arshpreet 1919');
+    assert.equal(Object.hasOwn(ui.calls[0].body, 'ownAccountTransfer'), false);
+    assert.equal(ui.nodes.biNote.value, 'Verified returning claimant money');
+  }
+});
+
+test('manual claimant preset changes only endpoint controls and preserves unsaved evidence and amount', () => {
+  const ui = claimantHarness(); ui.ctx.selectedNature = 'SAMAST'; ui.ctx.today = () => '2098-04-23';
+  ['renderOtherTransferForm', 'syncOtherTransferClass', 'selectClaimantTransferPair'].forEach(name => ui.run(line('function ' + name + '(')));
+  const form = ui.ctx.renderOtherTransferForm();
+  assert.match(form, /id="tr_other_pair"/); assert.match(form, /Arsh remains a claimant ledger/);
+  assert.match(form, /PERSONAL\|IndusInd Bank 7883\|SAMAST\|Arshpreet 1919/);
+  assert.match(form, /PERSONAL\|IndusInd Bank 7883\|SANKI\|Arshpreet 1919/);
+  ui.fields({ tr_other_amount: '123.45', tr_other_note: 'Unsaved reason', tr_other_date: '2098-04-20', tr_other_intermediary: 'Forwarder' });
+  const proof = {}; ui.ctx.el('tr_other_proof').files = [proof];
+  ui.ctx.selectClaimantTransferPair('PERSONAL|IndusInd Bank 7883|SAMAST|Arshpreet 1919');
+  assert.equal(ui.nodes.tr_other_from_nature.value, 'PERSONAL'); assert.equal(ui.nodes.tr_other_to_nature.value, 'SAMAST');
+  assert.equal(ui.nodes.tr_other_to.value, 'Arshpreet 1919'); assert.equal(ui.nodes.tr_other_class.value, 'owner_contribution');
+  assert.equal(ui.nodes.tr_other_amount.value, '123.45'); assert.equal(ui.nodes.tr_other_note.value, 'Unsaved reason');
+  assert.equal(ui.nodes.tr_other_date.value, '2098-04-20'); assert.equal(ui.nodes.tr_other_intermediary.value, 'Forwarder'); assert.equal(ui.nodes.tr_other_proof.files[0], proof);
+  assert.equal(ui.calls.length, 0); assert.equal(ui.uploads.length, 0);
+  assert.deepEqual(Array.from(ui.ctx.transferAccountsForNature('SAMAST')), [], 'no global SAMAST account list expansion');
+  assert.equal(accounts.find(ui.ctx.cfg, 'Arshpreet 1919').account, '');
+});
+
+test('all six exact manual claimant routes submit the dedicated flag with non-private proof scope and unchanged classifications', async () => {
+  for (const route of claimantRoutes()) {
+    const ui = claimantHarness(); ui.run(section('    function recordTransfer(', '    function ledgerDisplayParts('));
+    ui.fields({ tr_other_from_nature: route.fromNature, tr_other_from: route.fromAccount, tr_other_to_nature: route.toNature, tr_other_to: route.toAccount, tr_other_class: route.classification, tr_other_route: 'direct', tr_other_intermediary: '', tr_other_amount: '100', tr_other_date: '2098-04-23', tr_other_note: 'Verified exact pair' });
+    ui.ctx.el('tr_other_proof').files = [{}];
+    ui.ctx.recordTransfer(true); await flush();
+    assert.equal(ui.calls.length, 1, JSON.stringify(route));
+    assert.equal(ui.calls[0].body.claimantTransfer, true); assert.equal(Object.hasOwn(ui.calls[0].body, 'ownAccountTransfer'), false);
+    for (const key of ['fromNature', 'fromAccount', 'toNature', 'toAccount', 'classification']) assert.equal(ui.calls[0].body[key], route[key], key);
+    assert.deepEqual(ui.uploads, [route.fromNature === 'PERSONAL' ? route.toNature : route.fromNature]);
+    assert.equal(ui.nodes.tr_other_note.value, 'Verified exact pair', 'failed synthetic save preserves form evidence');
+  }
+});
+
+test('new claimant manual mode cannot authorize other PERSONAL routes or incorrect transfer treatments', () => {
+  const ui = claimantHarness(); ui.run(section('    function recordTransfer(', '    function ledgerDisplayParts('));
+  ui.fields({ tr_other_from_nature: 'PERSONAL', tr_other_from: 'IndusInd Bank 7883', tr_other_to_nature: 'SAMAST', tr_other_to: 'Arshpreet 1919', tr_other_class: 'reimbursement', tr_other_route: 'direct', tr_other_intermediary: '', tr_other_amount: '100', tr_other_date: '2098-04-23', tr_other_note: 'Reason' }); ui.ctx.el('tr_other_proof').files = [{}];
+  ui.ctx.recordTransfer(true); assert.match(ui.messages.at(-1), /approved claimant pair requires/);
+  ui.fields({ tr_other_class: 'owner_contribution', tr_other_to: 'Different claimant' }); ui.ctx.recordTransfer(true); assert.match(ui.messages.at(-1), /only with a SANKI/);
+  assert.equal(ui.calls.length, 0); assert.equal(ui.uploads.length, 0);
+});
 
 test('manual own-account form asks only canonical source/destination accounts, not standalone entities', () => {
   const form = line('Move money between any accounts');

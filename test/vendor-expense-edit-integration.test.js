@@ -133,14 +133,15 @@ test('ledger payment editor cannot bypass grouped reconciliation or approved cas
   }
 });
 
-test('ledger payment editor retains unreconciled corrections and same-value descriptive corrections',()=>{
+test('ledger payment editor requires preview for unreconciled corrections and retains all reconciliation locks',()=>{
   let seeded=seed({locked:false}),id=seeded.id,reference=id+'/PAY-001';
-  let out=invoke('PATCH','/api/expenses/ledger-entry',{role:'owner',body:{id:reference,kind:'expense',amount:225,date:'2098-03-05',reason:'Correct unreconciled payment',note:'Unreconciled note'}});
-  assert.equal(out.status,200,JSON.stringify(out.body));assert.equal(read().expenses[id].payments[0].amount,225);assert.equal(read().expenses[id].payments[0].date,'2098-03-05');
+  const preview=invoke('GET','/api/expenses/ledger-entry/edit-preview',{role:'owner',query:{id:reference,kind:'expense',nature:'SANKI',account:'Axis Bank 3448'}});assert.equal(preview.status,200,JSON.stringify(preview.body));
+  let out=invoke('PATCH','/api/expenses/ledger-entry',{role:'owner',body:{id:reference,kind:'expense',fingerprint:preview.body.fingerprint,amount:175,date:'2098-03-05',reason:'Correct unreconciled payment',note:'Unreconciled note'}});
+  assert.equal(out.status,200,JSON.stringify(out.body));assert.equal(read().expenses[id].payments[0].amount,175);assert.equal(read().expenses[id].payments[0].date,'2098-03-05');
   seeded=seed({locked:false});id=seeded.id;reference=id+'/PAY-001';const s=read();
   s.bankStatements={'SANKI|Axis Bank 3448':{imports:[{reconciliationRows:[{linkedRecordIds:[reference]}]}]}};fs.writeFileSync(expenseFile,JSON.stringify(s));
-  out=invoke('PATCH','/api/expenses/ledger-entry',{role:'owner',body:{id:reference,kind:'expense',amount:200,date:seeded.e.date,reason:'Correct note only',note:'Verified descriptive note'}});
-  assert.equal(out.status,200,JSON.stringify(out.body));const payment=read().expenses[id].payments[0];assert.equal(payment.amount,200);assert.equal(payment.date,seeded.e.date);assert.equal(payment.note,'Verified descriptive note');
+  const before=fs.readFileSync(expenseFile,'utf8');out=invoke('PATCH','/api/expenses/ledger-entry',{role:'owner',body:{id:reference,kind:'expense',amount:200,date:seeded.e.date,reason:'Correct note only',note:'Verified descriptive note'}});
+  assert.equal(out.status,409,JSON.stringify(out.body));assert.equal(fs.readFileSync(expenseFile,'utf8'),before);const payment=read().expenses[id].payments[0];assert.equal(payment.amount,200);assert.equal(payment.date,seeded.e.date);assert.equal(payment.note,'Preserve this payment');
   assert.equal(invoke('POST','/api/expenses/:id',{params:{id},role:'owner',body:{particulars:'Expense metadata remains editable',editReason:'Descriptive correction'}}).status,200);
 });
 
