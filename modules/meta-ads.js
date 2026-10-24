@@ -305,7 +305,7 @@ function createStore(options = {}) {
         if(set.behaviorsConfirmed==null&&Array.isArray(groups)&&raw['Flexible Inclusions']){set.interests=groups.flatMap(g=>(g.interests||[]).map(x=>x.name));set.interestsConfirmed=true;set.behaviors=groups.flatMap(g=>(g.behaviors||[]).map(x=>x.name));set.behaviorsConfirmed=true;}
       }catch{/* Preserve existing records when the source audience is unavailable. */}
     }
-    return { ...output, summary: configuredSummary(state),setupCoverage:require('./meta-ads-setup-bundle').setupCoverage(output), insights:require('./meta-ads-insights').insights(state,period) };
+    return { ...output, summary: configuredSummary(state),missingDetails:require('./meta-ads-setup-bundle').missingDetails(output),setupCoverage:require('./meta-ads-setup-bundle').setupCoverage(output), insights:require('./meta-ads-insights').insights(state,period) };
   }
   function mutate(type, method, recordId, body, actor) {
     if (!plain(body) || Buffer.byteLength(JSON.stringify(body), 'utf8') > 128 * 1024) fail('Record body must be an object below 128 KiB.');
@@ -390,12 +390,18 @@ function createStore(options = {}) {
       if(!Number.isSafeInteger(revision)||revision!==state.revision)fail('Records changed. Preview the performance file again.',409);
       const counts={created:0,updated:0,unchanged:0}, now=clock(), report=[];
       const match=(type,meta)=>state[type].find(x=>x.id===meta||x.metaSourceId===meta);
-      const hierarchy=[];
+      const hierarchy=[];let setupChanged=false;
       for(const row of rows){
         if(ensureHierarchy){for(const [type,id,name,parent] of [['campaigns',row.campaignMetaId,row.campaignName,{}],['adSets',row.setMetaId,row.setName,{campaignId:match('campaigns',row.campaignMetaId)?.id||row.campaignMetaId}],['ads',row.adMetaId,row.adName,{adSetId:match('adSets',row.setMetaId)?.id||row.setMetaId}]]){if(match(type,id))continue;if(!name)fail('Include campaign, ad-set and ad names to record new hierarchy from this report.');const record=normalizeRecord(type,{id,metaSourceId:id,name,...parent});Object.assign(record,{createdAt:now,createdBy:actor,updatedAt:now,updatedBy:actor});state[type].push(record);hierarchy.push({type,id,name});state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:id,field:'record',before:null,after:record,action:'create',reason:'New record identified by Meta performance export; setup incomplete',revision:state.revision+1});}}
         const campaign=match('campaigns',row.campaignMetaId),set=match('adSets',row.setMetaId),ad=match('ads',row.adMetaId);
         if(!campaign||!set||!ad)fail(`Upload campaign setup first: ${row.adName||row.adMetaId} is not linked to an imported ad.`,400);
         if(set.campaignId!==campaign.id||ad.adSetId!==set.id)fail('Report IDs do not match the saved campaign hierarchy. Upload the latest setup first.');
+        if(ensureHierarchy&&row.setup){for(const [type,prior] of [['campaigns',campaign],['adSets',set],['ads',ad]]){
+          const supplied=row.setup[type];if(!supplied)continue;
+          const patch={};for(const key of ['name','objective','budgetDaily','status'])if(supplied[key]!=null&&supplied[key]!==''&&!(key==='status'&&['unknown','delivery_unconfirmed'].includes(supplied[key])))patch[key]=supplied[key];
+          const next=normalizeRecord(type,patch,prior);
+          for(const key of Object.keys(patch))if(JSON.stringify(prior[key])!==JSON.stringify(next[key])){state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:prior.id,field:key,before:prior[key]??null,after:next[key],action:'update',reason:'Supplied setup field in Meta table upload',revision:state.revision+1});prior[key]=next[key];prior.updatedAt=now;prior.updatedBy=actor;setupChanged=true;}
+        }}
         const index=state.results.findIndex(x=>x.adId===ad.id&&x.periodStart===row.record.periodStart&&x.periodEnd===row.record.periodEnd),previous=index<0?null:state.results[index];
         const payload={...row.record,archived:false,reportGoal:previous?.reportGoal||set.performanceGoal||({profile_visit_view:'PROFILE_VISIT',reach:'REACH','actions:link_click':'LINK_CLICKS','actions:offsite_conversion.fb_pixel_purchase':'PURCHASE'}[row.record.resultIndicator]||''),reportDestination:previous?.reportDestination||set.destination,id:previous?.id||'period-'+row.adMetaId+'-'+row.record.periodStart+'-'+row.record.periodEnd,adId:ad.id,adSetId:set.id};
         const record=normalizeRecord('results',payload,previous), changed=Object.keys(payload).filter(k=>JSON.stringify(previous?.[k])!==JSON.stringify(record[k]));
@@ -406,7 +412,7 @@ function createStore(options = {}) {
         for(const field of changed)state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:'result',entityId:record.id,field,before:previous?.[field]??null,after:record[field],action:previous?'update':'create',reason:'Meta performance upload',revision:state.revision+1});
       }
       validateRelationships(state);
-      if(!preview&&(counts.created||counts.updated)){state.revision++;save(state);}
+      if(!preview&&(counts.created||counts.updated||setupChanged||hierarchy.length)){state.revision++;save(state);}
       return {counts,revision:state.revision,report,hierarchy};
     });
   }

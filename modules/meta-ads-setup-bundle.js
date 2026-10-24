@@ -7,4 +7,23 @@ function mergeSetupFiles(files){
   return {level:'bundle',records:Object.fromEntries(Object.entries(maps).map(([k,v])=>[k,[...v.values()]])),warnings:[...new Set(warnings)]};
 }
 function setupCoverage(state){return state.campaigns.filter(c=>!c.archived).map(c=>{const sets=state.adSets.filter(s=>s.campaignId===c.id&&!s.archived),ads=state.ads.filter(a=>sets.some(s=>s.id===a.adSetId)&&!a.archived),missing=[];if(!c.objective)missing.push('campaign objective');if(!sets.length)missing.push('ad sets');if(!ads.length||sets.some(s=>!ads.some(a=>a.adSetId===s.id)))missing.push('creatives');if(sets.some(s=>s.budgetDaily==null))missing.push('budget');if(sets.some(s=>!s.destination))missing.push('destination');if(sets.some(s=>!s.locations?.length))missing.push('locations');if(sets.some(s=>s.ageMin==null||s.ageMax==null||!s.gender))missing.push('age / gender');if(sets.some(s=>s.interestsConfirmed!==true))missing.push('audience confirmation');if(ads.some(a=>!a.mediaUrls?.length))missing.push('creative URLs');if([c,...sets,...ads].some(r=>!['paused','reported_running','active','completed','archived'].includes(r.status)))missing.push('confirmed on/off status');return {campaignId:c.id,adSets:sets.length,ads:ads.length,complete:!missing.length,missing};});}
-module.exports={mergeSetupFiles,setupCoverage};
+function missingDetails(state,campaignId){
+  const known=r=>['paused','reported_running','active','completed','archived'].includes(r.status);
+  const groups=[];
+  function add(type,r,keys){if(keys.length)groups.push({type,id:r.id,name:r.name,keys});}
+  for(const c of state.campaigns.filter(c=>!c.archived&&(!campaignId||c.id===campaignId))){
+    add('campaigns',c,[...(!c.objective?['objective']:[]),...(!known(c)?['status']:[])]);
+    for(const s of state.adSets.filter(s=>s.campaignId===c.id&&!s.archived)){
+      const keys=[];for(const k of ['budgetDaily','destination','performanceGoal','ageMin','ageMax','gender'])if(s[k]==null||s[k]==='')keys.push(k);
+      if(!known(s))keys.push('status');if(!s.locations?.length)keys.push('locations');
+      if(s.destination==='WhatsApp'&&!s.whatsappNumber)keys.push('whatsappNumber');
+      if(s.interestsConfirmed!==true)keys.push('interests','interestsConfirmed');
+      if(s.behaviorsConfirmed!==true)keys.push('behaviors','behaviorsConfirmed');
+      if(s.placementsConfirmed!==true||!s.placements?.length)keys.push('placements','placementsConfirmed');
+      add('adSets',s,keys);
+      for(const a of state.ads.filter(a=>a.adSetId===s.id&&!a.archived))add('ads',a,[...(!a.collection?['collection']:[]),...(!a.creativeTypes?.length?['creativeTypes']:[]),...(!a.model?['model']:[]),...(!a.mediaUrls?.length?['mediaUrls']:[]),...(!known(a)?['status']:[])]);
+    }
+  }
+  return groups;
+}
+module.exports={mergeSetupFiles,setupCoverage,missingDetails};
