@@ -273,12 +273,10 @@
       const campaignIds=new Set(rows.map(r=>r.id));
       const sets=state.adSets.filter(r=>campaignIds.has(r.campaignId));
       const ads=state.ads.filter(a=>sets.some(r=>r.id===a.adSetId)&&(!$('collectionFilter').value||(a.collection||sets.find(r=>r.id===a.adSetId)?.collection||'Unclassified')===$('collectionFilter').value)&&(!$('destinationFilter').value||sets.find(r=>r.id===a.adSetId)?.destination===$('destinationFilter').value)&&(!$('creativeTypeFilter').value||(a.creativeTypes||[]).includes($('creativeTypeFilter').value)));
-      MetaLinkedWorkspace.render($('insightsPanel'),{...state,campaigns:rows,ads,adSets:sets,showLinkedDetails:['campaignFilter','collectionFilter','destinationFilter','creativeTypeFilter','statusFilter','search'].some(id=>$(id).value)},{isSelected:id=>selection.campaigns.has(id),selectCampaign:(id,checked)=>{checked?selection.campaigns.add(id):selection.campaigns.delete(id);render();},period:value=>{insightsPeriod=value;load('Reporting period selected.');},classify:id=>{const old=view;view='ads';openEditor(id);view=old;},edit:(type,id)=>{const old=view;view=type;openEditor(id);view=old;},details:openSetupDetails,saveTags:async(id,fields)=>{await request('/ads/'+encodeURIComponent(id),'PATCH',{...fields,revision:state.revision,reason:'Classify creative'});await load('Creative tags saved.');}});
+      MetaLinkedWorkspace.render($('insightsPanel'),{...state,campaigns:rows,ads,adSets:sets,hasSetupFilters:['collectionFilter','destinationFilter','creativeTypeFilter'].some(id=>$(id).value),showLinkedDetails:['campaignFilter','collectionFilter','destinationFilter','creativeTypeFilter','statusFilter','search'].some(id=>$(id).value)},{patch:async(type,id,fields,isNew=false)=>{await request('/'+paths[type]+(isNew?'':'/'+encodeURIComponent(id)),isNew?'POST':'PATCH',{...fields,revision:state.revision,reason:'Inline table edit'});await load('Saved in app records. Changes are recorded in history.');},scope:(campaign,set,count)=>{$('viewTitle').textContent=set?'Ads':campaign?'Ad sets':'Campaigns';$('viewHelp').textContent=set?'Ads in '+set.name:campaign?'Ad sets in '+campaign.name:'Click a campaign to see only its ad sets. Click a value to edit.';$('rowCount').textContent=count+' '+(set?'ad(s)':campaign?'ad set(s)':'row(s)');},isSelected:id=>selection.campaigns.has(id),selectCampaign:(id,checked)=>{checked?selection.campaigns.add(id):selection.campaigns.delete(id);render();},period:value=>{insightsPeriod=value;load('Reporting period selected.');},classify:id=>{const old=view;view='ads';openEditor(id);view=old;},edit:(type,id)=>{const old=view;view=type;openEditor(id);view=old;},details:openSetupDetails,saveTags:async(id,fields)=>{await request('/ads/'+encodeURIComponent(id),'PATCH',{...fields,revision:state.revision,reason:'Classify creative'});await load('Creative tags saved.');}});
       $('insightsPanel').querySelector('.linked-filters').hidden=true;
       $('records').parentElement.hidden=rows.length>0&&$('statusFilter').value!=='archived';
       $('tableFooter').hidden=rows.length>0&&$('statusFilter').value!=='archived';
-      $('viewHelp').textContent='Campaign summaries. Click a campaign or apply filters to see its ad sets and creatives.';
-      $('rowCount').textContent=rows.length+' campaign(s)';
     }
   }
   async function request(path='',method='GET',body) {
@@ -384,13 +382,7 @@
     catch(error){$('statusError').textContent=error.message+(error.status===409?' Close and reopen this dialog before saving.':'');}
     finally{$('statusSave').disabled=false;}
   });
-  function renderMissingDetails(){
-    const panel=$('missingDetailsPanel');if(!state||!panel)return;
-    const campaignId=$('campaignFilter').value;
-    const items=(state.missingDetails||[]).filter(item=>{if(!campaignId)return true;if(item.type==='campaigns')return item.id===campaignId;const set=item.type==='adSets'?find('adSets',item.id):find('adSets',find('ads',item.id)?.adSetId);return set?.campaignId===campaignId;});
-    panel.hidden=!items.length;
-    panel.innerHTML='<details><summary>Complete missing details · '+items.length+' record(s)</summary><p>Enter these once from Meta. Future CSV uploads keep details they do not supply. Update them here whenever you change them in Meta. Empty interests or behaviours can be confirmed as none; enter Advantage+ placements or list your manual placements. Model name may be entered as Not applicable.</p>'+items.map(item=>'<p><strong>'+esc(item.name)+'</strong> · '+esc(singular[item.type])+'<br><small>'+item.keys.filter(k=>!k.endsWith('Confirmed')).map(k=>esc(fields(item.type).find(f=>f.key===k)?.label||k)).join(', ')+'</small> <button type="button" data-complete-type="'+esc(item.type)+'" data-complete-id="'+esc(item.id)+'">Complete missing details</button></p>').join('')+'</details>';
-  }
+  function renderMissingDetails(){if($('missingDetailsPanel'))$('missingDetailsPanel').hidden=true;}
   $('missingDetailsPanel').addEventListener('click',event=>{const b=event.target.closest('[data-complete-id]');if(!b)return;const old=view;view=b.dataset.completeType;openEditor(b.dataset.completeId,true);view=old;});
   $('campaignFilter').addEventListener('change',renderMissingDetails);
   function openEditor(id,missingOnly=false) {
@@ -497,7 +489,7 @@
   }
   $('closeSetupDetails').addEventListener('click',()=>$('setupDetailsDialog').close());
   $('records').addEventListener('change',event=>{if(event.target.id==='selectAllRows'){for(const r of filteredRows())event.target.checked?selection[view].add(r.id):selection[view].delete(r.id);}else if(event.target.dataset.select){event.target.checked?selection[view].add(event.target.dataset.select):selection[view].delete(event.target.dataset.select);}else return;if(view==='campaigns')selection.adSets.clear();render();});
-  $('clearScope').addEventListener('click',()=>{Object.values(selection).forEach(s=>s.clear());$('campaignFilter').value='';render();});
+  $('clearScope').addEventListener('click',()=>{window.MetaLinkedWorkspace?.resetScope();Object.values(selection).forEach(s=>s.clear());$('campaignFilter').value='';render();});
   let bulkContext=null;
   function openBulk(action){
     if(!state||busy||!selection[view]?.size)return;
@@ -519,7 +511,7 @@
   $('viewChildren').addEventListener('click',()=>{if(!selection[view].size)return;view=view==='campaigns'?'adSets':'ads';sort=null;render();});
   $('columnMode').addEventListener('change',()=>{sort=null;render();});
   $('openUpload').addEventListener('click',()=>{$('uploadPanel').hidden=!$('uploadPanel').hidden;});
-  $('allRecords').addEventListener('click',()=>{$('statusFilter').value='';if(view==='changes')view='campaigns';render();});
+  $('allRecords').addEventListener('click',()=>{window.MetaLinkedWorkspace?.resetScope();$('statusFilter').value='';if(view==='changes')view='campaigns';render();});
   $('runningRecords').addEventListener('click',()=>{$('statusFilter').value='reported_running';if(view==='changes')view='campaigns';render();});
   $('records').addEventListener('keydown',event=>{if((event.key==='Enter'||event.key===' ')&&event.target.matches('[data-sort]')){event.preventDefault();event.target.click();}});
   ['campaignFilter','collectionFilter','statusFilter','destinationFilter','creativeTypeFilter','periodStartFilter','periodEndFilter'].forEach(id=>$(id).addEventListener('change',()=>{if(id==='statusFilter'){if($('statusFilter').value==='history')view='changes';else if(view==='changes')view='campaigns';}render();}));

@@ -1,7 +1,7 @@
 'use strict';
 window.MetaLinkedWorkspace=(()=>{
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const expanded=new Set();
+  const scope={campaign:null,set:null};
   let dateMode='saved';
   const filters={destination:'',collection:'',creative:''};
   const options=(values,selected)=>'<option value="">All</option>'+values.map(v=>'<option '+(v===selected?'selected':'')+' value="'+esc(v)+'">'+esc(v)+'</option>').join('');
@@ -52,44 +52,102 @@ window.MetaLinkedWorkspace=(()=>{
       return '<td>'+metrics.map(r=>(r.count==null?'Unavailable':Number(r.count).toLocaleString('en-IN'))+'<small>'+esc(r.goal)+'</small>').join('<hr>')+(matches.length<ads.length?'<small>Partial report: '+matches.length+'/'+ads.length+' ads</small>':'')+'</td><td>'+money(spend)+'<small>Spend</small>'+metrics.map(r=>money(r.cost)+'<small>'+esc(r.goal)+(r.costFactor===1000?' / 1,000 reached':' / result')+'</small>').join('<hr>')+'</td><td>'+metrics.map(r=>{const a=MetaInsightView.assess(r),peers=items.filter(p=>p.goal===r.goal&&p.attribution===r.attribution&&p.cost!=null&&p.count>=5),best=!r.grouped&&r.count>=5&&peers.length>1&&r.cost===Math.min(...peers.map(p=>p.cost));return '<strong>'+esc(a.name)+'</strong><small>'+esc(a.action)+'</small>'+(best?'<small class="lw-cost-rank">Lowest cost · same goal</small>':'')+'<details><summary>Why?</summary>'+esc(a.reason)+'<small>Different audiences can affect comparisons. Profile visits and enquiries do not prove store footfall.</small></details>';}).join('<hr>')+'</td>';
     }
 
-    function update(){
-      const visible=rows.filter(r=>(!filters.destination||r.set.destination===filters.destination)&&(!filters.collection||(r.ad.collection||r.set.collection||'Unclassified')===filters.collection)&&(!filters.creative||(filters.creative==='Unclassified'?!(r.ad.creativeTypes||[]).length:(r.ad.creativeTypes||[]).includes(filters.creative))));
-      root.querySelector('#lwRows').innerHTML='<div class="table-wrap"><table><thead><tr><th>Status<br>Edit</th><th>Campaign</th><th>Ad set</th><th>Ad / creative</th><th>Destination</th><th>Collection</th><th>Creative type</th><th>Model name</th><th>Budget</th><th>Creative URL</th><th>Locations</th><th>Interests</th><th>Age / gender</th><th>Results</th><th>Spend<br>Cost / result</th><th>Assessment</th></tr></thead><tbody>'+visible.map(r=>'<tr><td><input type="checkbox" data-select-campaign="'+esc(r.campaign.id)+'" aria-label="Select '+esc(r.campaign.name)+'" '+(callbacks.isSelected?.(r.campaign.id)?'checked':'')+'>'+switchFor(r.campaign,r.set,r.ad)+'<button class="lw-pencil" data-tag-ad="'+esc(r.ad.id)+'" aria-label="Edit row for '+esc(r.ad.name)+'">✎</button>'+(editing===r.ad.id?'<div class="lw-edit-actions"><button data-open-campaign="'+esc(r.campaign.id)+'">Campaign</button><button data-edit-set="'+esc(r.set.id)+'">Ad set</button><button data-open-ad="'+esc(r.ad.id)+'">Creative</button><button data-save-tags>Save</button><button data-cancel-tags>Cancel</button><small id="lwInlineError" role="alert"></small></div>':'')+'</td><td><button class="row-title" data-open-campaign="'+esc(r.campaign.id)+'">'+esc(r.campaign.name)+'</button><small>'+esc(r.campaign.businessGoal||r.campaign.objective||'Objective not supplied')+'</small></td><td><button class="row-title" data-open-set="'+esc(r.set.id)+'">'+esc(r.set.name)+'</button><small>Ad set: '+esc(statusFor(r.campaign,r.set).label)+'</small></td><td><button class="row-title" data-open-ad="'+esc(r.ad.id)+'">'+esc(r.ad.name)+'</button><small>'+esc(r.ad.format||'Type not supplied')+'</small></td><td>'+esc(r.set.destination||'Unconfirmed')+'<small>'+esc(r.ad.whatsappNumber||r.set.whatsappNumber||'')+'</small></td><td>'+(editing===r.ad.id?'<select aria-label="Collection for '+esc(r.ad.name)+'" id="lwInlineCollection"><option value="">Unclassified</option>'+['Femme','Homme','Studio','Both','Other'].map(v=>'<option '+(v===(r.ad.collection||r.set.collection)?'selected':'')+'>'+v+'</option>').join('')+'</select>':esc(r.ad.collection||r.set.collection||'Unclassified'))+'</td><td>'+(editing===r.ad.id?'<select aria-label="Creative type for '+esc(r.ad.name)+'" id="lwInlineTypes"><option value="">Unclassified</option>'+types.map(v=>'<option '+((r.ad.creativeTypes||[]).includes(v)?'selected':'')+'>'+esc(v)+'</option>').join('')+'</select><input id="lwInlineCustom" aria-label="Custom creative type" placeholder="Add custom type">':esc((r.ad.creativeTypes||[]).join(', ')||'Unclassified'))+'</td><td>'+(editing===r.ad.id?'<input id="lwInlineModel" aria-label="Model name" maxlength="160" placeholder="Model name" value="'+esc(r.ad.model||'')+'">':esc(r.ad.model||'Not supplied'))+'</td><td>'+budget(r.set)+'</td><td>'+creative(r.ad)+'</td><td>'+locations(r.set)+'</td><td>'+shortList(r.set.interests||[])+((r.set.behaviors||[]).length?'<small>Behaviours: '+shortList(r.set.behaviors)+'</small>':'')+'</td><td>'+esc(r.set.ageMin==null||r.set.ageMax==null?'Not supplied':r.set.ageMin+'–'+r.set.ageMax)+'<small>'+esc(r.set.gender||'Gender not supplied')+'</small></td>'+performance([r.ad])+'</tr>').join('')+'</tbody></table></div>'+(!visible.length?'<p class="report-note">'+(state.campaigns.length?'Ad-set and creative setup details are not supplied for these campaign records.':'No matching records. Clear filters or upload setup.')+'</p>':'');
-      if(!state.showLinkedDetails){
-        const unique=values=>[...new Set(values.filter(Boolean))].join(', ')||'Not supplied';
-        const summaries=state.campaigns.filter(c=>!c.archived&&!expanded.has(c.id)).map(c=>{
-          const sets=state.adSets.filter(s=>s.campaignId===c.id&&!s.archived);
-          const ads=visible.filter(r=>r.campaign.id===c.id).map(r=>r.ad);
-          const known=sets.filter(s=>s.budgetDaily!=null);
-          return '<tr><td><input type="checkbox" data-select-campaign="'+esc(c.id)+'" aria-label="Select '+esc(c.name)+'" '+(callbacks.isSelected?.(c.id)?'checked':'')+'><div class="lw-status-edit">'+switchFor(c)+'<button data-open-campaign="'+esc(c.id)+'" aria-label="Edit campaign '+esc(c.name)+'">✎</button></div></td><td><button class="row-title" data-expand-campaign="'+esc(c.id)+'">'+esc(c.name)+'</button><small>'+esc(c.businessGoal||c.objective||'Objective not supplied')+'</small>'+((state.setupCoverage||[]).find(x=>x.campaignId===c.id)?.complete?'<small>Complete exported setup</small>':'<small title="'+esc((state.setupCoverage||[]).find(x=>x.campaignId===c.id)?.missing.join(', ')||'Details missing')+'">Setup incomplete</small>')+'</td><td><button class="row-title" data-expand-campaign="'+esc(c.id)+'">'+setCounts(c,sets)+'</button></td><td><button class="row-title" data-expand-campaign="'+esc(c.id)+'">'+(ads.length?ads.length+' creatives':'Not supplied')+'</button></td><td>'+esc(unique(sets.map(s=>s.destination)))+'</td><td>'+esc(unique(ads.map(a=>a.collection||sets.find(s=>s.id===a.adSetId)?.collection)))+'</td><td>'+esc(unique(ads.flatMap(a=>a.creativeTypes||[])))+'</td><td>'+esc(unique(ads.map(a=>a.model)))+'</td><td>'+(known.length?'₹'+known.reduce((n,s)=>n+s.budgetDaily,0).toLocaleString('en-IN'):'Not supplied')+'<small>Total ad-set / day'+(known.length<sets.length?' · some missing':'')+'</small></td><td><button class="row-title" data-expand-campaign="'+esc(c.id)+'">'+(ads.length?'View '+ads.length+' creatives ↗':'Setup not supplied')+'</button></td><td>'+shortList(sets.flatMap(s=>(s.locations||[]).map(l=>l.name+(l.radiusKm==null?'':' +'+l.radiusKm+' km'))))+'</td><td>'+shortList(sets.flatMap(s=>s.interests||[]))+'</td><td>'+esc(unique(sets.map(s=>s.ageMin==null||s.ageMax==null?'':s.ageMin+'–'+s.ageMax)))+'<small>'+esc(unique(sets.map(s=>s.gender)))+'</small></td>'+performance(ads)+'</tr>';
-        });
-        const body=root.querySelector('#lwRows tbody');
-        [...body.children].forEach((tr,i)=>{if(!expanded.has(visible[i].campaign.id))tr.remove();});
-        body.insertAdjacentHTML('afterbegin',summaries.join(''));
-        if(expanded.size)root.querySelector('#lwRows').insertAdjacentHTML('afterbegin','<button id="lwCollapse">Back to campaign summary</button>');
-      }
-
+    const unique=values=>[...new Set(values.filter(Boolean))].join(', ')||'Not supplied';
+    const groupFields={
+      campaignName:[['name','Campaign name'],['objective','Objective']],
+      setName:[['name','Ad-set name'],['performanceGoal','Performance goal']],
+      adName:[['name','Ad name'],['format','Format'],['primaryText','Primary text','area'],['cta','Call to action']],
+      destination:[['destination','Destination','select',['Instagram profile','WhatsApp','Google Maps','Website','Messenger','Other']],['destinationRef','Destination URL'],['whatsappNumber','WhatsApp number']],
+      collection:[['collection','Collection','select',['Femme','Homme','Studio','Both','Other']]],
+      creativeTypes:[['creativeTypes','Creative types','list']],model:[['model','Model name']],
+      budget:[['budgetDaily','Daily budget ₹','number']],mediaUrls:[['mediaUrls','Creative URLs','list']],
+      locations:[['locations','Locations | radius km','locations']],
+      interests:[['interests','Interests (empty = broad)','list'],['behaviors','Behaviours (empty = none)','list'],['placements','Placements (Advantage+ or list)','list']],
+      age:[['ageMin','Minimum age','number'],['ageMax','Maximum age','number'],['gender','Gender','select',['all','women','men']]],
+      assessment:[['assessment','Your assessment / next action','area']]
+    };
+    const refs=new Map();
+    const record=(type,id)=>state[type].find(x=>x.id===id);
+    function editor(ref){
+      return '<div class="lw-cell-editor">'+ref.fields.map(([key,label,type,values])=>{
+        let value=ref.record[key]??'';if(type==='list')value=(value||[]).join('\n');if(type==='locations')value=(value||[]).map(x=>x.name+' | '+(x.radiusKm??'')).join('\n');
+        const attr=' data-inline-key="'+key+'" aria-label="'+esc(label)+'"';
+        return '<label>'+esc(label)+(type==='select'?'<select'+attr+'><option value="">Not supplied</option>'+[...new Set([...(values||[]),value].filter(Boolean))].map(v=>'<option value="'+esc(v)+'" '+(value===v?'selected':'')+'>'+esc(v)+'</option>').join('')+'</select>':['list','locations','area'].includes(type)?'<textarea'+attr+' rows="3">'+esc(value)+'</textarea>':'<input'+attr+' type="'+(type==='number'?'number':'text')+'" '+(type==='number'?'min="0" step="any"':'')+' value="'+esc(value)+'">')+'</label>';
+      }).join('')+(ref.result?'<small>Correction for '+esc(report.periodStart)+' – '+esc(report.periodEnd)+'. Saved in history; a later report may replace it.</small>':'')+'<button type="button" data-inline-save>Save</button><button type="button" data-inline-cancel>Cancel</button><small class="lw-inline-error" role="alert"></small></div>';
     }
-    for(const [id,key] of [['lwDestination','destination'],['lwCollection','collection'],['lwCreative','creative']])root.querySelector('#'+id).addEventListener('change',e=>{filters[key]=e.target.value;update();});
-    root.querySelector('#lwClear').addEventListener('click',()=>{Object.keys(filters).forEach(k=>filters[k]='');render(root,state,callbacks);});
+    function editable(type,r,group,html,extra={}){
+      if(!r)return html;const key=type+':'+r.id+':'+group;
+      const ref={type,id:r.id,record:r,fields:groupFields[group],...extra};refs.set(key,ref);
+      return editing===key?editor(ref):'<button class="lw-cell-value" type="button" data-inline-edit="'+esc(key)+'" title="Click to edit">'+(html||'Not supplied')+' <span class="lw-edit-mark">✎</span></button>';
+    }
+    function drill(id,label,setId){return '<button class="row-title" data-drill-campaign="'+esc(id)+'" '+(setId?'data-drill-set="'+esc(setId)+'"':'')+'>'+label+'</button>';}
+    function statusCell(type,r){const label=statusFor(r).label;return '<button type="button" class="lw-toggle" data-toggle-type="'+type+'" data-toggle-id="'+esc(r.id)+'" aria-label="'+esc(label+' status for '+r.name)+'" title="Click to record '+(label==='On'?'Off':'On')+' in this app">'+switchFor(r)+'</button>';}
+    function metricEditor(ads,field){
+      if(ads.length!==1||!report.periodStart||!report.periodEnd)return '';
+      const ad=ads[0],item=items.find(x=>x.adId===ad.id);if(!item)return '';
+      const exact=state.results.find(r=>!r.archived&&r.adId===ad.id&&r.periodStart===report.periodStart&&r.periodEnd===report.periodEnd);
+      const metric=item.metric||'reportedResults';
+      const source=state.results.find(r=>r.adId===ad.id)||{};
+      const r=exact||{id:'manual-'+ad.id+'-'+report.periodStart+'-'+report.periodEnd,adId:ad.id,adSetId:ad.adSetId,periodStart:report.periodStart,periodEnd:report.periodEnd,reportGoal:source.reportGoal,reportDestination:source.reportDestination,resultIndicator:source.resultIndicator,attributionSetting:item.attribution,spend:item.spend,impressions:item.impressions,[metric]:item.count,source:'Manual table correction'};
+      return editable('results',r,'figures-'+field,field==='spend'?'Edit spend':'Edit results',{fields:field==='spend'?[['spend','Spend ₹','number']]:[[metric,item.goal||'Results','number']],result:true,isNew:!exact});
+    }
+    function perfCells(ads,row){
+      const markup=performance(ads),tail=metricEditor(ads,'count')||(ads.length>1?drill(row.campaign.id,'Edit ad figures',row.set?.id):'');
+      const manual=ads.length===1?editable('ads',ads[0],'assessment',esc(ads[0].assessment||'Add your assessment')):'';
+      let index=0;return markup.replace(/<\/td>/g,()=>{index++;return (index===1?tail:index===2?metricEditor(ads,'spend'):manual)+'</td>';});
+    }
+    function scopedRows(){
+      if(scope.campaign&&!state.campaigns.some(c=>c.id===scope.campaign))scope.campaign=scope.set=null;
+      if(scope.set&&!state.adSets.some(s=>s.id===scope.set&&s.campaignId===scope.campaign))scope.set=null;
+      if(scope.campaign){
+        const c=record('campaigns',scope.campaign);
+        if(scope.set)return rows.filter(r=>r.campaign.id===c.id&&r.set.id===scope.set).map(r=>({...r,kind:'ads',sets:[r.set],ads:[r.ad]}));
+        return state.adSets.filter(s=>!s.archived&&s.campaignId===c.id&&(!state.hasSetupFilters||rows.some(r=>r.set.id===s.id))).map(set=>({kind:'adSets',campaign:c,set,sets:[set],ads:rows.filter(r=>r.set.id===set.id).map(r=>r.ad)}));
+      }
+      if(state.showLinkedDetails)return rows.map(r=>({...r,kind:'ads',sets:[r.set],ads:[r.ad]}));
+      return state.campaigns.filter(c=>!c.archived).map(c=>({kind:'campaigns',campaign:c,sets:state.adSets.filter(s=>!s.archived&&s.campaignId===c.id),ads:rows.filter(r=>r.campaign.id===c.id).map(r=>r.ad)}));
+    }
+    function update(){
+      refs.clear();const displayed=scopedRows();
+      const c=scope.campaign&&record('campaigns',scope.campaign),set=scope.set&&record('adSets',scope.set);
+      root.querySelector('#lwRows').innerHTML='<nav class="lw-breadcrumb"><button data-back-campaigns>All campaigns</button>'+(c?' <span>›</span> <button data-drill-campaign="'+esc(c.id)+'">'+esc(c.name)+'</button>':'')+(set?' <span>›</span> '+esc(set.name):'')+'<small>'+displayed.length+' '+(scope.set?'ads':c?'ad sets':state.showLinkedDetails?'matching ads':'campaigns')+' · Click a value to edit. Switches update app records only.</small></nav><div class="lw-inline-status" role="status"></div><div class="table-wrap"><table><thead><tr>'+['Status','Campaign','Ad set','Ad / creative','Destination','Collection','Creative type','Model name','Budget','Creative URL','Locations','Interests / placements','Age / gender','Results','Spend / cost','Assessment'].map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+displayed.map(row=>{
+        const {campaign,sets,ads}=row,s=row.set,a=row.ad|| (ads.length===1?ads[0]:null),own=row.kind==='campaigns'?campaign:row.kind==='adSets'?s:row.ad;
+        const jump=label=>drill(campaign.id,label,s?.id);
+        const setup=(group,value)=>s?editable('adSets',s,group,value):jump(value);
+        const creativeField=(group,value)=>a?editable('ads',a,group,value):jump(value);
+        return '<tr><td><input type="checkbox" data-select-campaign="'+esc(campaign.id)+'" aria-label="Select '+esc(campaign.name)+'" '+(callbacks.isSelected?.(campaign.id)?'checked':'')+'>'+statusCell(row.kind,own)+'</td><td>'+drill(campaign.id,esc(campaign.name))+editable('campaigns',campaign,'campaignName','Rename / objective')+'</td><td>'+(s?drill(campaign.id,esc(s.name),s.id)+editable('adSets',s,'setName','Rename / goal'):drill(campaign.id,setCounts(campaign,sets)))+'</td><td>'+(row.ad?editable('ads',row.ad,'adName',esc(row.ad.name)):jump(ads.length+' creatives'))+'</td><td>'+setup('destination',esc(unique(sets.map(x=>x.destination)))+(s?.whatsappNumber?'<small>'+esc(s.whatsappNumber)+'</small>':''))+'</td><td>'+creativeField('collection',esc(unique(ads.map(x=>x.collection||s?.collection))))+'</td><td>'+creativeField('creativeTypes',esc(unique(ads.flatMap(x=>x.creativeTypes||[]))))+'</td><td>'+creativeField('model',esc(unique(ads.map(x=>x.model))))+'</td><td>'+setup('budget',s?budget(s):'₹'+sets.reduce((n,x)=>n+(x.budgetDaily||0),0).toLocaleString('en-IN')+'<small>Total ad-set / day</small>')+'</td><td>'+(a?creative(a)+editable('ads',a,'mediaUrls','Edit URL'):jump('View '+ads.length+' creatives'))+'</td><td>'+setup('locations',esc(unique(sets.flatMap(x=>(x.locations||[]).map(l=>l.name+(l.radiusKm==null?'':' +'+l.radiusKm+' km'))))))+'</td><td>'+setup('interests',esc(unique(sets.flatMap(x=>x.interestsConfirmed?(x.interests?.length?x.interests:['Broad / no interests']):[])))+'<small>'+esc(unique(sets.flatMap(x=>x.placements||[])))+'</small>')+'</td><td>'+setup('age',esc(unique(sets.map(x=>x.ageMin==null||x.ageMax==null?'':x.ageMin+'–'+x.ageMax)))+'<small>'+esc(unique(sets.map(x=>x.gender)))+'</small>')+'</td>'+perfCells(ads,row)+'</tr>';
+      }).join('')+'</tbody></table></div>'+(!displayed.length?'<p>No matching records in this campaign or ad set.</p>':'');
+      callbacks.scope?.(c,set,displayed.length);
+    }
     root.querySelector('#lwRows').addEventListener('change',e=>{if(e.target.dataset.selectCampaign)callbacks.selectCampaign?.(e.target.dataset.selectCampaign,e.target.checked);});
-    root.querySelector('#lwRows').addEventListener('click',e=>{
-      const b=e.target.closest('button');if(!b)return;
-      if(b.id==='lwCollapse'){expanded.clear();update();}
-      if(b.dataset.expandCampaign){if(rows.some(r=>r.campaign.id===b.dataset.expandCampaign)){expanded.add(b.dataset.expandCampaign);update();}else callbacks.edit('campaigns',b.dataset.expandCampaign);}
-      if(b.dataset.openCampaign)callbacks.edit('campaigns',b.dataset.openCampaign);
-      if(b.dataset.editSet)callbacks.edit('adSets',b.dataset.editSet);
-      if(b.dataset.openSet)callbacks.details(b.dataset.openSet);
-      if(b.dataset.openAd)callbacks.edit('ads',b.dataset.openAd);
-      if(b.dataset.tagAd){editing=b.dataset.tagAd;update();}
-      if(b.hasAttribute('data-cancel-tags')&&!saving){editing=null;update();}
-      if(b.hasAttribute('data-save-tags')&&!saving){
-        const fields={model:root.querySelector('#lwInlineModel').value.trim(),collection:root.querySelector('#lwInlineCollection').value,creativeTypes:[...new Set([...root.querySelector('#lwInlineTypes').selectedOptions].map(o=>o.value).filter(Boolean).concat(root.querySelector('#lwInlineCustom').value.trim()||[]))]};
-        saving=true;b.disabled=true;
-        callbacks.saveTags(editing,fields).catch(error=>{root.querySelector('#lwInlineError').textContent=error.message;b.disabled=false;}).finally(()=>{saving=false;});
+    root.querySelector('#lwRows').addEventListener('click',async e=>{
+      const b=e.target.closest('button');if(!b||saving)return;
+      if(b.hasAttribute('data-back-campaigns')){scope.campaign=scope.set=null;editing=null;update();return;}
+      if(b.dataset.drillCampaign){scope.campaign=b.dataset.drillCampaign;scope.set=b.dataset.drillSet||null;editing=null;update();return;}
+      if(b.dataset.inlineEdit){editing=b.dataset.inlineEdit;update();return;}
+      if(b.hasAttribute('data-inline-cancel')){editing=null;update();return;}
+      if(b.dataset.toggleId){
+        const r=record(b.dataset.toggleType,b.dataset.toggleId);saving=true;b.disabled=true;
+        try{await callbacks.patch(b.dataset.toggleType,r.id,{status:statusFor(r).label==='On'?'paused':'reported_running'});}catch(error){root.querySelector('.lw-inline-status').textContent=error.message;}finally{saving=false;b.disabled=false;}return;
+      }
+      if(b.hasAttribute('data-inline-save')){
+        const ref=refs.get(editing);if(!ref)return;const container=b.closest('.lw-cell-editor'),patch={};
+        try{
+          for(const [key,,type] of ref.fields){const value=container.querySelector('[data-inline-key="'+key+'"]').value.trim();
+            if(type==='number'){if(value!==''&&(!Number.isFinite(Number(value))||Number(value)<0))throw new Error('Enter a valid non-negative number.');patch[key]=value===''?null:Number(value);}
+            else if(type==='list')patch[key]=value.split('\n').map(x=>x.trim()).filter(Boolean);
+            else if(type==='locations')patch[key]=value.split('\n').map(x=>x.trim()).filter(Boolean).map(line=>{const parts=line.split('|');if(parts.length>2)throw new Error('Use location | radius km.');const radius=(parts[1]||'').trim();if(radius!==''&&(!Number.isFinite(Number(radius))||Number(radius)<0||Number(radius)>1000))throw new Error('Use a radius from 0 to 1000 km.');return {name:parts[0].trim(),radiusKm:radius===''?null:Number(radius)};});
+            else patch[key]=value||null;
+          }
+          if(Object.hasOwn(patch,'interests')){patch.interestsConfirmed=true;patch.behaviorsConfirmed=true;patch.placementsConfirmed=patch.placements.length>0;}
+          saving=true;b.disabled=true;
+          const save=ref.isNew?{...ref.record,...patch}:patch;
+          await callbacks.patch(ref.type,ref.id,save,!!ref.isNew);editing=null;
+        }catch(error){container.querySelector('.lw-inline-error').textContent=error.message;}
+        finally{saving=false;b.disabled=false;}
       }
     });
     update();
   }
-  return {render,statusFor,switchFor,setCounts};
+  return {render,statusFor,switchFor,setCounts,resetScope:()=>{scope.campaign=scope.set=null;}};
 })();
