@@ -261,7 +261,7 @@
     $('records').classList.toggle('selectable',selectable);
     const head=selectable?'<th class="selection-cell"><input type="checkbox" id="selectAllRows" aria-label="Select all visible rows" '+(rows.length&&rows.every(r=>selection[view].has(r.id))?'checked':'')+'></th><th class="record-state">On / off</th>':'';
     $('records').querySelector('thead').innerHTML='<tr>'+head+cols.map(c=>'<th scope="col" class="'+(c.number?'number':'')+'" data-sort="'+esc(c.key)+'" tabindex="0" aria-sort="'+(sort&&sort.key===c.key?(sort.direction===1?'ascending':'descending'):'none')+'">'+esc(c.label)+(sort&&sort.key===c.key?(sort.direction===1?' ↑':' ↓'):' ↕')+'</th>').join('')+'</tr>';
-    $('records').querySelector('tbody').innerHTML=rows.map(r=>'<tr class="'+(selection[view].has(r.id)?'selected-row':'')+'">'+(selectable?'<td class="selection-cell"><input type="checkbox" data-select="'+esc(r.id)+'" aria-label="Select '+esc(r.name||r.id)+'" '+(selection[view].has(r.id)?'checked':'')+'></td><td class="record-state"><span class="state-switch '+(['active','reported_running'].includes(r.status)&&!r.archived?'on':'')+'" title="Recorded status only; update it with Edit record" role="img" aria-label="Recorded status: '+esc(statusLabels[r.status]||'Unconfirmed')+'"></span></td>':'')+cols.map(c=>'<td class="'+(c.number?'number':'')+'">'+c.render(r)+'</td>').join('')+'</tr>').join('');
+    $('records').querySelector('tbody').innerHTML=rows.map(r=>'<tr class="'+(selection[view].has(r.id)?'selected-row':'')+'">'+(selectable?'<td class="selection-cell"><input type="checkbox" data-select="'+esc(r.id)+'" aria-label="Select '+esc(r.name||r.id)+'" '+(selection[view].has(r.id)?'checked':'')+'></td><td class="record-state">'+MetaLinkedWorkspace.switchFor(r)+'</td>':'')+cols.map(c=>'<td class="'+(c.number?'number':'')+'">'+c.render(r)+'</td>').join('')+'</tr>').join('');
     $('tableFooter').textContent=rows.length+' '+labels[view].toLowerCase()+' · '+selection[view].size+' selected';
     $('empty').hidden=rows.length>0;
     $('empty').innerHTML='<strong>'+(view==='results'&&!state.results.length?'No results logged yet':view==='changes'&&!state.changes.length?'No changes recorded yet':'No matching records')+'</strong>'+(view==='results'?'Log a dated report to compare spend, visits, enquiries and orders.':view==='changes'?'Your initial setup is saved. Future edits will appear here.':'Adjust the filters or add a record.');
@@ -365,6 +365,25 @@
     }else control='<input type="'+field.type+'"'+attr+' value="'+esc(value)+'"'+(field.type==='number'?' min="'+(field.min==null?0:field.min)+'"'+(field.max?' max="'+field.max+'"':'')+' step="'+(field.step||'1')+'"':'')+(field.placeholder?' placeholder="'+esc(field.placeholder)+'"':'')+'>';
     return '<label for="'+id+'" class="'+(field.wide?'wide ':'')+(field.type==='check'?'check-label':'')+'">'+(field.type==='check'?control+' '+esc(field.label):esc(field.label)+control)+(field.help?'<span class="field-help">'+esc(field.help)+'</span>':'')+'</label>';
   }
+  let statusRevision=null;
+  function statusChoice(type,r){
+    const value=['reported_running','active'].includes(r.status)?'reported_running':r.status==='paused'?'paused':'unknown';
+    return '<label>'+esc(r.name)+'<select data-status-type="'+type+'" data-status-id="'+esc(r.id)+'" data-status-initial="'+value+'"><option value="unknown" '+(value==='unknown'?'selected':'')+'>Unconfirmed</option><option value="reported_running" '+(value==='reported_running'?'selected':'')+'>On</option><option value="paused" '+(value==='paused'?'selected':'')+'>Off</option></select></label>';
+  }
+  $('confirmStatuses').addEventListener('click',()=>{
+    if(!state||busy)return;statusRevision=state.revision;$('statusError').textContent='';$('statusSave').disabled=false;
+    const selected=$('campaignFilter').value;
+    $('statusFields').innerHTML=state.campaigns.filter(c=>!c.archived&&(!selected||c.id===selected)).map(c=>'<fieldset><legend>'+esc(c.name)+'</legend>'+statusChoice('campaigns',c)+state.adSets.filter(s=>s.campaignId===c.id&&!s.archived).map(s=>statusChoice('adSets',s)).join('')+'</fieldset>').join('');$('statusDialog').showModal();
+  });
+  for(const id of ['statusClose','statusCancel'])$(id).addEventListener('click',()=>{if(!$('statusSave').disabled)$('statusDialog').close();});
+  $('statusForm').addEventListener('submit',async event=>{
+    event.preventDefault();if($('statusSave').disabled)return;
+    const records=[...$('statusFields').querySelectorAll('[data-status-id]')].filter(x=>x.value!==x.dataset.statusInitial).map(x=>({type:x.dataset.statusType,id:x.dataset.statusId,status:x.value}));
+    if(!records.length){$('statusDialog').close();return;}$('statusSave').disabled=true;
+    try{await request('/confirm-statuses','POST',{revision:statusRevision,records});$('statusDialog').close();await load('On/off statuses saved. CSV fields that are absent will not replace these confirmations.');}
+    catch(error){$('statusError').textContent=error.message+(error.status===409?' Close and reopen this dialog before saving.':'');}
+    finally{$('statusSave').disabled=false;}
+  });
   function renderMissingDetails(){
     const panel=$('missingDetailsPanel');if(!state||!panel)return;
     const campaignId=$('campaignFilter').value;

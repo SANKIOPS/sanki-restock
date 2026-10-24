@@ -443,7 +443,24 @@ function createStore(options = {}) {
       validateRelationships(state);if(changedRecords){state.revision++;save(state);}return {revision:state.revision,changedRecords};
     });
   }
-  return { file, load, view, mutate, importSetup, importPerformance,bulk };
+  function confirmStatuses(body,actor){
+    if(!plain(body)||!Array.isArray(body.records)||!body.records.length||body.records.length>2000)fail('Choose statuses to confirm.');
+    return locked(()=>{
+      const state=loadUnlocked();if(!Number.isSafeInteger(body.revision)||body.revision!==state.revision)fail('Records changed. Reload status confirmation.',409);
+      const seen=new Set(),now=clock();let changedRecords=0;
+      for(const input of body.records){
+        if(!plain(input)||!['campaigns','adSets'].includes(input.type)||!['reported_running','paused','unknown'].includes(input.status))fail('Invalid status confirmation.');
+        const key=input.type+':'+input.id;if(seen.has(key))fail('Duplicate status confirmation.');seen.add(key);
+        const record=state[input.type].find(r=>r.id===input.id&&!r.archived);if(!record)fail('Record not found or removed.',404);
+        if(input.type==='adSets'&&state.campaigns.find(c=>c.id===record.campaignId)?.archived)fail('Campaign is removed.',400);
+        if(record.status===input.status)continue;
+        state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[input.type],entityId:record.id,field:'status',before:record.status??null,after:input.status,action:'update',reason:'Owner confirmed on/off switch from Meta',revision:state.revision+1});
+        record.status=input.status;record.updatedAt=now;record.updatedBy=actor;changedRecords++;
+      }
+      if(changedRecords){state.revision++;save(state);}return {revision:state.revision,changedRecords};
+    });
+  }
+  return { file, load, view, mutate, importSetup, importPerformance,bulk,confirmStatuses };
 }
 
 function createRouter(store = createStore()) {
@@ -498,6 +515,7 @@ function createRouter(store = createStore()) {
     }catch(e){sendError(e,res);}
   }));
   router.use(BASE, express.json({ limit: '128kb' }));
+  router.post(`${BASE}/confirm-statuses`,(req,res)=>{try{res.json({success:true,...store.confirmStatuses(req.body,req.user.username)});}catch(e){sendError(e,res);}});
   router.post(`${BASE}/bulk`,(req,res)=>{try{res.json({success:true,...store.bulk(req.body,req.user.username)});}catch(e){sendError(e,res);}});
   for (const [route, type] of Object.entries(TYPES)) {
     router.post(`${BASE}/${route}`, (req, res) => {
