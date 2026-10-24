@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
   <title>Meta Ads · SANKI Business OS</title>
-  <link rel="stylesheet" href="/meta-ads.css?v=c624a80d8dfe">
+  <link rel="stylesheet" href="/meta-ads.css?v=4a06a5b941de">
 </head>
 <body class="meta-fullscreen">
 <main>
@@ -29,6 +29,7 @@
     <div id="performanceSummary" role="status" style="white-space:pre-wrap"></div>
     <button id="performanceSave" type="button" class="primary" hidden>Save performance</button>
   </section>
+  <button id="confirmStatuses" type="button">Confirm on/off statuses</button>
   <div id="message" role="status" aria-live="polite">Loading marketing records…</div>
   <section class="workspace" aria-label="Marketing records">
     <div class="manager-views"><button id="allRecords" class="view-chip active">All records</button><button id="runningRecords" class="view-chip">Reported running</button><button id="clearScope">Clear selection</button><span id="scopeSummary" class="muted">All campaigns</span></div>
@@ -60,6 +61,7 @@
   <p class="footnote">Budgets are configured daily amounts, not actual spend. “Pending” means unconfirmed; a blank metric is not zero. Reported running statuses come from your record and need a delivery check in Meta.</p>
 </main>
 <dialog id="setupDetailsDialog"><header class="setup-detail-header"><div><p class="eyebrow">FULL AD-SET SETUP</p><h2 id="setupDetailsTitle"></h2></div><button id="closeSetupDetails" type="button" aria-label="Close setup details">×</button></header><div id="setupDetailsBody"></div></dialog>
+<dialog id="statusDialog"><form id="statusForm"><header><h2>Confirm on/off statuses</h2><button type="button" id="statusClose" aria-label="Close status confirmation">×</button></header><p>Copy the campaign and ad-set switches you see in Meta. These are saved app records only. Delivery or spend does not establish an on/off switch. Leave unconfirmed when unsure.</p><div id="statusFields"></div><p id="statusError" class="form-error" role="alert"></p><footer><button type="button" id="statusCancel">Cancel</button><button type="submit" id="statusSave" class="primary">Save confirmed statuses</button></footer></form></dialog>
 <dialog id="editor">
   <form id="recordForm">
     <header><div><p class="eyebrow">MARKETING RECORD</p><h2 id="editorTitle">Add ad set</h2></div><button type="button" data-close aria-label="Close editor">×</button></header>
@@ -72,7 +74,7 @@
 <dialog id="bulkDialog"><form id="bulkForm"><header><h2 id="bulkTitle">Edit selected records</h2><button type="button" id="bulkClose" aria-label="Close bulk editor">×</button></header><p id="bulkHelp"></p><div id="bulkFields"><label id="bulkStatusWrap">Recorded status<select id="bulkStatus"><option value="">Keep current status</option><option value="reported_running">Reported running</option><option value="paused">Paused</option><option value="draft">Draft</option><option value="completed">Completed</option><option value="unknown">Unconfirmed</option></select></label><label id="bulkBudgetWrap">Daily budget per selected ad set (₹)<input id="bulkBudget" type="number" min="0" step="0.01" placeholder="Leave blank to keep current budgets"></label><label>Shared notes<textarea id="bulkNotes" placeholder="Leave blank to keep current notes"></textarea></label></div><label>Reason<textarea id="bulkReason" maxlength="1000"></textarea></label><p id="bulkError" class="form-error" role="alert"></p><footer><button type="button" id="bulkCancel">Cancel</button><button type="submit" id="bulkSubmit" class="primary">Apply changes</button></footer></form></dialog>
 <script src="/navigation-state.js?v=bb4a39520dbd"></script><script src="/sidebar.js"></script>
 <script src="/meta-insight-controls.js?v=2c2fbb7a31af"></script>
-<script src="/meta-linked-workspace.js?v=a741cb5cc8d4"></script>
-<script src="/meta-ads.js?v=76f4bcd09823"></script>
+<script src="/meta-linked-workspace.js?v=6f0e9948b139"></script>
+<script src="/meta-ads.js?v=11450f3e7402"></script>
 </body>
 </html>
