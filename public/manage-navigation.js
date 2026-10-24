@@ -56,9 +56,11 @@
       add('money', 'expenses', 'Manage expenses', 'Find expenses and use the existing correction form; reconciled amount and date locks remain enforced.', '/expenses.html?tab=list', ['Find expense', 'Edit permitted details']);
     }
     if (expenses && (cfg.isAdmin === true || cfg.canVerifyCounterCash === true)) {
-      add('money', 'transactions', cfg.isAdmin === true ? 'Manage transactions' : 'Counter Cash verification', cfg.isAdmin === true ? 'Review payments, transfers and reconciliations through their original account-ledger workflow.' : 'Open your existing Counter Cash verification screen.', '/expenses.html?tab=cash', cfg.isAdmin === true ? ['Account ledgers', 'Review transactions', 'Reconcile account'] : ['Verify Counter Cash']);
+      const canEditTransactions = cfg.isAdmin === true && cfg.canEditLedgerTransactions === true;
+      add('money', 'transactions', cfg.isAdmin === true ? 'Manage transactions' : 'Counter Cash verification', cfg.isAdmin === true ? (canEditTransactions ? 'Review transactions and edit permitted payments, transfers and receipts through their account ledger. Protected entries remain locked.' : 'Review payments, transfers and reconciliations through their original account-ledger workflow.') : 'Open your existing Counter Cash verification screen.', '/expenses.html?tab=cash', cfg.isAdmin === true ? (canEditTransactions ? ['Account ledgers', 'Edit permitted payments, transfers and receipts', 'Reconcile account'] : ['Account ledgers', 'Review transactions', 'Reconcile account']) : ['Verify Counter Cash']);
     }
     if (expenses && cfg.isAdmin === true) {
+      add('money', 'opening-balances', 'Manage opening balances', 'Review account-ledger openings, stage corrections without posting, and use the existing reconciliation for active statements.', '/manage.html?section=opening-balances', ['Review recorded openings', 'Stage opening balance', 'Owner-only apply']);
       add('money', 'payables', 'Manage payables', 'Open existing payment forms and their account and proof checks.', '/expenses.html?tab=pending', ['Review payables', 'Record permitted payment']);
       add('money', 'reimbursements', 'Manage reimbursements', 'Review pending and recorded employee reimbursements.', '/expenses.html?tab=reimbursements', ['Review reimbursements', 'Record permitted reimbursement']);
       add('money', 'receivables', 'Receivables, refunds & returns', 'Open the current receivables and refund-recovery workflows.', '/expenses.html?tab=receivables', ['Review receivables', 'Review refunds and returns']);

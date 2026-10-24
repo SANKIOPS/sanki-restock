@@ -19,7 +19,7 @@
   // posted request plus its advance must never count as two payouts.
   function build(data,options){
     data=data||{};options=options||{};
-    var end=day(options.today)||today(),days=Number(options.days)===30?30:60,onlyOutstanding=options.onlyOutstanding===true;
+    var end=day(options.today)||today(),days=[30,60,180].includes(Number(options.days))?Number(options.days):60,onlyOutstanding=options.onlyOutstanding===true;
     var start=new Date(end+'T00:00:00Z');start.setUTCDate(start.getUTCDate()-(days-1));var cutoff=start.toISOString().slice(0,10);
     var requests=data.requests||[],byRequest=Object.create(null),byAdvance=Object.create(null),matched=Object.create(null),seen=Object.create(null);
     requests.forEach(function(r){byRequest[r.id]=r;if(r.advanceId)byAdvance[r.advanceId]=r;});

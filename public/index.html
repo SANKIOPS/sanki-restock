@@ -353,6 +353,7 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
             <option value="30">Last 30 days</option>
             <option value="60">Last 60 days</option>
             <option value="90">Last 90 days</option>
+            <option value="180">Last 180 days</option>
             <option value="custom">Custom range</option>
           </select>
           <span id="rpCustomDates" style="display:none;gap:6px;align-items:center">
@@ -479,6 +480,7 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
         <option value="7">Last 7 days</option>
         <option value="30" selected>Last 30 days</option>
         <option value="60">Last 60 days</option>
+        <option value="180">Last 180 days</option>
         <option value="custom">Custom range</option>
       </select>
       <div id="hotCustomDiv" style="display:none;align-items:center;gap:6px">
@@ -644,7 +646,7 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
   </div>
 </div>
 
-<!-- ═══ P&L MODAL ═══ -->
+<!-- ═══ Results MODAL ═══ -->
 <div class="modal-overlay" id="plModal" style="display:none" onclick="if(event.target===this)closePLModal()">
   <div class="modal" style="max-width:480px">
     <div class="modal-header"><h3>Sales Entry</h3><button class="modal-close" onclick="closePLModal()">✕</button></div>
@@ -1182,7 +1184,7 @@ async function syncShopify() {
 
     // Use the currently selected RP date range for buildProducts so units match the RP view
     const initialPreset = parseInt(document.getElementById('rpRangePreset').value) || 30;
-    const initialOrders = ALL_ORDERS.filter(o => {
+    const initialOrders = initialPreset === 180 ? last180Orders(ALL_ORDERS) : ALL_ORDERS.filter(o => {
       const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - initialPreset);
       return new Date(o.created_at) >= cutoff;
     });
@@ -1460,6 +1462,18 @@ async function markPOFulfilled(id) {
 // RESTOCK PLANNER  (points 1-15)
 // ════════════════════════════════════════════════════════════
 
+// The six-month preset uses complete IST calendar days, including today.
+function last180Orders(orders) {
+  const end = new Date(Date.now()+19800000).toISOString().slice(0,10);
+  const start = new Date(Date.parse(end)-179*86400000).toISOString().slice(0,10);
+  return orders.filter(order => {
+    const timestamp=Date.parse(order.created_at);
+    if(!Number.isFinite(timestamp))return false;
+    const date=new Date(timestamp+19800000).toISOString().slice(0,10);
+    return date>=start&&date<=end;
+  });
+}
+
 // #2 Custom date range
 function rpPresetChanged() {
   const val = document.getElementById('rpRangePreset').value;
@@ -1497,6 +1511,9 @@ function applyRP() {
       return d >= from && d <= to;
     });
     dayCount = Math.max(1, Math.ceil((new Date(to)-new Date(from))/(86400000)));
+  } else if (preset === '180') {
+    dayCount = 180;
+    filteredOrders = last180Orders(velocityOrders);
   } else {
     dayCount = parseInt(preset);
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-dayCount);
@@ -1926,6 +1943,9 @@ function renderHotSellers() {
     if (!from || !to) { alert('Please select both dates.'); return; }
     filteredOrders = ALL_ORDERS.filter(o=>{ const d=(o.created_at||'').substring(0,10); return d>=from && d<=to; });
     dayCount = Math.max(1, Math.ceil((new Date(to)-new Date(from))/86400000)+1);
+  } else if (preset === '180') {
+    dayCount = 180;
+    filteredOrders = last180Orders(ALL_ORDERS);
   } else {
     dayCount = parseInt(preset);
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-dayCount);
@@ -4201,7 +4221,7 @@ function o2ExportCSV(){
     <!-- #11 Data durability: export/import all locally-stored business data -->
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:24px; max-width:720px; margin-top:16px;">
       <h3 style="margin-top:0">Data Backup &amp; Restore</h3>
-      <p style="color:#64748b; font-size:13px;">All POS, procurement, P&amp;L, expenses, customers, vendor &amp; settings data lives only in this browser's local storage. Export regularly so a cleared browser or new device doesn't lose it.</p>
+      <p style="color:#64748b; font-size:13px;">All POS, procurement, Results, expenses, customers, vendor &amp; settings data lives only in this browser's local storage. Export regularly so a cleared browser or new device doesn't lose it.</p>
       <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:12px;">
         <button class="btn btn-primary" onclick="sankiExportBackup()">⬇️ Export backup (.json)</button>
         <button class="btn" onclick="document.getElementById('sankiImportFile').click()">⬆️ Import backup</button>

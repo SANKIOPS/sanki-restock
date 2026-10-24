@@ -41,10 +41,19 @@ function salaryForMonth(e, ym) {
 
 const CHANNELS = ['POS', 'Website', 'Shared'];
 const SALARY_PAYING_ACCOUNTS = ['Axis Bank 3448', 'IndusInd Bank 8181', 'Prashant Cash', 'Gagan Sir Cash', 'Counter Cash'];
+// 7883 is shared by SAMAST and PERSONAL. A SAMAST salary is a SAMAST
+// payment from that bank, not permission to use other personal salary sources.
+function salaryPayingAccounts(){return activeSalaryEntity()==='SAMAST'?SALARY_PAYING_ACCOUNTS.concat('IndusInd Bank 7883'):SALARY_PAYING_ACCOUNTS;}
+function salaryPaymentNature(account){return activeSalaryEntity()==='SAMAST'&&account==='IndusInd Bank 7883'?'SAMAST':'SANKI';}
 const RETIRED_SALARY_PAYING_ACCOUNTS = ['Prashant Axis 3645'];
 // Retiring a salary source does not rewrite earlier payments or change the
 // separate advance/import policies. Historical corrections may retain 3645.
 const ADVANCE_PAYING_ACCOUNTS = ['Prashant Axis 3645', 'IndusInd Bank 8181', 'Prashant Cash', 'Gagan Sir Cash', 'Counter Cash', 'Axis Bank 3448'];
+// Admins may use Sir's Owner-approved PERSONAL sources for salary advances
+// only, except the explicit SAMAST salary use of shared 7883 above. They are
+// not generally available for ordinary salary payments or other accounting flows.
+// Namita's bank/cash accounts remain private and are not staff payment options.
+const ADMIN_PERSONAL_ADVANCE_PAYING_ACCOUNTS = ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash'];
 // Real bank/cash accounts only. Clearing ledgers hold money in transit and
 // cannot be the source of an employee advance.
 const OWNER_ADVANCE_PAYING_ACCOUNTS = {
@@ -59,9 +68,15 @@ const WEEK_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
 const MARKS = { P: 1, H: 0.5, PL: 1, WO: 1, A: 0 };
 
 function ownerAdvancePayingAccounts(){return Object.entries(OWNER_ADVANCE_PAYING_ACCOUNTS).flatMap(([nature,names])=>names.map(name=>({name,nature})));}
+function advancePayingAccountsFor(req){
+  const accounts=ADVANCE_PAYING_ACCOUNTS.map(name=>({name,nature:'SANKI'}));
+  if(rolesOf(req).includes('admin'))accounts.push(...ADMIN_PERSONAL_ADVANCE_PAYING_ACCOUNTS.map(name=>({name,nature:'PERSONAL'})));
+  return accounts;
+}
 function authorisedAdvanceAccount(req,nature,name){
   if(isOwner(req))return ownerAdvancePayingAccounts().some(x=>x.nature===nature&&x.name===name);
-  return nature==='SANKI'&&ADVANCE_PAYING_ACCOUNTS.includes(name);
+  if(nature==='SANKI'&&ADVANCE_PAYING_ACCOUNTS.includes(name))return true;
+  return rolesOf(req).includes('admin')&&nature==='PERSONAL'&&ADMIN_PERSONAL_ADVANCE_PAYING_ACCOUNTS.includes(name);
 }
 
 function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [], advanceRequests:{}, advanceRequestSeq:0, advanceRequestAudit:[], payrollPostings:{}, salaryPayments:[], salaryPaymentBatchSeq:0, salaryPaymentAudit:[], finalSalaryAudit:[], oneTimeMigrations:{} }; }
@@ -625,6 +640,11 @@ function advanceView(a,s) {
 function monthRecovery(s, empId, ym) { return round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === empId).reduce((n, a) => n + (a.recoveries || []).filter(r => recoveryMonth(r) === ym).reduce((m, r) => m + num(r.amount), 0), 0)); }
 function auditAdvance(s, req, action, advanceId, details) { s.advanceAudit = s.advanceAudit || []; s.advanceAudit.push({ at: new Date().toISOString(), by: req.user && req.user.username || 'admin', action, advanceId, details: details || {} }); }
 function auditAdvanceRequest(s, req, action, requestId, details) { s.advanceRequestAudit = s.advanceRequestAudit || []; s.advanceRequestAudit.push({ at:new Date().toISOString(), by:req.user&&req.user.username||'system', action, requestId, details:details||{} }); }
+function realIsoDate(value){const text=String(value||'').trim();if(!/^\d{4}-\d{2}-\d{2}$/.test(text))return false;const parsed=new Date(text+'T00:00:00Z');return !isNaN(parsed)&&parsed.toISOString().slice(0,10)===text;}
+function matchingLiveAdvance(s,candidate,excludeRequestId){
+  const reference=String(candidate.reference||'').trim(),date=String(candidate.date||''),amount=round2(num(candidate.amount)),nature=String(candidate.payingNature||'SANKI').toUpperCase(),account=String(candidate.account||'').trim();
+  return [...Object.values(s.advanceRequests||{}).filter(x=>x.id!==excludeRequestId&&!['Rejected','Posted'].includes(x.status)),...Object.values(s.advances||{}).filter(x=>x.active!==false)].find(x=>x.empId===candidate.empId&&String(x.payingNature||'SANKI').toUpperCase()===nature&&String(x.account||'').trim()===account&&(reference&&String(x.reference||'').trim()?String(x.reference).trim()===reference:String(x.date||'')===date&&round2(num(x.amount))===amount));
+}
 
 // Compute a month's payroll rows for every employee.
 function employeeMonthBase(s,e,ym){
@@ -697,7 +717,7 @@ router.use('/api/salary',(req,res,next)=>salaryContext.run({entity:salaryEntity(
 router.get('/api/salary/employees', guard, (req, res) => {
   const s = load();
   const currentMonth=new Date().toISOString().slice(0,7),employees=Object.values(s.employees).sort(byEmployeeName).map(e=>Object.assign({},e,{salaryHistory:salaryHistoryOf(e),effectiveSalary:salaryForMonth(e,currentMonth)}));
-  res.json({ success: true, entity:activeSalaryEntity(), employees, currentMonth, divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:SALARY_PAYING_ACCOUNTS, retiredSalaryPayingAccounts:RETIRED_SALARY_PAYING_ACCOUNTS, advancePayingAccounts:isOwner(req)?ownerAdvancePayingAccounts():ADVANCE_PAYING_ACCOUNTS.map(name=>({name,nature:'SANKI'})) });
+  res.json({ success: true, entity:activeSalaryEntity(), employees, currentMonth, divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:salaryPayingAccounts(), retiredSalaryPayingAccounts:RETIRED_SALARY_PAYING_ACCOUNTS, advancePayingAccounts:isOwner(req)?ownerAdvancePayingAccounts():advancePayingAccountsFor(req) });
 });
 router.post('/api/salary/employees', guard, (req, res) => {
   const s = load(); const b = req.body || {};
@@ -758,11 +778,11 @@ router.post('/api/salary/post/:ym', guard, (req,res)=>{
 });
 router.post('/api/salary/payments/batch',guard,(req,res)=>{
   const s=load(),b=req.body||{},ym=String(b.ym||''),date=String(b.date||''),account=String(b.account||'').trim(),proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean))),proof=proofs[0]||'',items=Array.isArray(b.items)?b.items:[];
-  const allowedAccounts=SALARY_PAYING_ACCOUNTS;
+  const allowedAccounts=salaryPayingAccounts();
   if(RETIRED_SALARY_PAYING_ACCOUNTS.includes(account))return res.status(400).json({success:false,error:account+' is no longer used for new salary payments. Choose Axis Bank 3448 or another authorized salary source.'});
   if(!/^\d{4}-\d{2}$/.test(ym)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!allowedAccounts.includes(account)||!proofs.length||!items.length)return res.status(400).json({success:false,error:'Choose employees, date, an authorized salary paying account or cash source, and at least one payment proof.'});
   const rows=computeMonth(s,ym),seen=new Set(),prepared=[];for(const x of items){const row=rows.find(r=>r.id===x.empId),amount=round2(num(x.amount)),remaining=round2(Math.max(0,row&&row.balance||0)),modificationReason=String(x.modificationReason||'').trim();if(!row)return res.status(400).json({success:false,error:'One selected employee was not found. Refresh the salary page before retrying.'});if(seen.has(x.empId))return res.status(400).json({success:false,error:row.name+' was selected more than once.'});if(!(amount>0))return res.status(400).json({success:false,error:row.name+': Pay Now must be greater than ₹0.'});if(!(remaining>0))return res.status(400).json({success:false,error:row.name+': no salary is payable on this row. Review the salary amount before recording a payment.',empId:row.id,payNow:amount,remaining});if(x.expectedRemaining!=null&&Math.abs(round2(num(x.expectedRemaining))-remaining)>.001)return res.status(409).json({success:false,error:row.name+': salary due has changed. Refresh the employee balance before paying.'});if(x.expectedRemaining!=null&&amount>remaining+.001)return res.status(400).json({success:false,error:row.name+': payment exceeds the remaining salary due.'});if(Math.abs(amount-remaining)>.001&&!modificationReason)return res.status(400).json({success:false,error:'Enter why '+row.name+' is being paid '+amount+' instead of the full balance '+remaining+'.'});seen.add(x.empId);prepared.push({row,amount,modificationReason,remainingBeforePayment:remaining});}
-  s.salaryPaymentBatchSeq=(s.salaryPaymentBatchSeq||0)+1;const batchId='SALB-'+String(s.salaryPaymentBatchSeq).padStart(5,'0'),now=new Date().toISOString();s.salaryPayments=s.salaryPayments||[];prepared.forEach((x,i)=>s.salaryPayments.push({id:batchId+'-'+String(i+1).padStart(3,'0'),batchId,ym,empId:x.row.id,employeeName:x.row.name,amount:x.amount,date,account,proof,proofs:proofs.slice(),reference:String(b.reference||'').trim(),note:String(b.note||'').trim(),modificationReason:x.modificationReason,remainingBeforePayment:x.remainingBeforePayment,balanceAfterPayment:round2(x.remainingBeforePayment-x.amount),active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now}));save(s);res.json({success:true,batchId,count:prepared.length,total:round2(prepared.reduce((n,x)=>n+x.amount,0)),proofCount:proofs.length});
+  s.salaryPaymentBatchSeq=(s.salaryPaymentBatchSeq||0)+1;const batchId='SALB-'+String(s.salaryPaymentBatchSeq).padStart(5,'0'),now=new Date().toISOString();s.salaryPayments=s.salaryPayments||[];prepared.forEach((x,i)=>s.salaryPayments.push({id:batchId+'-'+String(i+1).padStart(3,'0'),batchId,ym,entity:activeSalaryEntity(),payingNature:salaryPaymentNature(account),empId:x.row.id,employeeName:x.row.name,amount:x.amount,date,account,proof,proofs:proofs.slice(),reference:String(b.reference||'').trim(),note:String(b.note||'').trim(),modificationReason:x.modificationReason,remainingBeforePayment:x.remainingBeforePayment,balanceAfterPayment:round2(x.remainingBeforePayment-x.amount),active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now}));save(s);res.json({success:true,batchId,count:prepared.length,total:round2(prepared.reduce((n,x)=>n+x.amount,0)),proofCount:proofs.length});
 });
 // One employee-payment action can settle earned salary and create a separate
 // recoverable advance. Both allocations are validated before the single save.
@@ -788,17 +808,17 @@ router.patch('/api/salary/payments/:id',guard,(req,res)=>{
   if(p.linkedLedgerEntryId)return res.status(409).json({success:false,error:'This salary payment is linked to an existing ledger debit. Correct that original ledger entry before changing its amount, date, or account.'});
   const amount=round2(num(b.amount)),date=String(b.date||''),account=String(b.account||'').trim(),reason=String(b.reason||'').trim();
   const proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean)));
-  const accountAllowed=SALARY_PAYING_ACCOUNTS.includes(account)||(account===p.account&&RETIRED_SALARY_PAYING_ACCOUNTS.includes(account));
+  const accountAllowed=salaryPayingAccounts().includes(account)||(account===p.account&&RETIRED_SALARY_PAYING_ACCOUNTS.includes(account));
   if(!(amount>0)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!accountAllowed||!proofs.length||!reason)return res.status(400).json({success:false,error:'Amount, date, paying account, at least one proof, and correction reason are required.'});
-  const before={amount:p.amount,date:p.date,account:p.account,proofs:p.proofs||[p.proof].filter(Boolean),reference:p.reference||''};
+  const before={amount:p.amount,date:p.date,account:p.account,entity:p.entity||activeSalaryEntity(),payingNature:p.payingNature||salaryPaymentNature(p.account),proofs:p.proofs||[p.proof].filter(Boolean),reference:p.reference||''};
   const changed=amount!==round2(num(p.amount))||date!==p.date||account!==p.account||JSON.stringify(proofs)!==JSON.stringify(before.proofs)||String(b.reference||'').trim()!==before.reference;
   if(!changed)return res.status(400).json({success:false,error:'No payment details changed.'});
   const otherPaid=(s.salaryPayments||[]).filter(x=>x!==p&&x.active!==false&&x.empId===p.empId&&x.ym===p.ym).reduce((n,x)=>n+num(x.amount),0);
   const row=computeMonth(s,p.ym).find(x=>x.id===p.empId),available=row?round2(row.netPayable-num((s.months[p.ym]&&s.months[p.ym].rows[p.empId]||{}).paid)-otherPaid):0;
   const overpayment=round2(Math.max(0,amount-available));
   if(overpayment>.001&&!(isOwner(req)&&b.allowOverpayment===true))return res.status(400).json({success:false,error:'Corrected amount exceeds this employee’s available salary balance. Only the Owner may explicitly approve a proof-backed overpayment.'});
-  Object.assign(p,{amount,date,account,proof:proofs[0],proofs,reference:String(b.reference||'').trim(),editedAt:new Date().toISOString(),editedBy:req.user.username});
-  s.salaryPaymentAudit=s.salaryPaymentAudit||[];s.salaryPaymentAudit.push({at:p.editedAt,by:req.user.username,action:'PAYMENT_CORRECTED',paymentId:p.id,ym:p.ym,empId:p.empId,before,after:{amount,date,account,proofs,reference:p.reference},overpayment,reason});
+  Object.assign(p,{amount,date,account,entity:activeSalaryEntity(),payingNature:salaryPaymentNature(account),proof:proofs[0],proofs,reference:String(b.reference||'').trim(),editedAt:new Date().toISOString(),editedBy:req.user.username});
+  s.salaryPaymentAudit=s.salaryPaymentAudit||[];s.salaryPaymentAudit.push({at:p.editedAt,by:req.user.username,action:'PAYMENT_CORRECTED',paymentId:p.id,ym:p.ym,empId:p.empId,before,after:{amount,date,account,entity:p.entity,payingNature:p.payingNature,proofs,reference:p.reference},overpayment,reason});
   save(s);res.json({success:true,payment:p});
 });
 function existing3645DebitCandidates(s){
@@ -869,7 +889,7 @@ router.get('/api/salary/advances', guard, (req, res) => {
     const payroll=payrollRows.get(e.id),transactions=all.map(a=>advanceView(a,s)).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id))),employeeRequests=requests.filter(r=>r.empId===e.id&&r.status!=='Posted'),activityDates=transactions.map(x=>x.date).concat(employeeRequests.map(x=>x.payoutDate||x.date)).filter(Boolean).sort().reverse();return { empId: e.id, name: e.name, thisMonth: all.filter(a => String(a.date).slice(0, 7) === (q.summaryMonth || new Date().toISOString().slice(0, 7))).reduce((n, a) => n + num(a.amount), 0), total: round2(total), recovered: round2(recovered), outstanding: round2(total - recovered), companyOwes:round2(Math.max(0,payroll&&payroll.balance||0)),lastActivity:activityDates[0]||'',transactions,requests:employeeRequests };
   }).filter(x => x.total || x.recovered || x.companyOwes || x.requests.length);
   const totals = summary.reduce((t, x) => ({ total: t.total + x.total, recovered: t.recovered + x.recovered, outstanding: t.outstanding + x.outstanding }), { total: 0, recovered: 0, outstanding: 0 });
-  res.json({ success: true, advances: rows, activityAdvances, summary, totals, requests, editRequests:Object.values(s.advanceEditRequests||{}).filter(x=>x.status==='Pending owner approval'), sourceSheet:(s.advanceSourceSheets||[]).at(-1)||null, sourceSheetPostingAccounts:SOURCE_SHEET_POSTING_ACCOUNTS, permissions:{canRequest:canRequestOrPostAdvance(req),canDirectPost:isOwner(req),canApprove:isOwner(req),canPostProof:canRequestOrPostAdvance(req),canEdit:canRequestOrPostAdvance(req),canCancel:isOwner(req)}, audit: (s.advanceAudit || []).slice().reverse().slice(0, 500), requestAudit:(s.advanceRequestAudit||[]).slice().reverse().slice(0,500) });
+  res.json({ success: true, advances: rows, activityAdvances, summary, totals, requests, editRequests:Object.values(s.advanceEditRequests||{}).filter(x=>x.status==='Pending owner approval'), sourceSheet:(s.advanceSourceSheets||[]).at(-1)||null, sourceSheetPostingAccounts:SOURCE_SHEET_POSTING_ACCOUNTS, permissions:{canRequest:canRequestOrPostAdvance(req),canDirectPost:isOwner(req),canApprove:isOwner(req),canPostProof:canRequestOrPostAdvance(req),canEdit:canRequestOrPostAdvance(req),canEditPendingRequest:canRequestOrPostAdvance(req),canCancel:isOwner(req)}, audit: (s.advanceAudit || []).slice().reverse().slice(0, 500), requestAudit:(s.advanceRequestAudit||[]).slice().reverse().slice(0,500) });
 });
 router.post('/api/salary/advances/source-sheet',guard,receiveSalarySheet,(req,res)=>{
   if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only a salary manager can save an advances source sheet.'});
@@ -953,7 +973,10 @@ router.post('/api/salary/advances/import/apply',guard,receiveSalarySheet,(req,re
 router.patch('/api/salary/advances/:id',guard,(req,res)=>{
   const s=load(),a=(s.advances||{})[req.params.id],b=req.body||{},reason=String(b.reason||'').trim(),amount=round2(num(b.amount)),date=String(b.date||'').slice(0,10),account=String(b.account||'').trim();
   if(!a||a.active===false)return res.status(404).json({success:false,error:'Advance not found.'});if(!reason||!(amount>0)||amount+0.001<advanceRecovered(a)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!account)return res.status(400).json({success:false,error:'Reason, valid amount/date/account are required, and amount cannot be below recovered value.'});
-  const changes={amount,date,payoutDate:date,account,note:String(b.note||'').trim()};
+  const payingNature=String(a.payingNature||'SANKI').toUpperCase();
+  if(b.payingNature&&String(b.payingNature).toUpperCase()!==payingNature)return res.status(400).json({success:false,error:'The paying entity cannot be changed while editing an advance.'});
+  if(!authorisedAdvanceAccount(req,payingNature,account))return res.status(400).json({success:false,error:'Choose an authorised paying account in the original paying entity.'});
+  const changes={amount,date,payoutDate:date,account,payingNature,note:String(b.note||'').trim()};
   if(!isOwner(req)){
     s.advanceEditRequests=s.advanceEditRequests||{};s.advanceEditRequestSeq=(s.advanceEditRequestSeq||0)+1;
     const id='ADVE-'+String(s.advanceEditRequestSeq).padStart(5,'0');s.advanceEditRequests[id]={id,advanceId:a.id,changes,reason,status:'Pending owner approval',createdBy:req.user&&req.user.username||'admin',createdAt:new Date().toISOString()};
@@ -971,6 +994,8 @@ router.post('/api/salary/advance-edit-requests/:id/decision',guard,(req,res)=>{
   const a=(s.advances||{})[request.advanceId];if(!a||a.active===false)return res.status(409).json({success:false,error:'The original advance is no longer active.'});
   if(decision==='approve'){
     if(request.changes.amount+0.001<advanceRecovered(a))return res.status(409).json({success:false,error:'Advance has since been recovered beyond the proposed amount.'});
+    const payingNature=String(a.payingNature||'SANKI').toUpperCase();
+    if(String(request.changes.payingNature||payingNature).toUpperCase()!==payingNature||!authorisedAdvanceAccount(req,payingNature,request.changes.account))return res.status(409).json({success:false,error:'The proposed account no longer matches the advance paying entity.'});
     const before=JSON.parse(JSON.stringify(a));Object.assign(a,request.changes,{editedBy:req.user.username,editedAt:new Date().toISOString()});auditAdvance(s,req,'EDIT_APPROVED',a.id,{requestId:request.id,before,after:a,reason:request.reason,note});
   }else auditAdvance(s,req,'EDIT_REJECTED',a.id,{requestId:request.id,reason:note});
   request.status=decision==='approve'?'Approved':'Rejected';request.decidedBy=req.user.username;request.decidedAt=new Date().toISOString();request.decisionNote=note;save(s);res.json({success:true,request,advance:advanceView(a,s)});
@@ -982,12 +1007,13 @@ router.post('/api/salary/advances', guard, (req, res) => {
   if (!canRequestOrPostAdvance(req)) return res.status(403).json({success:false,error:'Only the Owner, Admin, or Prashant can record an advance.'});
   if (!emp) return res.status(400).json({ success: false, error: 'Select an employee.' });
   if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Enter a valid advance amount.' });
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(b.date || ''))) return res.status(400).json({ success: false, error: 'Select the payment date.' });
+  if (!realIsoDate(b.date)) return res.status(400).json({ success: false, error: 'Select the payment date.' });
   if (!String(b.account || '').trim()) return res.status(400).json({ success: false, error: 'Select the paying account.' });
   if(!authorisedAdvanceAccount(req,payingNature,payingAccount))return res.status(400).json({success:false,error:'Choose an authorised paying account and entity.'});
   const recoveryStartMonth = String(b.recoveryStartMonth || b.date.slice(0, 7));
-  if (!/^\d{4}-\d{2}$/.test(recoveryStartMonth)) return res.status(400).json({ success: false, error: 'Select a recovery start month.' });
-  const duplicate=[...Object.values(s.advanceRequests||{}).filter(x=>!['Rejected','Posted'].includes(x.status)),...Object.values(s.advances||{}).filter(x=>x.active!==false)].find(x=>x.empId===emp.id&&String(x.account||'').trim()===String(b.account).trim()&&(String(b.reference||'').trim()&&String(x.reference||'').trim()?String(x.reference).trim()===String(b.reference).trim():String(x.date||'')===String(b.date)&&round2(num(x.amount))===round2(amount)));
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(recoveryStartMonth)) return res.status(400).json({ success: false, error: 'Select a recovery start month.' });
+  if(recoveryStartMonth<String(b.date).slice(0,7))return res.status(400).json({success:false,error:'Recovery cannot start before the advance payout month.'});
+  const duplicate=matchingLiveAdvance(s,{empId:emp.id,payingNature,account:payingAccount,reference:b.reference,date:b.date,amount});
   if(duplicate)return res.status(409).json({success:false,error:'A matching advance already exists for this employee. Check the employee advance register before recording another.'});
   if (isOwner(req)) {
     const proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean)));
@@ -999,9 +1025,32 @@ router.post('/api/salary/advances', guard, (req, res) => {
   }
   s.advanceRequests=s.advanceRequests||{};s.advanceRequestSeq=(s.advanceRequestSeq||0)+1;const id='ADVR-'+String(s.advanceRequestSeq).padStart(5,'0'),now=new Date().toISOString();
   const requestProofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean)));
-  s.advanceRequests[id]={id,empId:emp.id,employeeName:emp.name,amount:round2(amount),date:String(b.date),account:String(b.account).trim(),note:String(b.note||'').trim(),reference:String(b.reference||'').trim(),proof:requestProofs[0]||'',proofs:requestProofs,recoveryStartMonth,status:'Pending approval',createdBy:req.user&&req.user.username||'admin',createdAt:now};
-  auditAdvanceRequest(s,req,'SUBMITTED',id,{amount:round2(amount),account:String(b.account).trim()});save(s);
+  s.advanceRequests[id]={id,empId:emp.id,employeeName:emp.name,amount:round2(amount),date:String(b.date),account:payingAccount,payingNature,note:String(b.note||'').trim(),reference:String(b.reference||'').trim(),proof:requestProofs[0]||'',proofs:requestProofs,recoveryStartMonth,status:'Pending approval',createdBy:req.user&&req.user.username||'admin',createdAt:now};
+  auditAdvanceRequest(s,req,'SUBMITTED',id,{amount:round2(amount),account:payingAccount,payingNature});save(s);
   res.json({success:true,request:s.advanceRequests[id]});
+});
+
+router.patch('/api/salary/advance-requests/:id',guard,(req,res)=>{
+  if(!canRequestOrPostAdvance(req))return res.status(403).json({success:false,error:'Only the Owner, Admin, or Prashant can edit a pending advance request.'});
+  const s=load(),r=(s.advanceRequests||{})[req.params.id],b=req.body||{};
+  if(!r)return res.status(404).json({success:false,error:'Advance request not found.'});
+  if(r.status!=='Pending approval')return res.status(409).json({success:false,error:'Only a request still pending Owner approval can be edited. Refresh the advances page.'});
+  const reason=String(b.reason||'').trim(),emp=s.employees[b.empId],rawAmount=Number(b.amount),amount=round2(rawAmount),date=String(b.date||'').trim(),account=String(b.account||'').trim(),originalNature=String(r.payingNature||'SANKI').toUpperCase(),payingNature=String(b.payingNature||originalNature).toUpperCase(),recoveryStartMonth=String(b.recoveryStartMonth||'').trim();
+  if(!reason)return res.status(400).json({success:false,error:'Enter a reason for editing this request.'});
+  if(!emp||emp.active===false)return res.status(400).json({success:false,error:'Select an active employee.'});
+  if(!Number.isFinite(rawAmount)||!(rawAmount>0)||Math.abs(amount-rawAmount)>.000001)return res.status(400).json({success:false,error:'Enter a positive amount with no more than two decimal places.'});
+  if(!realIsoDate(date))return res.status(400).json({success:false,error:'Select a real proposed payment date.'});
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(recoveryStartMonth))return res.status(400).json({success:false,error:'Select the payroll month when recovery should start.'});
+  if(recoveryStartMonth<date.slice(0,7))return res.status(400).json({success:false,error:'Recovery cannot start before the proposed payout month.'});
+  if(!account||!authorisedAdvanceAccount(req,payingNature,account))return res.status(400).json({success:false,error:'Choose an authorised paying account.'});
+  // A pending request has not posted money anywhere, so its authorized source
+  // may still be corrected across entities. The eventual posting continues to
+  // use the saved payingNature, keeping the debit in exactly one ledger.
+  const fields={empId:emp.id,employeeName:emp.name,amount,date,account,payingNature,recoveryStartMonth,note:String(b.note||'').trim(),reference:String(b.reference||'').trim()};
+  if(matchingLiveAdvance(s,fields,r.id))return res.status(409).json({success:false,error:'A matching advance already exists for this employee. Review the employee advance history before saving.'});
+  const before=JSON.parse(JSON.stringify(r)),now=new Date().toISOString(),proofFields=['empId','amount','date','account','payingNature','reference'],materialChange=proofFields.some(key=>String(r[key]??'')!==String(fields[key]??'')),hadProof=!!([].concat(r.proofs||[],r.proof||[]).filter(Boolean).length);Object.assign(r,fields,{updatedBy:req.user&&req.user.username||'admin',updatedAt:now,lastEditReason:reason});
+  if(materialChange&&hadProof){r.proof='';r.proofs=[];r.proofInvalidatedAt=now;r.proofInvalidatedBy=req.user&&req.user.username||'admin';}
+  auditAdvanceRequest(s,req,'EDITED',r.id,{before,after:JSON.parse(JSON.stringify(r)),reason,proofInvalidated:materialChange&&hadProof});save(s);res.json({success:true,request:r,proofInvalidated:materialChange&&hadProof});
 });
 
 router.post('/api/salary/advance-requests/:id/approve',guard,(req,res)=>{
@@ -1022,9 +1071,12 @@ router.post('/api/salary/advance-requests/:id/post',guard,(req,res)=>{
   if(!canRequestOrPostAdvance(req))return res.status(403).json({success:false,error:'Only Admin or Prashant can upload proof and post an approved advance.'});
   const s=load(),r=(s.advanceRequests||{})[req.params.id],b=req.body||{},payoutDate=String(b.payoutDate||'').trim(),requestProofs=r&&payoutDate===r.date?r.proofs||[r.proof]:[],proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[],requestProofs||[]).map(x=>String(x||'').trim()).filter(Boolean)));
   if(!r)return res.status(404).json({success:false,error:'Advance request not found.'});if(r.status!=='Approved – proof required')return res.status(400).json({success:false,error:'The Owner must approve this request before it can be posted.'});if(!proofs.length)return res.status(400).json({success:false,error:'Payment proof is required before posting.'});
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(payoutDate)||isNaN(Date.parse(payoutDate+'T00:00:00Z')))return res.status(400).json({success:false,error:'Actual payout date is required before posting.'});
-  s.advanceSeq=(s.advanceSeq||0)+1;const id='ADV-'+String(s.advanceSeq).padStart(5,'0'),now=new Date().toISOString();s.advances[id]={id,requestId:r.id,empId:r.empId,employeeName:r.employeeName,amount:r.amount,date:payoutDate,payoutDate,proposedDate:r.date,account:r.account,proof:proofs[0],proofs,note:r.note,reference:r.reference,recoveryStartMonth:payoutDate.slice(0,7),recoveries:[],active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now,approvedBy:r.approvedBy,approvedAt:r.approvedAt};
-  r.status='Posted';r.advanceId=id;r.payoutDate=payoutDate;r.proof=proofs[0];r.proofs=proofs;r.postedBy=req.user&&req.user.username||'admin';r.postedAt=now;auditAdvanceRequest(s,req,'POSTED',r.id,{advanceId:id,payoutDate,proofCount:proofs.length});auditAdvance(s,req,'CREATED',id,{amount:r.amount,account:r.account,requestId:r.id,payoutDate});save(s);res.json({success:true,request:r,advance:advanceView(s.advances[id],s)});
+  if(!realIsoDate(payoutDate))return res.status(400).json({success:false,error:'Actual payout date is required before posting.'});
+  const payingNature=String(r.payingNature||'SANKI').toUpperCase();
+  if(!authorisedAdvanceAccount(req,payingNature,r.account))return res.status(400).json({success:false,error:'This paying account is not authorised for Admin salary advances.'});
+  const requestedRecoveryMonth=/^\d{4}-(0[1-9]|1[0-2])$/.test(String(r.recoveryStartMonth||''))?r.recoveryStartMonth:payoutDate.slice(0,7),recoveryStartMonth=requestedRecoveryMonth<payoutDate.slice(0,7)?payoutDate.slice(0,7):requestedRecoveryMonth;
+  s.advanceSeq=(s.advanceSeq||0)+1;const id='ADV-'+String(s.advanceSeq).padStart(5,'0'),now=new Date().toISOString();s.advances[id]={id,requestId:r.id,empId:r.empId,employeeName:r.employeeName,amount:r.amount,date:payoutDate,payoutDate,proposedDate:r.date,account:r.account,payingNature,proof:proofs[0],proofs,note:r.note,reference:r.reference,recoveryStartMonth,recoveries:[],active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now,approvedBy:r.approvedBy,approvedAt:r.approvedAt};
+  const recoveryStartMonthAdjusted=recoveryStartMonth!==requestedRecoveryMonth;r.status='Posted';r.advanceId=id;r.payoutDate=payoutDate;r.proof=proofs[0];r.proofs=proofs;r.recoveryStartMonth=recoveryStartMonth;r.postedBy=req.user&&req.user.username||'admin';r.postedAt=now;auditAdvanceRequest(s,req,'POSTED',r.id,{advanceId:id,payoutDate,proofCount:proofs.length,payingNature,requestedRecoveryStartMonth:requestedRecoveryMonth,effectiveRecoveryStartMonth:recoveryStartMonth,recoveryStartMonthAdjusted});auditAdvance(s,req,'CREATED',id,{amount:r.amount,account:r.account,payingNature,requestId:r.id,payoutDate,recoveryStartMonth});save(s);res.json({success:true,request:r,advance:advanceView(s.advances[id],s),recoveryStartMonthAdjusted});
 });
 
 router.post('/api/salary/recoveries/:ym', guard, (req, res) => {

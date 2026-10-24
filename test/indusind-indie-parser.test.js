@@ -5,6 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { parseIndieBusinessStatement } = require('../modules/indusind-indie-statement');
+const { parseIndusIndSavingsStatement } = require('../modules/indusind-savings-pdf');
+const { parseIndusIndMobileStatement } = require('../modules/indusind-mobile-statement');
+const { parseIciciCreditCardPdf, isIciciCreditCardText } = require('../modules/icici-credit-card-pdf');
 
 // Synthetic positions model PDF.js's cell concatenation; no customer statement
 // details or attachment are committed as a fixture.
@@ -151,9 +154,9 @@ function uploadHarness(pages, legacyRows = [], documentError) {
   const code = source.slice(source.indexOf('async function readPdfText('), source.indexOf('function bankRowKey('));
   const state = { fallbackCalls: 0, destroyed: false, legacyText: '' };
   const context = {
-    fs: { readFileSync: () => new Uint8Array([1, 2, 3]) }, path, parseIndieBusinessStatement,
+    fs: { readFileSync: () => new Uint8Array([1, 2, 3]) }, path, parseIndieBusinessStatement, parseIndusIndSavingsStatement, parseIndusIndMobileStatement, parseIciciCreditCardPdf, isIciciCreditCardText,
     parseBankStatementText: text => { state.fallbackCalls++; state.legacyText = text; return legacyRows; },
-    pdfjs: { getDocument: async () => {
+    pdfjs: { PDFJS: {}, NativeImageDecoding: { NONE: 'none' }, getDocument: async () => {
       if (documentError) throw documentError;
       return { numPages: pages.length, getPage: async pageNo => ({ getTextContent: async () => pages[pageNo - 1] }), destroy: () => { state.destroyed = true; } };
     } }

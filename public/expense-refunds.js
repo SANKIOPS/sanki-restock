@@ -1,7 +1,7 @@
 /* Linked expense refunds. The server validates every allocation again at save. */
 (function () {
   'use strict';
-  var data, draft, preview, filter = { nature: 'SANKI', from: '', to: '', status: '', search: '' }, busy = false, revision = 0, labelled = 0, frozen = [], refundHostId = 'panel';
+  var data, draft, preview, formData, formNature = '', formRequest = 0, filter = { nature: 'SANKI', from: '', to: '', status: '', search: '' }, busy = false, revision = 0, labelled = 0, frozen = [], refundHostId = 'panel';
   var labels = { cash: 'Cash', upi: 'UPI', bank: 'Bank transfer', card: 'Credit-card reversal', voucher: 'Voucher / Coupon / Gift card', store_credit: 'Store credit', vendor_credit: 'Vendor credit', credit_note: 'Credit note — unpaid bill' };
   var endpoint = '/api/expenses/expense-refunds';
   function moneyMode(mode) { return ['cash', 'upi', 'bank', 'card'].includes(mode); }
@@ -39,18 +39,22 @@
     if (locked) { frozen = Array.from(node('rf_dialog').querySelectorAll('input,select,textarea,button')).map(function (n) { var prior = n.disabled; n.disabled = true; return [n, prior]; }); }
     else { frozen.forEach(function (entry) { entry[0].disabled = entry[1]; }); frozen = []; }
   }
-  function load() {
-    var params = new URLSearchParams(filter);
+  function authorizedEntity(nature) { return cfg.canManageExpenseRefunds && (cfg.approvalNatures || []).includes(nature); }
+  function readView(query) {
+    if (!authorizedEntity(query.nature)) return Promise.reject(new Error('Select an accounting entity you are authorized to manage.'));
+    var params = new URLSearchParams(query);
     return api(endpoint + '?' + params).then(function (result) {
       if (!result.success) throw new Error(result.error);
-      data = result; return result;
+      return result;
     });
   }
+  function load() { return readView(filter).then(function (result) { data = result; return result; }); }
   function refundHost() { return node(refundHostId) || el('panel'); }
   window.renderRefundsSection = function (hostId) {
     refundHostId = hostId || 'panel';
     var host = refundHost();
     if (!cfg.canManageExpenseRefunds) { host.innerHTML = '<div class="card">Only Admin or Owner can manage expense refunds.</div>'; return; }
+    if (!authorizedEntity(filter.nature)) filter.nature = (cfg.approvalNatures || [])[0] || '';
     host.innerHTML = '<div class="card">Loading Refunds &amp; Returns…</div>';
     load().then(draw).catch(function (error) { var target = refundHost(); if (target) target.innerHTML = '<div class="card">' + esc(error.message) + '</div>'; });
   };
@@ -104,12 +108,37 @@
     var style = document.createElement('style'); style.textContent = '#rf_dialog{width:min(960px,95vw);max-width:95vw;max-height:90vh;overflow:auto;border:1px solid #d9e0e8;border-radius:14px;padding:22px;color:#172536}#rf_dialog [hidden]{display:none!important}#rf_dialog::backdrop{background:#152f4866}#rf_dialog .rf-allocation{display:grid;grid-template-columns:minmax(210px,1fr) 140px auto;gap:10px;align-items:end;margin:10px 0}#rf_dialog .rf-component{border:1px solid #dce4eb;border-radius:10px;padding:14px;margin:12px 0}#rf_dialog .rf-component .grid{grid-template-columns:repeat(2,minmax(0,1fr))}#rf_dialog select,#rf_dialog input,#rf_dialog textarea{max-width:100%;box-sizing:border-box}#rf_dialog .rf-preview{padding:14px;background:#f0f8f5;border:1px solid #9bd1ba;border-radius:10px;margin-top:16px}#rf_dialog .hint{line-height:1.5}@media(max-width:600px){#rf_dialog{padding:14px}#rf_dialog .rf-allocation,#rf_dialog .rf-component .grid{grid-template-columns:1fr}}'; document.head.appendChild(style);
     var dialog = document.createElement('dialog'); dialog.id = 'rf_dialog'; document.body.appendChild(dialog);
     dialog.addEventListener('cancel', function (event) { if (busy) event.preventDefault(); });
+    dialog.addEventListener('close', function () { formRequest++; formData = null; preview = null; });
   }
-  function openForm(parent) {
-    modal(); busy = false; preview = null; revision++;
-    draft = { requestId: uid(), parentId: parent && parent.id || '', sources: [], status: 'received', date: data.today, reasonType: 'return', reason: parent && parent.reason || '', proofs: [] };
+  async function openForm(parent) {
+    if (busy) return;
+    modal(); preview = null; draft = null; formData = null; formNature = ''; revision++;
+    var request = ++formRequest, entity = parent ? parent.nature : node('rf_entity') ? node('rf_entity').value : filter.nature;
+    var dialog = node('rf_dialog');
+    dialog.innerHTML = '<div class="row-actions"><h2 style="margin:0;flex:1">Log refund / return</h2><button class="btn ghost" id="rf_close">Close</button></div><p class="hint">Loading authorized sources for ' + esc(entity) + '…</p><div class="msg" id="rf_message" role="status"></div>';
+    node('rf_close').onclick = function () { dialog.close(); };
+    if (!dialog.open) dialog.showModal();
+    try {
+      var result = await readView({ nature: entity });
+      if (request !== formRequest || !dialog.open) return;
+      if (!authorizedEntity(entity)) throw new Error('You no longer have access to this accounting entity. Close and reload the page.');
+      if (parent) {
+        parent = result.refunds.find(function (r) { return r.id === parent.id && r.nature === entity; });
+        if (!parent || parent.displayStatus !== 'pending') throw new Error('This pending return is no longer available. Close and refresh the refunds list.');
+        if (!parent.pendingSources.every(function (s) { return s.amount <= 0 || result.sources.some(function (x) { return x.key === s.key && x.nature === entity; }); })) throw new Error('A source on this pending return is no longer available. Close and refresh the refunds list.');
+      }
+      formData = result; formNature = entity; buildForm(parent);
+    } catch (error) {
+      if (request === formRequest && dialog.open) message('Unable to load refund sources. ' + error.message + ' Close and try again.', false);
+    }
+  }
+  function buildForm(parent) {
+    var data = formData;
+    draft = { requestId: uid(), parentId: parent && parent.id || '', sources: [], status: 'received', date: formData.today, reasonType: 'return', reason: parent && parent.reason || '', proofs: [] };
     if (parent) draft.sources = parent.pendingSources.filter(function (s) { return s.amount > 0; }).map(function (s) { return { key: s.key, amount: s.amount }; });
     node('rf_dialog').innerHTML = '<div class="row-actions"><h2 style="margin:0;flex:1">' + (parent ? 'Record receipt for ' + esc(parent.id) : 'Log refund / return') + '</h2><button class="btn ghost" id="rf_close">Close</button></div><p class="hint">Expense refunds received from a supplier — not refunds paid to customers. Original bills and payment history remain unchanged.</p><div class="grid"><div class="fld"><label>Status</label><select id="rf_form_status">' + options([{ value: 'received', label: 'Refund / credit received' }, { value: 'pending', label: 'Return logged — refund pending' }], 'received') + '</select></div><div class="fld"><label>Actual receipt / return date</label><input id="rf_date" type="date" value="' + draft.date + '" max="' + data.today + '"></div><div class="fld"><label>Reason type</label><select id="rf_reason_type">' + options(data.reasons.map(function (r) { return { value: r, label: r.replaceAll('_', ' ') }; }), 'return') + '</select></div></div><h3>1. Link original expense or payment</h3><div class="filters"><div class="fld" style="flex:1"><label>Find by vendor, expense or payment reference</label><input id="rf_source_search" placeholder="e.g. EX-00300 or supplier name"></div><div class="fld"><label>Source type</label><select id="rf_source_kind">' + options(['expense', 'payment', 'advance'], 'expense') + '</select></div></div><div class="filters"><div class="fld" style="flex:1"><label>Original source</label><select id="rf_source"></select></div><button class="btn ghost" id="rf_add_source">Add source</button></div><p class="hint">For a consolidated payment, select the separate bill allocations. Select an unallocated advance for an overpayment refund; it will not reduce expenses.</p><div id="rf_allocations"></div><h3>2. Amount and mode received</h3><p class="hint">“Full” means the remaining refundable amount, after earlier refunds. For a credit note it means the remaining unpaid bill. Split receipts can have multiple modes.</p><div id="rf_components"></div><button class="btn ghost" id="rf_add_component">＋ Add another mode</button><div class="fld" style="margin-top:16px"><label>Reason / description — required</label><textarea id="rf_reason" rows="2">' + esc(draft.reason) + '</textarea></div><div class="fld"><label>Refund proof — optional</label><input id="rf_proofs" type="file" accept="image/*" multiple><div class="hint">No proof is required at this stage. Uploaded images are retained with the refund history.</div></div><div class="msg" id="rf_message" role="status"></div><div id="rf_preview"></div><div class="row-actions"><button class="btn primary" id="rf_preview_button">Review accounting effect</button><button class="btn green" id="rf_save" disabled>Confirm &amp; save refund</button></div>';
+    node('rf_dialog').querySelector('h3').insertAdjacentHTML('beforebegin', '<p class="hint" id="rf_form_entity">Refund entity: <b>' + esc(formNature) + '</b>. ' + (parent ? 'Kept from the original pending return.' : 'To change it, close this dialog and choose another entity above.') + '</p>');
+    node('rf_source').insertAdjacentHTML('afterend', '<p class="hint" id="rf_source_hint" role="status"></p>');
     if (parent) node('rf_form_status').disabled = true;
     node('rf_close').onclick = function () { if (!busy) node('rf_dialog').close(); };
     node('rf_source_search').oninput = sourceOptions; node('rf_source_kind').onchange = sourceOptions;
@@ -126,21 +155,24 @@
     
     node('rf_dialog').oninput = invalidate; node('rf_dialog').onchange = invalidate;
     node('rf_preview_button').onclick = doPreview; node('rf_save').onclick = save;
-    sourceOptions(); allocations(); addComponent(); labelFields(node('rf_dialog')); node('rf_dialog').showModal();
+    sourceOptions(); allocations(); addComponent(); labelFields(node('rf_dialog'));
   }
   function invalidate() { revision++; preview = null; if (node('rf_save')) node('rf_save').disabled = true; if (node('rf_preview')) node('rf_preview').innerHTML = ''; }
   function sourceOptions() {
     var search = node('rf_source_search').value.toLowerCase(), kind = node('rf_source_kind').value;
-    var list = data.sources.filter(function (s) { return s.nature === filter.nature && s.kind === kind && [s.reference, s.vendor, s.particulars, s.account].join(' ').toLowerCase().includes(search); });
+    var list = formData.sources.filter(function (s) { return s.nature === formNature && s.kind === kind && [s.reference, s.vendor, s.particulars, s.account].join(' ').toLowerCase().includes(search); });
     node('rf_source').innerHTML = options(list.slice(0, 150).map(function (s) { return { value: s.key, label: s.reference + ' · ' + s.vendor + ' · ' + s.date + ' · refundable ' + amount(s.remaining) + ' / unpaid ' + amount(s.unpaidAmount) }; }));
+    node('rf_source').disabled = !list.length || !!draft.parentId;
+    node('rf_add_source').disabled = !list.length || !!draft.parentId;
+    node('rf_source_hint').textContent = !list.length ? 'No matching authorized ' + kind + ' sources for ' + formNature + '. Check the reference or source type, or close this dialog to choose another entity. Do not recreate an existing expense.' : list.length > 150 ? 'Showing the first 150 sources. Narrow the search to find a specific expense or payment.' : '';
   }
   function allocations() {
     node('rf_allocations').innerHTML = draft.sources.map(function (a, index) {
-      var s = data.sources.find(function (x) { return x.key === a.key; }); if (!s) return '';
+      var s = formData.sources.find(function (x) { return x.key === a.key; }); if (!s) return '';
       return '<div class="rf-allocation"><div><b>' + esc(s.reference) + ' · ' + esc(s.vendor) + '</b><div class="hint">Original bill ' + amount(s.originalAmount) + ' · paid ' + amount(s.paidAmount) + ' · earlier refunds ' + amount(s.refundedAmount) + '<br>Refundable ' + amount(s.remaining) + ' · unpaid ' + amount(s.unpaidAmount) + '</div></div><div class="fld"><label>Refund allocation ₹</label><input type="number" class="rf_allocation_amount" step="0.01" min="0.01" data-index="' + index + '" value="' + a.amount + '"></div><div><button class="btn mini ghost rf_full" data-index="' + index + '">Full</button> <button class="btn mini ghost rf_remove_source" data-index="' + index + '">Remove</button></div></div>';
     }).join('') || '<p class="muted">Add the original expense or payment first.</p>';
     node('rf_allocations').onclick = function (event) {
-      var button = event.target.closest('button'); if (!button) return; var index = Number(button.dataset.index), source = data.sources.find(function (s) { return s.key === draft.sources[index].key; });
+      var button = event.target.closest('button'); if (!button) return; var index = Number(button.dataset.index), source = formData.sources.find(function (s) { return s.key === draft.sources[index].key; });
       if (button.classList.contains('rf_full')) {
         var creditNote = Array.from(document.querySelectorAll('#rf_components .rf_mode')).every(function (n) { return n.value === 'credit_note'; });
         draft.sources[index].amount = node('rf_form_status').value === 'pending' ? source.unpaidAmount + source.remaining : creditNote ? source.unpaidAmount : source.remaining;
@@ -152,8 +184,8 @@
   }
   function accounts(component) {
     var mode = component.querySelector('.rf_mode').value, receiver = component.querySelector('.rf_receiver').value, credit = creditMode(mode), money = moneyMode(mode);
-    var originals = draft.sources.flatMap(function (a) { var s = data.sources.find(function (x) { return x.key === a.key; }); return s ? s.payments : []; });
-    var values = !money ? [] : receiver === 'payer' ? Array.from(new Set(originals.filter(function (p) { return p.personal; }).map(function (p) { return p.account; }))) : mode === 'card' ? (cfg.creditCards || []).map(function (c) { return c.name; }) : (cfg.accountsByNature[filter.nature] || []);
+    var originals = draft.sources.flatMap(function (a) { var s = formData.sources.find(function (x) { return x.key === a.key; }); return s ? s.payments : []; });
+    var values = !money ? [] : receiver === 'payer' ? Array.from(new Set(originals.filter(function (p) { return p.personal; }).map(function (p) { return p.account; }))) : mode === 'card' ? (cfg.creditCards || []).map(function (c) { return c.name; }) : (cfg.accountsByNature[formNature] || []);
     if (mode === 'cash') values = values.filter(function (a) { return /cash/i.test(a); });
     if (['bank', 'upi'].includes(mode)) values = values.filter(function (a) { return !/cash/i.test(a); });
     var selected = component.querySelector('.rf_account').value;
@@ -162,11 +194,12 @@
     component.querySelector('.rf_issuer_field').hidden = !credit; component.querySelector('.rf_expiry_field').hidden = !credit;
     component.querySelector('.rf_credit_hint').hidden = !credit;
     component.querySelector('.rf_existing_field').hidden = !money || receiver === 'payer';
-    var existing = data.existingMovements.filter(function (m) { return receiver !== 'payer' && m.nature === filter.nature && m.mode === (mode === 'upi' ? 'bank' : mode); }), priorExisting = component.querySelector('.rf_existing').value;
+    var existing = formData.existingMovements.filter(function (m) { return receiver !== 'payer' && m.nature === formNature && m.mode === (mode === 'upi' ? 'bank' : mode); }), priorExisting = component.querySelector('.rf_existing').value;
     component.querySelector('.rf_existing').innerHTML = options([{ value: '', label: 'New receipt — not already in the ledger' }].concat(existing.map(function (m) { return { value: m.id, label: m.id + ' · ' + m.date + ' · ' + amount(m.remaining) + ' · ' + m.account }; })), priorExisting);
   }
   function refreshAccounts() { document.querySelectorAll('#rf_components .rf-component').forEach(accounts); }
   function addComponent() {
+    var data = formData;
     var div = document.createElement('div'); div.className = 'rf-component';
     div.innerHTML = '<div class="grid"><div class="fld"><label>Mode</label><select class="rf_mode">' + options(data.modes.map(function (m) { return { value: m, label: labels[m] }; }), 'bank') + '</select></div><div class="fld"><label>Amount received ₹</label><input class="rf_component_amount" type="number" step="0.01" min="0.01" value="' + (document.querySelector('#rf_components .rf-component') ? '' : draft.sources.reduce(function (n, a) { return n + a.amount; }, 0) || '') + '"></div><div class="fld"><label>Who received it?</label><select class="rf_receiver">' + options([{ value: 'company', label: 'Company' }, { value: 'payer', label: 'Original personal payer' }]) + '</select></div><div class="fld rf_account_field"><label>Receiving account</label><select class="rf_account"></select></div><div class="fld rf_issuer_field"><label>Merchant / app accepting this credit</label><input class="rf_issuer" placeholder="Merchant or app where you can use the credit"></div><div class="fld"><label>Transaction ID / voucher, coupon or gift-card code</label><input class="rf_reference" placeholder="Enter transaction ID or voucher / promo code"></div><div class="fld rf_expiry_field"><label>Valid until — optional</label><input class="rf_expiry" type="date"></div><div class="fld rf_existing_field"><label>Existing refund receipt — avoid double posting</label><select class="rf_existing"></select></div></div><p class="hint rf_credit_hint">For a refund issued as a voucher, coupon, promo code or gift card, enter its code above. This stays as non-cash credit with the merchant for a future purchase, not a deposit into a bank or cash account.</p><button class="btn mini ghost rf_remove_component" style="margin-top:10px">Remove this mode</button>';
     node('rf_components').appendChild(div); accounts(div); labelFields(div);
@@ -184,21 +217,22 @@
     if (busy) return; lockForm(true); message('Checking source allocations and accounting effects…', true);
     var rev = revision;
     try {
-      if (!draft.proofs.length && node('rf_proofs').files.length) draft.proofs = await uploadFiles(node('rf_proofs').files, filter.nature);
+      if (!draft.proofs.length && node('rf_proofs').files.length) draft.proofs = await uploadFiles(node('rf_proofs').files, formNature);
       var payload = body(), result = await post('/preview', payload);
       if (rev !== revision) throw new Error('The form changed during review. Review it again before saving.');
       if (!result.success) throw new Error(result.error);
       preview = payload;
       var p = result.preview, pending = payload.status === 'pending', reviewed = p.already || p;
-      node('rf_preview').innerHTML = '<div class="rf-preview"><h3 style="margin-top:0">Review before confirming</h3><p><b>' + amount(reviewed.amount) + '</b> · ' + esc(payload.date) + ' · ' + esc(payload.reason) + '</p>' + (pending ? '<p>Return pending: no cash, bank, vendor balance or P&amp;L posting yet.</p>' : '<p>Bill / expense reduction: ' + amount(result.impact.billCredit) + '</p>' + reviewed.components.map(previewComponent).join('')) + '<p class="hint">The original bill and payment history are preserved. Server checks run again when you confirm.</p></div>';
+      node('rf_preview').innerHTML = '<div class="rf-preview"><h3 style="margin-top:0">Review before confirming</h3><p><b>' + amount(reviewed.amount) + '</b> · ' + esc(payload.date) + ' · ' + esc(payload.reason) + '</p>' + (pending ? '<p>Return pending: no cash, bank, vendor balance or Results posting yet.</p>' : '<p>Bill / expense reduction: ' + amount(result.impact.billCredit) + '</p>' + reviewed.components.map(previewComponent).join('')) + '<p class="hint">The original bill and payment history are preserved. Server checks run again when you confirm.</p></div>';
       node('rf_save').disabled = false; message('Review is valid. Confirm below to record it.', true);
     } catch (error) { message(error.message, false); }
     finally { lockForm(false); node('rf_save').disabled = !preview; }
   }
   async function save() {
     if (busy || !preview) return;
+    var savedNature = formNature;
     lockForm(true);
-    try { var result = await post('', preview); if (!result.success) throw new Error(result.error); node('rf_dialog').close(); await load(); draw(); setMsg('Recorded ' + result.refund.id + '. Original payment history retained.', true); }
+    try { var result = await post('', preview); if (!result.success) throw new Error(result.error); filter = Object.assign({}, filter, { nature: savedNature }); node('rf_dialog').close(); await load(); draw(); setMsg('Recorded ' + result.refund.id + '. Original payment history retained.', true); }
     catch (error) { message(error.message, false); node('rf_save').disabled = false; }
     finally { lockForm(false); }
   }

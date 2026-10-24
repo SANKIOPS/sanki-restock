@@ -9,7 +9,7 @@ process.env.DATA_PATH=path.join(temp,'data.json');
 const {router,merchantKey,inferClassification}=require('../modules/credit-cards');
 const expenseRouter=require('../modules/expenses').router;
 test.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
-function invoke(method,routePath,{body={},params={},query={},role='owner'}={}){const layer=router.stack.find(x=>x.route&&x.route.path===routePath&&x.route.methods[method.toLowerCase()]);assert.ok(layer,'route exists '+method+' '+routePath);let status=200,result;const req={body,params,query,user:{username:'tester',role,roles:[role]}};const res={status(n){status=n;return this;},json(x){result=x;return this;},end(){return this;}};let i=0;const next=()=>{const h=layer.route.stack[i++];if(h)h.handle(req,res,next);};next();return{status,body:result};}
+function invoke(method,routePath,{body={},params={},query={},role='owner'}={}){if(/\/statements\/:id\/(?:review|finalize)$/.test(routePath)&&body.reviewRevision===undefined){const saved=JSON.parse(fs.readFileSync(path.join(temp,'credit-cards.json'),'utf8'));body={...body,reviewRevision:Number(saved.statements[params.id]&&saved.statements[params.id].reviewRevision)||0};}const layer=router.stack.find(x=>x.route&&x.route.path===routePath&&x.route.methods[method.toLowerCase()]);assert.ok(layer,'route exists '+method+' '+routePath);let status=200,result;const req={body,params,query,user:{username:'tester',role,roles:[role]}};const res={status(n){status=n;return this;},json(x){result=x;return this;},end(){return this;}};let i=0;const next=()=>{const h=layer.route.stack[i++];if(h)h.handle(req,res,next);};next();return{status,body:result};}
 function invokeExpense(method,routePath,{body={},params={},query={},role='owner',username='tester'}={}){const layer=expenseRouter.stack.find(x=>x.route&&x.route.path===routePath&&x.route.methods[method.toLowerCase()]);assert.ok(layer,'expense route exists '+method+' '+routePath);let status=200,result;const req={body,params,query,user:{username,role,roles:[role]}};const res={status(n){status=n;return this;},json(x){result=x;return this;},end(){return this;}};let i=0;const next=()=>{const h=layer.route.stack[i++];if(h)h.handle(req,res,next);};next();return{status,body:result};}
 test('credit cards are entity-neutral liabilities with permanent statement review logs',()=>{
   const made=invoke('POST','/api/expenses/credit-cards',{body:{name:'HDFC Regalia',last4:'1234',cardholder:'Owner',issuingBank:'HDFC',cycleDay:5,dueDay:25,creditLimit:200000,openingOutstanding:1000}});
@@ -88,7 +88,8 @@ test('statement payment is authoritative without a second bank transfer or dupli
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0],before=card.outstanding,expBefore=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8')),transfersBefore=expBefore.transfers.length;
   const st=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-08-30',narration:'Card payment Axis Bank 3448',amount:400,classification:'card_payment'}}).body.statement,row=st.rows[0];
   assert.ok(row.duplicateWarnings.some(x=>x.kind==='card_payment'));
-  const reviewed=invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:st.id},body:{rows:[{id:row.id,classification:'card_payment',duplicateResolution:'link',confirmed:true}]}});assert.equal(reviewed.status,200);
+  const source=row.settlementCandidates.find(x=>x.eligible);assert.ok(source,'an existing payment can be linked');
+  const reviewed=invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:st.id},body:{rows:[{id:row.id,classification:'card_payment',settlementMode:'link_existing',settlementSourceId:source.id,settlementSourceFingerprint:source.fingerprint,duplicateResolution:'link',confirmed:true}]}});assert.equal(reviewed.status,200);
   const finalized=invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:st.id}});assert.equal(finalized.status,200);assert.equal(finalized.body.outstanding,before-400);
   const expAfter=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8'));assert.equal(expAfter.transfers.length,transfersBefore);
 });
@@ -113,7 +114,7 @@ test('review rejects classifications opposite to the statement direction and fin
   const st=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-10-01',narration:'New payment',amount:50,classification:'card_payment'}}).body.statement;
   const params={id:st.id},id=st.rows[0].id;
   assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params,body:{rows:[{id,classification:'expense'}]}}).status,400);
-  assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params,body:{rows:[{id,classification:'card_payment'}]}}).status,200);
+  assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params,body:{rows:[{id,classification:'card_payment',settlementMode:'external',payingNature:'SANKI',payingAccount:'Historical issuer settlement',settlementReason:'Documented payment outside tracked accounts'}]}}).status,200);
   assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params}).status,200);
 });
 
@@ -129,7 +130,7 @@ test('finalized card expenses appear in search, vendor ledgers, spending and pro
   const card=invoke('POST','/api/expenses/credit-cards',{body:{name:'Reporting card',last4:'9999',issuingBank:'HDFC'}}).body.card;
   const make=(classification,amount,narration,type='marketing')=>{
     const st=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-10-15',amount,narration,classification}}).body.statement;
-    const reviewed=invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:st.id},body:{rows:[{id:st.rows[0].id,classification,nature:'SANKI',category:'MARKETING EXPENSE',type,channel:'Both'}]}});assert.equal(reviewed.status,200);
+    const reviewed=invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:st.id},body:{rows:[{id:st.rows[0].id,classification,nature:'SANKI',category:'MARKETING EXPENSE',type,channel:'Both',...(classification==='card_payment'?{settlementMode:'external',payingNature:'SANKI',payingAccount:'Historical issuer settlement',settlementReason:'Documented payment outside tracked accounts'}:{})}]}});assert.equal(reviewed.status,200);
     assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:st.id}}).status,200);return st;
   };
   const purchase=make('expense',1000,'RAZ*Facebook IndiaGurugram');make('refund',100,'FACEBOOKGURGAON');make('card_payment',200,'PAYMENT THANK YOU');make('emi_principal',300,'EMIRAZ*Facebook IndiaGurugram');make('emi_interest',20,'EMI INTEREST','running');
@@ -145,24 +146,26 @@ test('finalized card expenses appear in search, vendor ledgers, spending and pro
 });
 test('unbilled transactions are replaced by billed rows without doubling reports and restored on reopening',()=>{
   const {summaryForPL}=require('../modules/expenses');
+  // Keep this lifecycle isolated from earlier tests that log expenses on today.
+  const day='2098-10-20';
   const card=invoke('POST','/api/expenses/credit-cards',{body:{name:'Unbilled card',last4:'8888',issuingBank:'HDFC'}}).body.card;
-  const provisional=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,kind:'unbilled',date:'2026-10-20',narration:'Facebook IndiaGurugram',amount:650,classification:'expense'}}).body.statement;
+  const provisional=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,kind:'unbilled',date:day,narration:'Facebook IndiaGurugram',amount:650,classification:'expense'}}).body.statement;
   assert.equal(provisional.kind,'unbilled');assert.equal(provisional.totals.debit,650);
   invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:provisional.id},body:{rows:[{id:provisional.rows[0].id,classification:'expense',category:'MARKETING EXPENSE',type:'marketing',nature:'SANKI',channel:'Website'}]}});
   assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:provisional.id}}).status,200);
-  assert.equal(summaryForPL('2026-10-20','2026-10-20').Website.marketing,650);
-  const billed=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-10-20',narration:'RAZ*Facebook IndiaGurugram (Ref# 12345)',amount:650,classification:'expense'}}).body.statement;
+  assert.equal(summaryForPL(day,day).Website.marketing,650);
+  const billed=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:day,narration:'RAZ*Facebook IndiaGurugram (Ref# 12345)',amount:650,classification:'expense'}}).body.statement;
   assert.equal(billed.rows[0].replaces.statementId,provisional.id);assert.equal(billed.rows[0].type,'marketing');
   assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:billed.id}}).status,200);
-  let rows=invokeExpense('GET','/api/expenses/list',{query:{from:'2026-10-20',to:'2026-10-20'}}).body.expenses;
+  let rows=invokeExpense('GET','/api/expenses/list',{query:{from:day,to:day}}).body.expenses;
   assert.equal(rows.length,1);assert.equal(rows[0].creditCardStatementId,billed.id);assert.equal(rows[0].unbilled,false);
-  assert.equal(summaryForPL('2026-10-20','2026-10-20').Website.marketing,650);
+  assert.equal(summaryForPL(day,day).Website.marketing,650);
   assert.equal(invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body.outstanding,650);
-  const repeat=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-10-20',narration:'RAZ*Facebook IndiaGurugram (Ref# 12345)',amount:650,classification:'expense'}}).body.statement;
+  const repeat=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:day,narration:'RAZ*Facebook IndiaGurugram (Ref# 12345)',amount:650,classification:'expense'}}).body.statement;
   assert.ok(repeat.rows[0].duplicateOf);assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:repeat.id}}).status,200);
-  assert.equal(summaryForPL('2026-10-20','2026-10-20').Website.marketing,650);
+  assert.equal(summaryForPL(day,day).Website.marketing,650);
   invoke('POST','/api/expenses/credit-cards/statements/:id/reopen',{params:{id:billed.id},body:{reason:'Correct generated statement'}});
-  rows=invokeExpense('GET','/api/expenses/list',{query:{from:'2026-10-20',to:'2026-10-20'}}).body.expenses;assert.equal(rows.length,1);assert.equal(rows[0].unbilled,true);
+  rows=invokeExpense('GET','/api/expenses/list',{query:{from:day,to:day}}).body.expenses;assert.equal(rows.length,1);assert.equal(rows[0].unbilled,true);
 });
 test('current-cycle screenshot text imports purchases and refunds without balance columns',()=>{
   const {parseUnbilledTransactions}=require('../modules/credit-card-accounting');

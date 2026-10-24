@@ -280,9 +280,11 @@ test('accounts UI compiles and exposes reversal review and genuine carry-forward
     compiled++;
   }
   assert.ok(compiled > 0);
-  assert.match(html, /Existing ledger carry-forward — bank evidence pending/);
-  assert.match(html, /These entries are not marked reconciled/);
-  assert.match(html, /No opening adjustment can clear these conflicts/);
+  assert.match(html, /Existing ledger carry-forward — opening calculation/);
+  assert.match(html, /Pending — not marked reconciled/);
+  assert.match(html, /Previously reconciled/);
+  assert.match(html, /existing reconciliation decisions are unchanged/);
+  assert.match(html, /No opening adjustment can clear transaction conflicts/);
   assert.match(html, /action:'bank_reversal_pair'/);
   assert.match(html, /bankReconForm\.bankRowIds/);
 });

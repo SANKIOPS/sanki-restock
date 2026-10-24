@@ -78,7 +78,7 @@ test('ledger refresh preserves an explicit date range and changing accounts clea
   const ctx=browser('https://example.test/expenses.html?tab=cash&account=IndusInd%20Bank%208181&draft=BRD-123&ledgerFrom=2026-10-01&ledgerTo=2026-10-07');
   const fields=new Map(),calls=[];ctx.el=id=>{if(!fields.has(id))fields.set(id,{value:'',style:{},classList:{toggle(){}},innerHTML:'',remove(){}});return fields.get(id);};
   ctx.el('lg_account').value='IndusInd Bank 8181';ctx.el('lg_from').value='2026-10-01';ctx.el('lg_to').value='2026-10-07';
-  ctx.ledgerLoadedAccount='';ctx.selectedNature='SANKI';ctx.cfg={isOwner:false,isAdmin:false};ctx.bankAccountsForNature=()=>[];ctx.reconciliationAccountsForNature=()=>[];ctx.esc=String;ctx.fmt=String;
+  ctx.ledgerLoadedAccount='';ctx.selectedNature='SANKI';ctx.cfg={isOwner:false,isAdmin:false};ctx.bankAccountsForNature=()=>[];ctx.reconciliationAccountsForNature=()=>[];ctx.reconciliationNatureForAccount=(_account,nature)=>nature;ctx.esc=String;ctx.fmt=String;
   ctx.api=async(url,options)=>{calls.push({url,options});return{success:true,account:ctx.el('lg_account').value,entries:[],lastReconciliation:{from:'2026-08-01'},balance:0};};
   vm.runInContext(section('expenses.html','    function loadAccountLedger(){',"    var bankDraftId='"),ctx);
   ctx.loadAccountLedger();await new Promise(setImmediate);

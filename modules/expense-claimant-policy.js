@@ -4,6 +4,7 @@
 // approval role is a submitter, never an expense operator.
 function claimantOnly(req) {
   const user = req && req.user || {};
+  if (user.permissions && user.permissions.personalAccounting === true) return false;
   const roles = Array.isArray(user.roles) ? user.roles : [user.role].filter(Boolean);
   return roles.some(role => ['claimant', 'personal_claimant'].includes(role)) &&
     !roles.some(role => ['owner', 'admin', 'accounting', 'samast_accounting'].includes(role));
