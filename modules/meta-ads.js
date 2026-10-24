@@ -398,7 +398,7 @@ function createStore(options = {}) {
         if(set.campaignId!==campaign.id||ad.adSetId!==set.id)fail('Report IDs do not match the saved campaign hierarchy. Upload the latest setup first.');
         if(ensureHierarchy&&row.setup){for(const [type,prior] of [['campaigns',campaign],['adSets',set],['ads',ad]]){
           const supplied=row.setup[type];if(!supplied)continue;
-          const patch={};for(const key of ['name','objective','budgetDaily','status'])if(supplied[key]!=null&&supplied[key]!==''&&!(key==='status'&&['unknown','delivery_unconfirmed'].includes(supplied[key])))patch[key]=supplied[key];
+          const patch={archived:false};for(const key of ['name','objective','budgetDaily','status'])if(supplied[key]!=null&&supplied[key]!==''&&!(key==='status'&&['unknown','delivery_unconfirmed'].includes(supplied[key])))patch[key]=supplied[key];
           const next=normalizeRecord(type,patch,prior);
           for(const key of Object.keys(patch))if(JSON.stringify(prior[key])!==JSON.stringify(next[key])){state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:prior.id,field:key,before:prior[key]??null,after:next[key],action:'update',reason:'Supplied setup field in Meta table upload',revision:state.revision+1});prior[key]=next[key];prior.updatedAt=now;prior.updatedBy=actor;setupChanged=true;}
         }}

@@ -17,3 +17,10 @@ test('combined CSV updates supplied budget and objective while preserving manual
  const s2=createStore({file:path.join(dir,'manual.json'),seed:{campaigns:v.campaigns,adSets:v.adSets,ads:v.ads,results:[]}});
  rows[0].setup.adSets.budgetDaily=300;s2.importPerformance(rows,0,'owner',false,true);v=s2.view();assert.equal(v.adSets[0].budgetDaily,300);assert.deepEqual(v.adSets[0].interests,['Fashion']);assert.equal(v.ads[0].model,'Julia');assert.equal(v.ads[0].collection,'Femme');
 });
+
+test('combined CSV restores archived hierarchy and preserves saved manual setup',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'meta-restore-csv-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const rows=parsePerformance(perf),r=rows[0];const s=createStore({file:path.join(dir,'data.json'),seed:{campaigns:[{id:r.campaignMetaId,name:'C',archived:true,status:'paused'}],adSets:[{id:r.setMetaId,campaignId:r.campaignMetaId,name:'S',archived:true,status:'paused',interests:['Fashion'],interestsConfirmed:true}],ads:[{id:r.adMetaId,adSetId:r.setMetaId,name:'A',archived:true,status:'paused',model:'Julia'}],results:[]}});
+ s.importPerformance(rows,0,'owner',true,true);assert.equal(s.view().campaigns[0].archived,true);
+ s.importPerformance(rows,0,'owner',false,true);const v=s.view();for(const x of [...v.campaigns,...v.adSets,...v.ads])assert.equal(x.archived,false);assert.equal(v.ads[0].model,'Julia');assert.deepEqual(v.adSets[0].interests,['Fashion']);assert.equal(v.campaigns[0].status,'paused');assert.ok(v.changes.some(c=>c.field==='archived'&&c.before===true&&c.after===false));
+});
