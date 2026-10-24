@@ -213,6 +213,7 @@
   }
   function render() {
     if (!state) return;
+    renderMissingDetails();
     const insightView=view==='insights';
     $('insightsPanel').hidden=!insightView;
     for(const selector of ['.manager-toolbar','.filters','.view-heading','.manager-search','.manager-views','#tableFooter','#stats'])document.querySelector(selector).hidden=insightView;
@@ -297,7 +298,7 @@
       $('campaignFilter').value=selected;
       const latestReport=state.adSets.map(x=>x.confirmedOn).filter(Boolean).sort().pop();
       message(notice || 'Owner’s records · last reported '+dateDisplay(latestReport)+' · revision '+state.revision);
-      render();
+      render();renderMissingDetails();
     } catch(error){message(error.message,true);}finally{setBusy(false);if(state)render();}
   }
   const f=(key,label,type='text',extra={})=>({key,label,type,...extra});
@@ -321,10 +322,10 @@
       f('ageMin','Minimum age','number',{min:13,max:100,step:'1'}),f('ageMax','Maximum age','number',{min:13,max:100,step:'1'}),
       f('gender','Gender','select',{options:[['','Pending'],['women','Women'],['men','Men'],['all','All genders']]}),
       f('audienceMode','Audience controls / suggestions','text',{max:160,help:'For example, strict controls or Advantage+ suggestions. Leave blank until checked.'}),
-      f('interests','Detailed targeting interests','list',{wide:true,help:'One interest per line.'}),f('interestsConfirmed','Interest selections checked','check',{help:'Unchecked means unconfirmed, rather than no interests.'}),
+      f('interests','Detailed targeting interests','list',{wide:true,help:'One interest per line.'}),f('interestsConfirmed','Interests checked (leave list empty for broad / no interests)','check',{help:'Check after confirming in Meta, including when no interests are selected.'}),
       f('behaviors','Targeting behaviours','list',{wide:true,help:'One behaviour per line.'}),f('behaviorsConfirmed','Behaviour selections checked','check'),
       f('languages','Languages','list',{help:'One per line. Use All languages only when confirmed.'}),
-      f('placements','Placements','list',{help:'One per line.'}),f('placementsConfirmed','Placements checked','check'),
+      f('placements','Placements','list',{help:'Enter Advantage+ placements, or one manual placement per line.'}),f('placementsConfirmed','Placements checked','check'),
       section('Frequency & verification'),
       f('frequencyCount','Frequency count','number',{step:'1'}),f('frequencyDays','Every N days','number',{step:'1'}),
       f('frequencyMode','Frequency setting type','select',{options:[['','Pending'],['cap','Cap'],['target','Target']]}),
@@ -364,15 +365,26 @@
     }else control='<input type="'+field.type+'"'+attr+' value="'+esc(value)+'"'+(field.type==='number'?' min="'+(field.min==null?0:field.min)+'"'+(field.max?' max="'+field.max+'"':'')+' step="'+(field.step||'1')+'"':'')+(field.placeholder?' placeholder="'+esc(field.placeholder)+'"':'')+'>';
     return '<label for="'+id+'" class="'+(field.wide?'wide ':'')+(field.type==='check'?'check-label':'')+'">'+(field.type==='check'?control+' '+esc(field.label):esc(field.label)+control)+(field.help?'<span class="field-help">'+esc(field.help)+'</span>':'')+'</label>';
   }
-  function openEditor(id) {
+  function renderMissingDetails(){
+    const panel=$('missingDetailsPanel');if(!state||!panel)return;
+    const campaignId=$('campaignFilter').value;
+    const items=(state.missingDetails||[]).filter(item=>{if(!campaignId)return true;if(item.type==='campaigns')return item.id===campaignId;const set=item.type==='adSets'?find('adSets',item.id):find('adSets',find('ads',item.id)?.adSetId);return set?.campaignId===campaignId;});
+    panel.hidden=!items.length;
+    panel.innerHTML='<details><summary>Complete missing details · '+items.length+' record(s)</summary><p>Enter these once from Meta. Future CSV uploads keep details they do not supply. Update them here whenever you change them in Meta. Empty interests or behaviours can be confirmed as none; enter Advantage+ placements or list your manual placements. Model name may be entered as Not applicable.</p>'+items.map(item=>'<p><strong>'+esc(item.name)+'</strong> · '+esc(singular[item.type])+'<br><small>'+item.keys.filter(k=>!k.endsWith('Confirmed')).map(k=>esc(fields(item.type).find(f=>f.key===k)?.label||k)).join(', ')+'</small> <button type="button" data-complete-type="'+esc(item.type)+'" data-complete-id="'+esc(item.id)+'">Complete missing details</button></p>').join('')+'</details>';
+  }
+  $('missingDetailsPanel').addEventListener('click',event=>{const b=event.target.closest('[data-complete-id]');if(!b)return;const old=view;view=b.dataset.completeType;openEditor(b.dataset.completeId,true);view=old;});
+  $('campaignFilter').addEventListener('change',renderMissingDetails);
+  function openEditor(id,missingOnly=false) {
     if(busy||view==='changes')return;
     const record=id?find(view,id):{};
     editing={type:view,id:id||null,conflicted:false};
+    const completion=(state.missingDetails||[]).find(x=>x.type===view&&x.id===id);
+    editing.keys=missingOnly&&completion?completion.keys:null;
     document.querySelectorAll('#recordForm button').forEach(b=>b.disabled=false);
-    $('editorTitle').textContent=(id?'Edit ':'Add ')+singular[view];
-    $('formFields').innerHTML=fields(view).map(field=>field.section?'<div class="form-section">'+esc(field.section)+'</div>':inputMarkup(field,record[field.key])).join('');
+    $('editorTitle').textContent=(editing.keys?'Complete missing details: ':id?'Edit ':'Add ')+(editing.keys?record.name:singular[view]);
+    $('formFields').innerHTML=fields(view).filter(field=>!editing.keys||editing.keys.includes(field.key)).map(field=>field.section?'<div class="form-section">'+esc(field.section)+'</div>':inputMarkup(field,record[field.key])).join('');
     if(view==='results')$('formFields').insertAdjacentHTML('afterbegin','<p class="form-tip">Use the date range and account timezone from your report. Blank means unknown; enter 0 only for a confirmed zero. Saving results does not create an accounting expense.</p>');
-    $('recordForm').elements.reason.value='';
+    $('recordForm').elements.reason.value=editing.keys?'Complete missing setup details manually':'';
     $('reasonWrap').hidden=!id;
     $('recordForm').elements.reason.required=!!id;
     $('archive').hidden=!id;
@@ -391,7 +403,7 @@
   }
   function formRecord(){
     const data={revision:state.revision,reason:$('recordForm').elements.reason.value.trim()||'New marketing record'};
-    fields(editing.type).filter(f=>!f.section).forEach(field=>{
+    fields(editing.type).filter(f=>!f.section&&(!editing.keys||editing.keys.includes(f.key))).forEach(field=>{
       const input=$('recordForm').elements[field.key],value=input.value.trim();
       if(field.type==='check')data[field.key]=input.checked;
       else if(field.type==='number')data[field.key]=value===''?null:Number(value);
