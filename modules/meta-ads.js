@@ -37,7 +37,7 @@ const SCHEMAS = {
     collection:['text',80],creativeTypes:['list',100],
     metaSourceId: ['text',120], adSetId: ['id', true], name: ['text', 200, true], model: ['text', 160],
     format: ['text', 100], description: ['text', 5000], mediaUrls: ['urls'],
-    setupSource:['text',60000],whatsappNumber:['phone'],mediaCount: ['count'], cta: ['text', 150], primaryText: ['text', 10000],
+    assessment:['text',1000],setupSource:['text',60000],whatsappNumber:['phone'],mediaCount: ['count'], cta: ['text', 150], primaryText: ['text', 10000],
     status: ['status'], notes: ['text', 5000]
   },
   results: {
