@@ -22,7 +22,7 @@ function providerError(provider, status, body) {
   if (status === 402 || status === 429 || /quota|credit balance|billing/.test(message)) return prefix + ': quota or billing limit reached. Check the AI account.';
   if (status === 401 || /api.key.*(invalid|expired|not valid)|invalid.*api.key/.test(message) || /api_key_(invalid|expired)/.test(reasons)) return prefix + ': API key is invalid or expired. Update its Railway variable.';
   if (status === 403) return prefix + ': API key lacks permission or has incompatible restrictions.';
-  if (status === 404) return prefix + ': the configured vision model is unavailable for this key.';
+  if (status === 404) return prefix + ': the requested model or API endpoint was not found (HTTP 404). Check the API version and model name.';
   if (status === 400 && /(?:location|country|region).*(?:not supported|unavailable|not available)|not supported.*(?:location|country|region)/.test(message)) return prefix + ': the account or server region is not eligible for this API. Check service availability and account setup.';
   if (status === 400 && /failed_precondition/.test(code)) return prefix + ': an account or project prerequisite is missing (HTTP 400). Check project access, billing and regional availability.';
   if (status === 413 || status === 400 && /(?:payload|request|image).*(?:too large|size.*exceed|size.*limit|dimensions.*limit)|exceed.*(?:byte|token|size|length)|too many (?:images|tokens)/.test(message)) return prefix + ': the request exceeds an image, payload or token limit (HTTP ' + status + '). Use a smaller photo or check the configured model input limits.';
@@ -36,8 +36,10 @@ function safeProviderMessage(body, secrets = []) {
   return message.replace(/AIza[\w-]+|sk-[\w-]+|Bearer\s+\S+|https?:\/\/\S+/gi, '[redacted]').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 500);
 }
 function providerModels(config) {
-  const shared = config.INVENTORY_VISION_MODEL || '';
-  return { google: config.INVENTORY_GEMINI_MODEL || (shared.startsWith('gemini-') ? shared : 'gemini-2.5-flash'), anthropic: config.INVENTORY_ANTHROPIC_MODEL || (shared.startsWith('claude-') ? shared : 'claude-sonnet-4-6') };
+  const shared = String(config.INVENTORY_VISION_MODEL || '').trim(), googleShared = shared.replace(/^models\//, '');
+  // v1beta accepts the bare model ID, including gemini-2.5-flash. Normalize
+  // resource-style configuration once without changing the selected model.
+  return { google: String(config.INVENTORY_GEMINI_MODEL || (googleShared.startsWith('gemini-') ? googleShared : 'gemini-2.5-flash')).trim().replace(/^models\//, ''), anthropic: config.INVENTORY_ANTHROPIC_MODEL || (shared.startsWith('claude-') ? shared : 'claude-sonnet-4-6') };
 }
 function googleModelKey(key, model) { return crypto.createHash('sha256').update(key + ':' + model).digest('hex'); }
 function remember(map, key, value, limit) {
@@ -64,7 +66,7 @@ async function googleVision(model, key, parts, prompt, request, signal) {
       contents: [{ role: 'user', parts: [{ text: prompt }].concat(parts.map(data => ({ inlineData: { mimeType: 'image/jpeg', data } }))) }],
       generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 }
     };
-    const url = interactions ? 'https://generativelanguage.googleapis.com/v1/interactions' : 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
+    const url = interactions ? 'https://generativelanguage.googleapis.com/v1beta/interactions' : 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
     const response = await request(url, { method: 'POST', signal, headers: { 'content-type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body) });
     check(signal);
     const data = await response.json().catch(() => ({})); check(signal);
@@ -107,11 +109,11 @@ async function vision(parts, prompt, config = process.env, request = fetch, opti
     // Compatibility retries share one deadline and the same cancellation signal.
     const timer = setTimeout(cancel, options.timeoutMs || 45000);
     try {
-      let response, body, interactions = false;
+      let response, body, interactions = false, googleModel = '';
       if (useGoogle) {
-        const cacheKey = googleModelKey(google, models.google), model = discoveredModels.get(cacheKey) || models.google;
+        const cacheKey = googleModelKey(google, models.google), model = discoveredModels.get(cacheKey) || models.google; googleModel = model;
         ({ response, body, interactions } = await googleVision(model, google, parts, prompt, request, controller.signal));
-        if (response.status === 404 && !config.INVENTORY_GEMINI_MODEL && !(config.INVENTORY_VISION_MODEL || '').startsWith('gemini-')) {
+        if (response.status === 404 && !config.INVENTORY_GEMINI_MODEL && !String(config.INVENTORY_VISION_MODEL || '').trim().replace(/^models\//, '').startsWith('gemini-')) {
           const available = await request('https://generativelanguage.googleapis.com/v1beta/models', { signal: controller.signal, headers: { 'x-goog-api-key': google } });
           check(controller.signal);
           const list = await available.json().catch(() => ({})); check(controller.signal);
@@ -119,7 +121,7 @@ async function vision(parts, prompt, config = process.env, request = fetch, opti
           // actual response selects the protocol instead of assuming legacy API.
           const replacement = (list.models || []).filter(m => typeof m?.name === 'string' && /^models\/gemini-.*flash/.test(m.name) && !/image|live|audio|preview|lite|tts/.test(m.name)).sort((a, b) => b.name.localeCompare(a.name, undefined, { numeric: true }))[0];
           if (available.ok && replacement) {
-            const selected = replacement.name.replace(/^models\//, '');
+            const selected = replacement.name.replace(/^models\//, ''); googleModel = selected;
             ({ response, body, interactions } = await googleVision(selected, google, parts, prompt, request, controller.signal));
             if (response.ok) remember(discoveredModels, cacheKey, selected, 10);
           }
@@ -132,8 +134,11 @@ async function vision(parts, prompt, config = process.env, request = fetch, opti
         body = await response.json().catch(() => ({})); check(controller.signal);
       }
       if (!response.ok) {
-        const detail = response.status === 400 || response.status === 413 ? safeProviderMessage(body, secrets).slice(0, 200) : '';
-        throw new Error(providerError(provider, response.status, body) + (detail ? ' Provider detail: ' + detail : ''));
+        const providerCode = response.status === 404 ? String(body?.error?.status || body?.error?.code || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 50) : '';
+        const message = [400, 404, 413].includes(response.status) ? safeProviderMessage(body, secrets) : '';
+        const detail = [providerCode, message].filter(Boolean).join(': ').slice(0, 200);
+        const context = useGoogle && response.status === 404 ? ' Request: ' + (interactions ? '/v1beta/interactions' : '/v1beta/models/:generateContent') + '; model ' + googleModel.slice(0, 100) + '.' : '';
+        throw new Error(providerError(provider, response.status, body) + context + (detail ? ' Provider detail: ' + detail : ''));
       }
       const text = useGoogle ? interactions ? interactionText(body, secrets) : (body.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('') : (body.content || []).map(p => p.text || '').join('');
       const start = text.indexOf('{'), end = text.lastIndexOf('}');
