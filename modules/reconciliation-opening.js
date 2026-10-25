@@ -1,5 +1,7 @@
 'use strict';
 
+const { createCutoffDayExtensionProof } = require('./reconciliation-cutoff-extension');
+
 function amount(value) {
   const parsed = parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -144,8 +146,10 @@ function verifiedEarlierReconciliationAnchor(book = {}, beforeValue, options = {
     && cents(item.closing) !== cents(lastClosing))) {
     return conflict('The saved last reconciliation conflicts with its own historical closing evidence. Review that historical balance before finalizing.');
   }
+  const extendsCutoffDay = createCutoffDayExtensionProof(book);
   const remaining = atCutoff.filter(item => !atCutoff.some(other => other !== item
-    && reconciliationRecordSupersedes(other.record, item.record, options)));
+    && (reconciliationRecordSupersedes(other.record, item.record, options)
+      || extendsCutoffDay(other.record, item.record))));
   // A stale last snapshot can refer to a proven superseded partial import. It
   // must not defeat the complete statement, even if its timestamp is newer.
   const lastSuperseded = lastMatches.length > 0 && lastMatches.every(item => !remaining.includes(item));
