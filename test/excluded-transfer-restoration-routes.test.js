@@ -88,8 +88,17 @@ test('real helpers preview a shared 7883 PERSONAL row without writing or restori
 
 for (const role of ['admin', 'manager', 'claimant']) for (const route of [previewRoute, applyRoute]) test(role + ' cannot ' + route.split('/').at(-1) + ' an Owner-excluded transfer even with personal accounting permission', async () => {
   reset(); const before = bytes();
-  const result = await dispatch(route, { role, username: 'prashant', permissions: { personalAccounting: true }, body: { ...intent, confirm: true, fingerprint: 'a'.repeat(64), reason } });
+  const result = await dispatch(route, { role, username: role === 'admin' ? 'another-admin' : 'prashant', permissions: { personalAccounting: true }, body: { ...intent, confirm: true, fingerprint: 'a'.repeat(64), reason } });
   assert.equal(result.status, 403, JSON.stringify(result.body)); assert.equal(bytes(), before);
+});
+
+test('Prashant can preview and restore the exact excluded transfer without creating a duplicate', async () => {
+  const before = reset(), actor = { role: 'admin', username: 'prashant', permissions: { personalAccounting: true } };
+  const reviewed = await preview(actor); assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+  const result = await apply(reviewed.body.plan.fingerprint, actor); assert.equal(result.status, 200, JSON.stringify(result.body));
+  const after = read(); assert.equal(after.transfers.length, 1); assert.equal(after.transfers[0].accountingExcluded, false);
+  assert.equal(after.bankReconciliationDrafts[draftId].resolutions['bank-0'].appId, transferId);
+  assert.equal(after.transfers[0].restorationHistory.at(-1).by, 'prashant'); unchangedFinancialRecords(before, after);
 });
 
 test('Owner apply restores one existing transfer and stages its exact link without changing other financial data', async () => {
@@ -147,10 +156,10 @@ test('raw preview and successful apply do not run unrelated migrations or catego
   const after = read(); unchangedFinancialRecords(raw, after); assert.deepEqual(after.oneTimeMigrations, {}); assert.deepEqual(after.syntheticUnnormalizedMarker, raw.syntheticUnnormalizedMarker);
 });
 
-test('non-Owner denial happens before reading an invalid accounting file', async () => {
+test('unauthorized denial happens before reading an invalid accounting file', async () => {
   reset(); fs.writeFileSync(file, '{ synthetic invalid json'); const before = bytes();
   for (const route of [previewRoute, applyRoute]) {
-    const denied = await dispatch(route, { role: 'admin', username: 'prashant', permissions: { personalAccounting: true }, body: { ...intent, fingerprint: 'a'.repeat(64), confirm: true, reason } });
+    const denied = await dispatch(route, { role: 'admin', username: 'another-admin', permissions: { personalAccounting: true }, body: { ...intent, fingerprint: 'a'.repeat(64), confirm: true, reason } });
     assert.equal(denied.status, 403); assert.equal(bytes(), before);
   }
 });

@@ -2638,6 +2638,7 @@ router.get('/api/expenses/config', (req, res) => {
     canManageCategories: !claimantPolicy.claimantOnly(req)&&canManageCategoriesAndVendors(req),
     canManageVendors: !claimantPolicy.claimantOnly(req)&&canManageCategoriesAndVendors(req),
     isOwner: rolesOfReq(req).includes('owner'),
+    isPrashant: isPrashant(req),
     canManageRentals: isOwner(req)||isPrashant(req),
     canManagePersonalAccounting: personalView,
     canVerifyCounterCash: !claimantPolicy.claimantOnly(req)&&(isOwner(req)||isPrashant(req)),
@@ -5976,7 +5977,7 @@ function excludedTransferRestorationProtection(s,transfer){
   return '';
 }
 registerExcludedTransferRestoration(router,{
-  loadStore:readExcludedTransferRestorationStore,saveStore:state=>saveStore(state,{skipCategoryNormalization:true}),isOwner,canAccessBankDraft,
+  loadStore:readExcludedTransferRestorationStore,saveStore:state=>saveStore(state,{skipCategoryNormalization:true}),isOwner,canRestoreExcludedTransfer:req=>isOwner(req)||(isAdmin(req)&&isPrashant(req)),canAccessBankDraft,
   canAccessAccount:(req,state,account)=>allowedTransferAccount('PERSONAL',account)===account&&canAccessBankReconciliation(req,state,isSharedBankReconciliationAccount(account)?'SAMAST':'PERSONAL',account),
   helpers:{bankReference:personalTransferBankReference,bankSignature:reconciliationBankStrongSignature,bookKey:bankStatementBookKey,postingNature:reconciliationPostingNature,transferCandidate:bankConfirmedPersonalTransferCandidateFromTransfer,resolutionCandidate:bankConfirmedPersonalTransferCandidateFromResolution,protectionError:excludedTransferRestorationProtection,movements:appBankMovements}
 });

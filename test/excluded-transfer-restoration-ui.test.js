@@ -63,12 +63,19 @@ test('Owner gets one restore action on an unmatched PERSONAL bank row without au
   assert.equal(ui.context.reviewClosed, true); assert.equal(ui.dialogs.length, 1); assert.equal(ui.calls.length, 0);
 });
 
-test('delegated personal-account administrators see an Owner-only hint, not a restore action', () => {
+test('delegated personal-account administrators see an Owner-or-Prashant hint, not a restore action', () => {
   const ui = harness({ cfg: { isOwner: false } }); ui.context.openBankReview('bank-0');
   assert.equal(ui.nodes.bankReviewActions.children.length, 1);
   assert.equal(ui.nodes.bankReviewActions.children[0].tagName, 'P');
-  assert.match(ui.nodes.bankReviewActions.children[0].textContent, /Owner.*original ID.*Do not create a replacement/);
+  assert.match(ui.nodes.bankReviewActions.children[0].textContent, /Owner or Prashant.*original ID.*Do not create a replacement/);
   ui.context.openExcludedTransferRestore('bank-0'); assert.equal(ui.dialogs.length, 0); assert.equal(ui.calls.length, 0);
+});
+
+test('Prashant gets the same exact-transfer restoration action as the Owner', () => {
+  const ui = harness({ cfg: { isOwner: false, isPrashant: true } }); ui.context.openBankReview('bank-0');
+  assert.equal(ui.nodes.bankReviewActions.children.length, 1);
+  assert.equal(ui.nodes.bankReviewActions.children[0].textContent, 'Restore excluded transfer');
+  ui.nodes.bankReviewActions.children[0].onclick(); assert.equal(ui.dialogs.length, 1); assert.equal(ui.calls.length, 0);
 });
 
 test('unprivileged users, business-only rows and already matched rows do not get a restore button', () => {
