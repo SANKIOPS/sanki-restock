@@ -1776,9 +1776,15 @@ function ledgerMeta(s, name) {
   const category=sankiCategories.metadata(s,name);
   return { name, nature: 'SANKI', group:category&&category.group||custom.group||'', type: ov.type || custom.type || defaultType(name) };
 }
-// The category picker = built-in BUSINESS ledgers ∪ admin-approved custom ones.
+// Keep the shared reviewed catalogue, with approved PERSONAL-only custom
+// classifications reusable inside that entity (never in the global list).
 function pickableLedgers(s, nature) {
-  if(sankiCategories.active(s))return sankiCategories.catalog(s).map(x=>ledgerMeta(s,x.name)).sort((a,b)=>a.group.localeCompare(b.group)||a.name.localeCompare(b.name));
+  if(sankiCategories.active(s)){
+    const base=sankiCategories.catalog(s).map(x=>ledgerMeta(s,x.name)).sort((a,b)=>a.group.localeCompare(b.group)||a.name.localeCompare(b.name));
+    if(nature!=='PERSONAL')return base;
+    const plan=sankiCategories.plan,retiredNames=[...LEDGERS,...PERSONAL_CATEGORIES,...plan.removed,...plan.historicalOnly,...Object.keys(plan.mapping),...Object.keys(plan.aliases)];
+    return require('./personal-category-choices').personalCategoryChoices(s,{base,retiredNames,types:TYPES});
+  }
   const names = LEDGERS.filter(isBusinessLedger).concat(PERSONAL_CATEGORIES,Object.keys(s.customLedgers || {}));
   const seen = {};
   return names.filter(n => (seen[n] ? false : (seen[n] = true)))
@@ -2596,7 +2602,7 @@ router.get('/api/expenses/config', (req, res) => {
   res.json({
     success: true,
     ledgers: pickableLedgers(s),
-    ledgersByNature: Object.fromEntries(allowed.map(n=>[n,pickableLedgers(s,n)])),
+    ledgersByNature: Object.fromEntries(allowed.map(n=>[n,pickableLedgers(s,n==='PERSONAL'&&!personalView?undefined:n)])),
     categoryGroups: categoryGroups(s),
     vendors: vendorsByNature.SANKI,
     vendorsByNature,
