@@ -524,7 +524,15 @@
     <div id="bankRentalEntity" class="hint" style="margin-bottom:12px"></div>
     <div class="grid">
       <div class="fld full"><label>Tenant / rental floor — required</label><select id="rentalReconTenancy"></select><div class="hint">Pulled directly from the Rental Income register. This transaction is linked only to the selected tenant.</div></div>
-      <div class="fld full"><label>Record this money as</label><select id="rentalReconKind"><option value="rent">Rent received</option><option value="security">Security deposit received</option></select></div>
+      <div class="fld full"><label>Record this money as</label><select id="rentalReconKind"><option value="rent">Rent received</option><option value="security">Security deposit received</option><option value="rent_security">Rent + security deposit received together</option></select></div>
+      <div class="fld full" id="rentalReconSplit" style="display:none">
+        <div class="grid">
+          <div class="fld"><label for="rentalReconRentAmount">Rent portion ₹ — required</label><input id="rentalReconRentAmount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Enter rent amount"></div>
+          <div class="fld"><label for="rentalReconSecurityAmount">Security deposit portion ₹ — required</label><input id="rentalReconSecurityAmount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Enter security amount"></div>
+        </div>
+        <div id="rentalReconSplitSummary" class="msg" role="status" aria-live="polite"></div>
+        <div class="hint">Enter the actual split. Both portions must be positive and together equal the original bank receipt exactly. Rent follows the existing oldest-rent / tenant-advance allocation; security remains a separate refundable liability, not rental income. The bank is credited only once.</div>
+      </div>
       <div class="fld full"><label>Reconciliation remark — required</label><textarea id="rentalReconNote" rows="3" placeholder="Reference or explanation for this tenant-linked transaction"></textarea></div>
     </div>
     <section id="bankRentalOpeningReview" class="card" style="display:none;padding:12px" aria-labelledby="bankRentalOpeningHeading">
@@ -627,7 +635,7 @@
 <script src="/expense-refunds.js?v=2b2b3987b283"></script>
   <script src="/expense-payment-credits.js?v=c6f1629604f4"></script>
   <script src="/expense-loans.js?v=7dad67caab1e"></script>
-  <script src="/reconciliation-status.js?v=5c162ba56d8c"></script>
+  <script src="/reconciliation-status.js?v=146cfb1cbcc1"></script>
   <script src="/credit-card-review.js?v=20261025-merchant-once-discard-1"></script>
   <script src="/credit-card-payment-corrections.js?v=faa422487ffe"></script>
   <script src="/own-account-transfers.js?v=20261023-own-accounts-1"></script>
@@ -827,7 +835,7 @@
     function ashpreetPaymentAccounts(e){return String(e.createdBy||e.claimant||'').toLowerCase()==='arshpreet'?((cfg.claimantPaymentAccountsByUser||{}).arshpreet||[]):[];}
 
     // ── CREDIT CARDS: statement-first classification and liability ledgers ──
-    var ccReviewSubmitting=false,ccPaymentSubmitting=false;
+    var ccReviewSubmitting=false,ccPaymentSubmitting=false,ccArchivedViewId='';
     function ccAllPayingAccounts(){var out=[];(cfg.approvalNatures||cfg.natures||[]).forEach(function(n){(payingAccountsForNature(n)||[]).forEach(function(a){if(out.indexOf(a)<0)out.push(a);});});return out;}
     function renderCreditCards(){
       el('panel').innerHTML='<div class="card"><b>Loading credit cards and statement logs…</b></div>';
@@ -838,10 +846,11 @@
       if(el('panel'))el('panel').dataset.reconciliationDirty='';
       if(!ccData||!ccData.success){el('panel').innerHTML='<div class="msg err">Credit-card accounting is unavailable.</div>';return;}
       if(!ccReviewId)ccReviewId=new URLSearchParams(location.search).get('statement')||'';
-      var cards=ccData.cards||[],review=ccStatements.find(function(s){return s.id===ccReviewId;})||ccStatements.find(function(s){return s.status==='review';}),total=cards.reduce(function(n,c){return n+Number(c.outstanding||0);},0),unreviewed=ccStatements.filter(function(s){return s.status==='review';}).length;
+      var cards=ccData.cards||[],review=ccStatements.find(function(s){return s.id===ccReviewId&&(s.status!=='archived'||ccArchivedViewId===s.id);})||ccStatements.find(function(s){return s.status==='review';}),total=cards.reduce(function(n,c){return n+Number(c.outstanding||0);},0),unreviewed=ccStatements.filter(function(s){return s.status==='review';}).length;
       var cardTiles=cards.map(function(c){return '<details class="claim-card"><summary><div class="claim-main"><div class="claim-desc">'+esc(c.displayName)+'<div class="claim-row-meta">'+esc(c.cardholder||'No cardholder')+' · '+esc(c.issuingBank||'Bank not set')+' · due day '+c.dueDay+'</div></div><div class="claim-amount">'+fmt(c.outstanding)+'<div class="muted" style="font-size:10px">outstanding</div></div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Limit '+fmt(c.creditLimit)+'</span><span>Cycle day '+c.cycleDay+'</span><span>'+c.statementCount+' statements</span>'+(c.ownerOnly?'<span>Restricted PERSONAL access</span>':'')+(c.active===false?'<span>Inactive</span>':'')+'</div><div class="expense-actions"><button class="btn mini ghost" onclick="loadCreditCardLedger(\''+c.id+'\')">View ledger</button>'+(ccData.isOwner?'<button class="btn mini ghost" onclick="editCreditCard(\''+c.id+'\')">Edit card settings</button>':'')+'</div><div id="ccledger_'+c.id+'"></div></div></details>';}).join('')||'<div class="muted">No cards created yet.</div>';
       var cardOpts=cards.map(function(c){return '<option value="'+c.id+'">'+esc(c.displayName)+'</option>';}).join(''),categories=(cfg.ledgers||[]).map(function(l){return '<option value="'+esc(l.name)+'">';}).join('');
-      var logs=ccStatements.map(function(s){return '<details class="claim-card"><summary><div class="claim-main"><div class="claim-desc">'+esc(s.id)+' · '+esc(s.cardName||'Card')+'<div class="claim-row-meta">'+esc(s.periodFrom||'')+' to '+esc(s.periodTo||'')+' · '+s.rows.length+' transactions · '+esc(s.status)+' · '+(s.kind==='unbilled'?'Unbilled transactions':'Generated statement')+'</div></div><div class="claim-amount">'+(s.status==='finalized'?'✓':'Review')+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Uploaded '+esc(String(s.uploadedAt||'').replace('T',' ').slice(0,16))+'</span><span>By '+esc(s.uploadedBy||'')+'</span><span>'+esc(s.originalName||'')+'</span></div><div class="expense-actions">'+(s.storedName?'<a class="btn mini ghost" href="'+s.fileUrl+'" target="_blank">Open stored statement</a>':'')+(s.status==='review'?'<button class="btn mini primary" onclick="openCreditCardReview(\''+s.id+'\')">Classify &amp; confirm</button>':'<button class="btn mini ghost" onclick="openCreditCardReview(\''+s.id+'\')">View finalized rows</button> <button class="btn mini ghost" onclick="reopenCreditCardStatement(\''+s.id+'\')">Reopen with reason</button>')+'</div></div></details>';}).join('')||'<div class="muted">No statement logs yet.</div>';
+      var logs=ccStatements.filter(function(s){return s.status!=='archived';}).map(renderCreditCardStatementLog).join('')||'<div class="muted">No active statement logs.</div>',archived=ccStatements.filter(function(s){return s.status==='archived';});
+      if(archived.length)logs+='<details class="cc-archived-logs"><summary>Archived duplicate reviews ('+archived.length+')</summary><p class="hint">Retained evidence only, excluded from pending review counts. Original statements and posted transactions are unchanged.</p>'+archived.map(renderCreditCardStatementLog).join('')+'</details>';
       var rules=(ccData.rules||[]).sort(function(a,b){return String(a.pattern).localeCompare(String(b.pattern));}).map(function(r){return '<span class="tag">'+esc(r.pattern)+' → '+esc(r.category)+'</span>';}).join(' '),dues=(ccData.settlementAllocations||[]).filter(function(x){return x.status==='due';}).map(function(x){return '<tr><td>'+esc(x.date)+'</td><td>'+esc(x.cardName)+'</td><td>'+esc(x.beneficiaryNature)+'</td><td>'+esc(x.payerNature)+'</td><td class="r">'+fmt(x.amount)+'</td><td>'+esc(x.note)+'</td></tr>';}).join('');
       el('panel').innerHTML='<datalist id="ccCategories">'+categories+'</datalist><div class="stats"><div class="stat"><div class="k">Cards</div><div class="v">'+cards.length+'</div></div><div class="stat"><div class="k">Total outstanding</div><div class="v">'+fmt(total)+'</div></div><div class="stat"><div class="k">Statements awaiting review</div><div class="v">'+unreviewed+'</div></div><div class="stat"><div class="k">Learned merchant rules</div><div class="v">'+(ccData.rules||[]).length+'</div></div></div>'+ 
         '<div class="dash-grid"><div class="card"><h3 style="margin-top:0">Credit-card accounts</h3>'+cardTiles+'</div><div class="card"><h3 id="cc_form_title" style="margin-top:0">Add credit card</h3><input id="cc_id" type="hidden"><div class="grid"><div class="fld"><label>Card name</label><input id="cc_name" placeholder="e.g. HDFC Regalia"></div><div class="fld"><label>Last four digits</label><input id="cc_last4" maxlength="4"></div><div class="fld"><label>Cardholder</label><input id="cc_holder"></div><div class="fld"><label>Issuing bank</label><input id="cc_bank"></div><div class="fld"><label>Statement cycle day</label><input id="cc_cycle" type="number" min="1" max="31"><div class="hint">Day the monthly statement is generated.</div></div><div class="fld"><label>Payment due day</label><input id="cc_due" type="number" min="1" max="31"><div class="hint">Day payment is normally due.</div></div><div class="fld"><label>Credit limit ₹</label><input id="cc_limit" type="number"></div><div class="fld"><label>Opening outstanding ₹</label><input id="cc_opening" type="number"><div id="cc_opening_hint" class="hint"></div></div><label><input id="cc_owner" type="checkbox"> Restricted PERSONAL visibility</label><label><input id="cc_active" type="checkbox" checked> Active card</label></div><div class="row-actions"><button class="btn primary" id="cc_add">Create card account</button><button class="btn ghost" id="cc_cancel_edit" style="display:none">Cancel edit</button></div><div class="hint">Editing card settings does not change dates or transactions in previously uploaded statements.</div></div></div>'+
@@ -866,10 +875,11 @@
       return '<details class="claim-card cc-bank-notices" open><summary><b>Bank notices — no money movement ('+notices.length+')</b></summary><p class="hint">These entries are retained from the original statement for review. They do not create an expense, refund, card repayment or bank movement, and are separate from the transaction totals below.</p><div style="overflow:auto"><table><thead><tr><th>Date</th><th>Card ending</th><th>Reference</th><th>Bank notice</th><th>INR amount</th><th>Accounting effect</th></tr></thead><tbody>'+notices.map(function(notice){notice=notice||{};return '<tr><td>'+esc(notice.date||'—')+'</td><td>'+esc(notice.cardLast4||'—')+'</td><td>'+esc(notice.reference||'—')+'</td><td>'+esc(notice.description||'Bank notice')+'</td><td>'+fmt(notice.amount||0)+'</td><td>'+esc(notice.explanation||'No money movement; retained as statement evidence only.')+'</td></tr>';}).join('')+'</tbody></table></div></details>';
     }
     function renderCreditCardReview(st){
+      if(st.status==='archived')return renderArchivedCreditCardReview(st);
       var rows=(st.rows||[]).map(function(r,i){return '<tr class="ccrow" data-id="'+esc(r.id)+'">'+CreditCardReview.rowCells(r,i,st,ccData.natures||[],fmt)+'</tr>';}).join('');
       var sums=st.totals||{credit:(st.rows||[]).reduce(function(n,r){return n+Number(r.credit||0);},0),debit:(st.rows||[]).reduce(function(n,r){return n+Number(r.debit||0);},0)},net=sums.debit-sums.credit,summary=st.summary||{},amountDue=st.kind!=='unbilled'&&summary.closingBalance!=null?'<span>Statement amount due <b>'+fmt(summary.closingBalance)+'</b></span>':'',matched=(st.rows||[]).filter(function(r){return r.replaces||r.duplicateOf||r.supersededBy;}).length;
-      var actions=st.status==='review'?'<div class="row-actions"><button class="btn primary mini" id="cc_save_review">Save review</button><button class="btn ghost mini" id="cc_discard_review"'+(st.canDiscardReview===false?' disabled':'')+'>Discard saved review</button><button class="btn green mini" id="cc_finalize">Finalize and post to ledgers</button></div>'+(st.canDiscardReview===false?'<p class="hint">'+esc(st.discardReviewBlockedReason||'This review is protected and cannot be discarded.')+'</p>':''):'<div class="msg ok">Finalized '+esc(String(st.finalizedAt||'').replace('T',' ').slice(0,16))+'</div>';
-      var onceHint=(st.status==='review'?'<p class="hint">The first choice for each field on a merchant’s first row fills untouched matching entries once in this statement. Later edits affect only that row. Use Save review to keep your choices.</p>':'')+renderCreditCardBankNotices(st.summary);
+      var actions=st.status==='review'?'<div class="row-actions"><button class="btn primary mini" id="cc_save_review">Save review</button><button class="btn ghost mini" id="cc_discard_review"'+(st.canDiscardReview===false?' disabled':'')+'>Discard saved review</button>'+(st.canArchiveReview===true?'<button class="btn ghost mini" onclick="archiveCreditCardReview(\''+esc(st.id)+'\',false)">Archive duplicate review</button>':'')+'<button class="btn green mini" id="cc_finalize">Finalize and post to ledgers</button></div>'+(st.canDiscardReview===false?'<p class="hint">'+esc(st.discardReviewBlockedReason||'This review is protected and cannot be discarded.')+'</p>':''):'<div class="msg ok">Finalized '+esc(String(st.finalizedAt||'').replace('T',' ').slice(0,16))+'</div>';
+      var onceHint=(st.status==='review'?'<p class="hint">The first choice for each field on a merchant’s first row fills untouched matching entries once in this statement. Later edits affect only that row. Use Save review to keep your choices.</p><p class="hint">Discard saved review resets choices but keeps this review pending. Archive duplicate review removes a fully verified duplicate from pending lists while retaining its choices and evidence.</p>':'')+renderCreditCardBankNotices(st.summary);
       return '<div class="card cc-review" data-statement-id="'+esc(st.id)+'" data-review-revision="'+Number(st.reviewRevision||0)+'">'+ReconciliationStatus.card(st)+'<h3>Statement review · '+esc(st.id)+' <small>'+st.rows.length+' transactions · '+(st.kind==='unbilled'?'Unbilled':'Generated statement')+'</small></h3><p class="hint">Review only: saving does not post or finalize anything. Repayments settle card liability; only genuine expense refunds reduce expenses. Unconfirmed credits and repayment sources must remain pending.</p>'+onceHint+'<div style="overflow:auto"><table class="cc-review-table"><thead><tr><th>#</th><th>Date</th><th>Merchant</th><th>Narration</th><th>Credit (CR)</th><th>Debit (DR)</th><th>Classification</th><th>Type</th><th>Category</th><th>Entity</th><th>Channel / settlement details</th></tr></thead><tbody>'+rows+'</tbody><tfoot><tr><th colspan="4">Transaction totals</th><th class="r">'+fmt(sums.credit)+'</th><th class="r">'+fmt(sums.debit)+'</th><th colspan="5"></th></tr></tfoot></table></div><div class="claim-meta" style="margin-top:8px"><span>Card balance movement (DR − CR), not expenses <b>'+fmt(net)+'</b></span>'+amountDue+'</div>'+(matched?'<p class="hint">'+matched+' overlapping transaction(s) linked automatically; each expense counts once.</p>':'')+actions+'</div>';
     }
     window.editCreditCard=function(id){var c=(ccData.cards||[]).find(function(x){return x.id===id;});if(!c||!ccData.isOwner)return;el('cc_id').value=c.id;el('cc_name').value=c.name||'';el('cc_last4').value=c.last4||'';el('cc_holder').value=c.cardholder||'';el('cc_bank').value=c.issuingBank||'';el('cc_cycle').value=c.cycleDay||'';el('cc_due').value=c.dueDay||'';el('cc_limit').value=c.creditLimit||'';el('cc_opening').value=c.openingOutstanding||0;el('cc_opening').readOnly=true;el('cc_opening_hint').textContent='Protected while editing because it affects the historical card balance.';el('cc_owner').checked=!!c.ownerOnly;el('cc_active').checked=c.active!==false;el('cc_form_title').textContent='Edit '+c.displayName;el('cc_add').textContent='Save card settings';el('cc_cancel_edit').style.display='';el('cc_form_title').scrollIntoView({behavior:'smooth',block:'center'});};
@@ -898,9 +908,33 @@
         ccReviewId=id;setMsg('Saved review discarded. The original statement is retained; no accounting records or reconciliations were changed.',true);renderCreditCards();
       }).catch(function(e){setMsg(e.message,false);}).finally(function(){ccSetReviewBusy(false);});
     }
+    function renderCreditCardStatementLog(s){
+      var archived=s.status==='archived';
+      return '<details class="claim-card"><summary><div class="claim-main"><div class="claim-desc">'+esc(s.id)+' · '+esc(s.cardName||'Card')+'<div class="claim-row-meta">'+esc(s.periodFrom||'')+' to '+esc(s.periodTo||'')+' · '+s.rows.length+' transactions · '+esc(s.status)+' · '+(s.kind==='unbilled'?'Unbilled transactions':'Generated statement')+'</div></div><div class="claim-amount">'+(archived?'Archived':s.status==='finalized'?'✓':'Review')+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Uploaded '+esc(String(s.uploadedAt||'').replace('T',' ').slice(0,16))+'</span><span>By '+esc(s.uploadedBy||'')+'</span><span>'+esc(s.originalName||'')+'</span></div><div class="expense-actions">'+(s.storedName?'<a class="btn mini ghost" href="'+esc(s.fileUrl)+'" target="_blank">Open stored statement</a>':'')+(archived?'<button class="btn mini ghost" onclick="openCreditCardReview(\''+esc(s.id)+'\')">View retained duplicate review</button>':s.status==='review'?'<button class="btn mini primary" onclick="openCreditCardReview(\''+esc(s.id)+'\')">Classify &amp; confirm</button>':'<button class="btn mini ghost" onclick="openCreditCardReview(\''+esc(s.id)+'\')">View finalized rows</button> <button class="btn mini ghost" onclick="reopenCreditCardStatement(\''+esc(s.id)+'\')">Reopen with reason</button>')+'</div></div></details>';
+    }
+    function renderArchivedCreditCardReview(st){
+      var a=st.reviewArchive||{},rows=(st.rows||[]).map(function(r){return '<tr><td>'+esc(r.date)+'</td><td>'+esc(r.narration)+'</td><td>'+fmt(r.amount)+'</td><td>'+esc(r.category||'—')+'</td><td>'+esc(r.duplicateOf&&r.duplicateOf.statementId||'—')+'</td></tr>';}).join('');
+      return '<div class="card cc-review" data-statement-id="'+esc(st.id)+'">'+ReconciliationStatus.card(st)+'<h3>Retained duplicate review · '+esc(st.id)+'</h3><p class="hint">Archived by '+esc(a.archivedBy||'')+' on '+esc(a.archivedAt||'')+' · '+esc(a.reason||'')+'. Saved choices and uploaded evidence are retained. Nothing has been posted or reversed.</p><table><thead><tr><th>Date</th><th>Original narration</th><th>Amount</th><th>Saved category</th><th>Original statement</th></tr></thead><tbody>'+rows+'</tbody></table><button class="btn ghost mini" onclick="archiveCreditCardReview(\''+esc(st.id)+'\',true)"'+(st.canRestoreReview===true?'':' disabled')+'>Restore duplicate review</button>'+(st.canRestoreReview===true?'':'<p class="hint">'+esc(st.restoreReviewBlockedReason||'Restore requires verified original sources and current access.')+'</p>')+'</div>';
+    }
+    function archiveCreditCardReview(id,restore){
+      if(ccReviewSubmitting)return;
+      if(ccCandidateRefreshBusy()||el('panel')&&el('panel').dataset.reconciliationDirty==='true'){setMsg('Save or finish your unsaved review changes before archiving or restoring. Nothing was changed.',false);return;}
+      var st=ccStatements.find(function(s){return s.id===id;}),expected=restore?'archived':'review',permission=restore?'canRestoreReview':'canArchiveReview';
+      if(!st||st.status!==expected||st[permission]!==true){setMsg(st&&(restore?st.restoreReviewBlockedReason:st.archiveReviewBlockedReason)||'This duplicate review is protected.',false);return;}
+      var reason=prompt((restore?'Restore':'Archive')+' duplicate review '+id+' — reason (10 to 2,000 characters). Saved choices, original statements, uploaded files and posted transactions are retained.');
+      if(reason===null)return;reason=reason.trim();
+      if(reason.length<10||reason.length>2000){setMsg('Enter a reason between 10 and 2,000 characters.',false);return;}
+      if(!confirm((restore?'Restore '+id+' to the pending review list?':'Archive '+id+' from the active and pending lists?')+' No saved choices, original statement, accounting entry or reconciliation will be deleted or reversed.'))return;
+      var revision=ccReviewRevision(id),operation=restore?'restore':'archive';ccSetReviewBusy(true);
+      return api('/api/expenses/credit-cards/statements/'+encodeURIComponent(id)+'/'+operation+'-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reviewRevision:revision,reason:reason})}).then(function(d){
+        if(!d.success)throw new Error(d.error||'Could not change the duplicate review.');
+        if(!d.statement||d.statement.id!==id||d.statement.cardId!==st.cardId||d.statement.status!==(restore?'review':'archived')||d.statement.reviewRevision!==revision+1)throw new Error('The archive response could not be verified. Refresh before continuing; do not repeat the request.');
+        ccReviewId=restore?id:'';ccArchivedViewId='';setMsg(restore?'Duplicate review restored with its saved choices. No accounting records changed.':'Duplicate review archived. Saved choices and evidence are retained; no accounting records changed.',true);renderCreditCards();
+      }).catch(function(error){setMsg(error.message,false);}).finally(function(){ccSetReviewBusy(false);});
+    }
     function saveCreditCardReview(id){if(ccReviewSubmitting)return;if(ccCandidateRefreshBusy()){setMsg('Wait for the existing-payment refresh to finish. Your review is unchanged.',false);return;}var rows=ccReviewRows(),reviewRevision=ccReviewRevision(id);ccSetReviewBusy(true);api('/api/expenses/credit-cards/statements/'+encodeURIComponent(id)+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:rows,reviewRevision:reviewRevision})}).then(function(d){if(!d.success)throw new Error(d.error||'Could not save the statement review.');setMsg('Statement review saved. No ledger entries posted or finalized.',true);renderCreditCards();}).catch(function(e){setMsg(e.message,false);}).finally(function(){ccSetReviewBusy(false);});}
     function finalizeCreditCardStatement(id){if(ccReviewSubmitting)return;if(ccCandidateRefreshBusy()){setMsg('Wait for the existing-payment refresh to finish. Your review is unchanged.',false);return;}if(!confirm('Finalize this reviewed statement and post its verified rows? Genuine expenses/refunds affect Results; repayments settle liability only and never create another bank withdrawal. Unconfirmed credits and settlement sources will block finalization.'))return;var rows=ccReviewRows(),reviewRevision=ccReviewRevision(id);ccSetReviewBusy(true);api('/api/expenses/credit-cards/statements/'+encodeURIComponent(id)+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:rows,reviewRevision:reviewRevision})}).then(function(x){if(!x.success)throw new Error(x.error||'Could not save the statement review.');if(!x.statement||!Number.isInteger(x.statement.reviewRevision))throw new Error('The saved review revision was not returned. Refresh before finalization.');var saved=ccStatements.find(function(s){return s.id===id;});if(saved)saved.reviewRevision=x.statement.reviewRevision;return api('/api/expenses/credit-cards/statements/'+encodeURIComponent(id)+'/finalize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reviewRevision:x.statement.reviewRevision})});}).then(function(d){if(!d.success)throw new Error(d.error||'Could not finalize the statement.');setMsg('Statement finalized. Verified expenses/refunds and liability settlements posted without duplicate bank entries.',true);ccReviewId='';renderCreditCards();}).catch(function(e){setMsg(e.message,false);}).finally(function(){ccSetReviewBusy(false);});}
-    window.openCreditCardReview=function(id){if(ccReviewSubmitting){setMsg('Wait for the current statement request to finish.',false);return;}ccReviewId=id;drawCreditCards();attachCardCorrectionButtons();};
+    window.openCreditCardReview=function(id){if(ccReviewSubmitting){setMsg('Wait for the current statement request to finish.',false);return;}ccReviewId=id;ccArchivedViewId=ccStatements.some(function(s){return s.id===id&&s.status==='archived';})?id:'';drawCreditCards();attachCardCorrectionButtons();};
     window.openCreditCardPaymentCorrections=function(id){if(ccReviewSubmitting||ccPaymentSubmitting||el('panel')&&el('panel').dataset.reconciliationDirty==='true'){setMsg('Finish or discard the current unsaved review before correcting a payment. No records have changed.',false);return;}CreditCardPaymentCorrections.open({cardId:id,api:api,onApplied:function(){renderCreditCards();}});};
     window.reopenCreditCardStatement=function(id){var reason=prompt('Reason for reopening this finalized statement:')||'';if(!reason.trim())return;api('/api/expenses/credit-cards/statements/'+id+'/reopen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:reason.trim()})}).then(function(d){if(!d.success){setMsg(d.error,false);return;}ccReviewId=id;setMsg('Statement reopened. Its prior card-category postings were reversed and the source file remains in Statement Logs.',true);renderCreditCards();});};
     window.loadCreditCardLedger=function(id){api('/api/expenses/credit-cards/'+id+'/ledger').then(function(d){var host=el('ccledger_'+id);if(!d.success){host.textContent=d.error;return;}var movements=d.entries.filter(function(x){return x.id!=='OPENING';}),debits=movements.reduce(function(total,x){return total+(Number(x.debit)||0);},0),credits=movements.reduce(function(total,x){return total+(Number(x.credit)||0);},0);host.innerHTML='<div class="claim-meta"><b>Outstanding '+fmt(d.outstanding)+'</b></div><table><thead><tr><th>Date</th><th>Description</th><th>Debit</th><th>Credit/payment</th><th>Balance</th></tr></thead><tbody>'+d.entries.map(function(x){return '<tr><td>'+esc(x.date||'Opening')+'</td><td>'+esc(x.description)+'</td><td>'+fmt(x.debit)+'</td><td>'+fmt(x.credit)+'</td><td>'+fmt(x.balance)+'</td></tr>';}).join('')+'</tbody><tfoot><tr><th colspan="2">Ledger totals</th><th>'+fmt(debits)+'</th><th>'+fmt(credits)+'</th><th>'+fmt(d.outstanding)+'</th></tr></tfoot></table>';});};
@@ -2902,7 +2936,7 @@
         renderBankReconciliation(d);showBankEntityTagEditor(rowId);el('bankEntityTagMsg').className='msg ok';el('bankEntityTagMsg').textContent='Entity tag saved with its audit reason.';
       }).catch(function(error){button.disabled=false;el('bankEntityTagMsg').className='msg err';el('bankEntityTagMsg').textContent=error&&error.message||'Could not save the entity tag.';});
     });
-    var bankRentalRowId='',bankRentalLoadGeneration=0,bankRentalSnapshot=null,bankRentalOpeningBusy=false;
+    var bankRentalRowId='',bankRentalLoadGeneration=0,bankRentalSnapshot=null,bankRentalOpeningBusy=false,bankRentalSaveBusy=false;
     function bankRentalDirection(row){
       var bank=row&&row.bank||{},debit=Number(bank.debit||0),credit=Number(bank.credit||0);
       if(!Number.isFinite(debit)||!Number.isFinite(credit)||debit<0||credit<0)return '';
@@ -2915,21 +2949,25 @@
     }
     function bankRentalAvailable(row,kind){
       var direction=bankRentalDirection(row),fee=bankTenantFeeKind(kind);
-      return !!(cfg.canManageRentals&&row&&row.status==='missing_in_app'&&!row.resolution&&!row.bankClaimedElsewhere&&direction&&!row.reversalReviewRequired&&!row.reversalPairCandidate&&!row.bankReversalPair&&(fee?bankEntityTaggingActive()&&['SAMAST','PERSONAL'].includes(bankNature)&&bankTenantFeePermission(row):direction==='credit'&&(bankNature==='PERSONAL'||bankEntityTaggingActive())));
+      return !!(cfg.canManageRentals&&row&&row.status==='missing_in_app'&&!row.resolution&&!row.bankClaimedElsewhere&&direction&&!row.reversalReviewRequired&&!row.reversalPairCandidate&&!row.bankReversalPair&&(fee?bankEntityTaggingActive()&&['SAMAST','PERSONAL'].includes(bankNature)&&bankTenantFeePermission(row):direction==='credit'&&(bankNature==='PERSONAL'||bankEntityTaggingActive())&&(kind!=='rent_security'||bankRentalSplitPermission(row))));
+    }
+    function bankRentalSplitPermission(row){
+      var nature=String(bankEntityTaggingActive()?row&&row.entityTag&&row.entityTag.nature||'':bankNature).toUpperCase(),allowed=(cfg.approvalNatures||[]).filter(function(n){return n==='SAMAST'||n==='PERSONAL'&&cfg.canManagePersonalAccounting;});
+      return ['SAMAST','PERSONAL'].includes(nature)?allowed.includes(nature):allowed.length>0;
     }
     function bankRentalKindLabel(kind,direction){
       var paid=direction==='debit'||direction==='payment';
       if(kind==='dealer_commission')return 'Dealer commission '+(paid?'paid':'received');
       if(kind==='documentation_fee')return 'Documentation / Agreement fee '+(paid?'paid':'received');
-      return kind==='security'?'Security deposit received':'Rent received';
+      return kind==='rent_security'?'Rent + security deposit received together':kind==='security'?'Security deposit received':'Rent received';
     }
-    function bankRentalKinds(row){return ['rent','security','dealer_commission','documentation_fee'].filter(function(kind){return bankRentalAvailable(row,kind);});}
+    function bankRentalKinds(row){return ['rent','security','rent_security','dealer_commission','documentation_fee'].filter(function(kind){return bankRentalAvailable(row,kind);});}
     function bankRentalActions(row){
-      return bankRentalKinds(row).map(function(kind){var label=kind==='rent'?'Record rent':kind==='security'?'Record security deposit':'Record '+bankRentalKindLabel(kind,bankRentalDirection(row));return '<button class="btn mini primary" onclick="closeBankReview();openBankRental(\''+esc(row.id)+'\',\''+kind+'\')">'+label+'</button>';}).join(' ');
+      return bankRentalKinds(row).map(function(kind){var label=kind==='rent'?'Record rent':kind==='security'?'Record security deposit':kind==='rent_security'?'Record rent + security':'Record '+bankRentalKindLabel(kind,bankRentalDirection(row));return '<button class="btn mini primary" onclick="closeBankReview();openBankRental(\''+esc(row.id)+'\',\''+kind+'\')">'+label+'</button>';}).join(' ');
     }
     function bankRentalValidation(row,kind){
       kind=kind||el('rentalReconKind').value||'rent';
-      if(!['rent','security','dealer_commission','documentation_fee'].includes(kind)||!bankRentalAvailable(row,kind))return bankTenantFeeKind(kind)?'Choose an unmatched IndusInd Bank 7883 transaction eligible for a tenant-linked fee.':'Choose an unmatched incoming transaction that is eligible for rent or security.';
+      if(!['rent','security','rent_security','dealer_commission','documentation_fee'].includes(kind)||!bankRentalAvailable(row,kind))return bankTenantFeeKind(kind)?'Choose an unmatched IndusInd Bank 7883 transaction eligible for a tenant-linked fee.':'Choose an unmatched incoming transaction that is eligible for rent or security.';
       if(bankEntityTaggingActive()){
         var tag=row.entityTag||{};
         if(tag.sourceConflict)return 'Resolve the conflicting entity tag in Review / Resolve before recording this transaction.';
@@ -2939,19 +2977,40 @@
     }
     function syncBankRentalKind(){
       var kind=el('rentalReconKind').value,row=bankReconRow(bankRentalRowId),fee=bankTenantFeeKind(kind),direction=bankRentalDirection(row);
-      el('bankRentalTitle').textContent=fee?'Record '+bankRentalKindLabel(kind,direction):'Record rental receipt / security deposit';
-      el('bankRentalSave').textContent=fee?'Record fee '+(direction==='debit'?'payment':'receipt')+' & resolve':kind==='security'?'Record security & resolve':'Record rent & resolve';
+      el('bankRentalTitle').textContent=fee?'Record '+bankRentalKindLabel(kind,direction):kind==='rent_security'?'Record rent + security from one receipt':'Record rental receipt / security deposit';
+      el('bankRentalSave').textContent=fee?'Record fee '+(direction==='debit'?'payment':'receipt')+' & resolve':kind==='rent_security'?'Record rent + security & resolve':kind==='security'?'Record security & resolve':'Record rent & resolve';
+      el('rentalReconSplit').style.display=kind==='rent_security'?'block':'none';
       el('bankRentalTreatment').textContent=fee?'The original bank amount, date and direction are retained. This '+(direction==='debit'?'expense/payment':'receipt')+' is linked to the selected tenant. Dealer commission and Documentation / Agreement fees stay separate from rent, tenant advances and security balances.':'Rent is applied to that floor\'s oldest outstanding rent first; any balance becomes tenant advance. Security is held separately and is not treated as rent income. Deposits already included in the rental opening security must not be entered again; earlier deposits need an opening-balance review first.';
       el('bankRentalMsg').textContent=bankRentalValidation(row,kind);
       renderBankRentalOpeningReview();
     }
+    function bankRentalSplitCents(value){
+      var text=String(value==null?'':value).trim();
+      if(!/^\d+(?:\.\d{1,2})?$/.test(text))return null;
+      var amount=Number(text),cents=Math.round(amount*100);
+      return Number.isFinite(amount)&&cents>0&&Number.isSafeInteger(cents)&&Math.abs(amount*100-cents)<.00001?cents:null;
+    }
+    function bankRentalSplitAmounts(row){
+      var rent=bankRentalSplitCents(el('rentalReconRentAmount').value),security=bankRentalSplitCents(el('rentalReconSecurityAmount').value),total=bankRentalSplitCents(row&&row.bank&&row.bank.credit);
+      if(rent===null||security===null)return {error:'Enter positive rent and security portions, each with at most two decimal places.'};
+      if(total===null||!Number.isSafeInteger(rent+security))return {error:'The bank receipt amount cannot be verified. Refresh this transaction before recording the split.'};
+      if(rent+security!==total)return {rent:rent,security:security,total:total,error:'Rent + security must equal the bank receipt exactly. Difference: '+fmt((total-rent-security)/100)+'.'};
+      return {rent:rent,security:security,total:total,error:''};
+    }
+    function renderBankRentalSplit(row){
+      var combined=el('rentalReconKind').value==='rent_security',summary=el('rentalReconSplitSummary');
+      if(!combined){summary.textContent='';return '';}
+      var split=bankRentalSplitAmounts(row);summary.className=split.error?'msg err':'msg ok';
+      summary.textContent=split.error||'Rent '+fmt(split.rent/100)+' + security '+fmt(split.security/100)+' = bank receipt '+fmt(split.total/100)+'. One bank credit; two separately classified portions.';
+      return split.error;
+    }
     function selectedBankRentalTenancy(){return (bankRentalSnapshot&&bankRentalSnapshot.tenancies||[]).find(function(t){return t.id===el('rentalReconTenancy').value;});}
     function renderBankRentalOpeningReview(){
-      var t=selectedBankRentalTenancy(),row=bankReconRow(bankRentalRowId),bank=row&&row.bank||{},security=el('rentalReconKind').value==='security',hasOpening=!!(t&&t.securityOpening!=null),blocked=hasOpening&&t.securityOpeningDate&&bank.date<=t.securityOpeningDate,show=security&&hasOpening&&cfg.canManageRentals;
+      var t=selectedBankRentalTenancy(),row=bankReconRow(bankRentalRowId),bank=row&&row.bank||{},security=['security','rent_security'].includes(el('rentalReconKind').value),hasOpening=!!(t&&t.securityOpening!=null),blocked=hasOpening&&t.securityOpeningDate&&bank.date<=t.securityOpeningDate,show=security&&hasOpening&&cfg.canManageRentals;
       el('bankRentalOpeningReview').style.display=show?'block':'none';
-      el('bankRentalClearOpening').disabled=bankRentalOpeningBusy;
+      el('bankRentalClearOpening').disabled=bankRentalOpeningBusy||bankRentalSaveBusy;
       if(show)el('bankRentalOpeningSummary').textContent=t.tenant+' · '+t.floor+': active opening '+fmt(t.securityOpening)+' as of '+(t.securityOpeningDate||'date not set')+'. Current security held '+fmt(t.securityBalance)+'. This bank receipt is '+fmt(bank.credit)+' dated '+(bank.date||'—')+'. Removing the opening does not create or reconcile the source receipt. Other deposits, rent balances and bank entries remain untouched. The security balance will reduce by '+fmt(t.securityOpening)+' until the actual source is recorded.';
-      el('bankRentalSave').disabled=!bankRentalSnapshot||bankRentalOpeningBusy||!!bankRentalValidation(row)||!!(security&&blocked);
+      el('bankRentalSave').disabled=!bankRentalSnapshot||bankRentalOpeningBusy||bankRentalSaveBusy||!!bankRentalValidation(row)||!!(security&&blocked)||!!renderBankRentalSplit(row);
     }
     el('rentalReconTenancy').addEventListener('change',function(){el('bankRentalOpeningReason').value='';el('bankRentalOpeningMsg').textContent='';renderBankRentalOpeningReview();});
     function bankRentalOpeningMoney(value){
@@ -2972,19 +3031,19 @@
         if(!Number.isSafeInteger(snapshot.revision)||snapshot.revision<review.revision)throw Error('The refreshed register revision is invalid or older than the reviewed register. Reload the rental form before trying again.');
         var current=bankRentalOpeningTarget(snapshot,review.id);
         if(current.amount!==review.amount||current.date!==review.date||current.balance!==review.balance)throw Error('The selected tenant’s opening security, date or held balance changed. Reload the rental form and review the current figures; nothing was removed.');
-        if(!cfg.canManageRentals||bankRentalLoadGeneration!==review.generation||bankRentalRowId!==review.rowId||bankDraftId!==review.draftId||el('rentalReconTenancy').value!==review.id||el('rentalReconKind').value!=='security')throw Error('The selected rental transaction changed. Reopen it and review the opening security again.');
+        if(!cfg.canManageRentals||bankRentalLoadGeneration!==review.generation||bankRentalRowId!==review.rowId||bankDraftId!==review.draftId||el('rentalReconTenancy').value!==review.id||el('rentalReconKind').value!==review.kind||!['security','rent_security'].includes(review.kind))throw Error('The selected rental transaction changed. Reopen it and review the opening security again.');
         bankRentalSnapshot=snapshot;
         return {snapshot:snapshot,target:current};
       });
     }
     el('bankRentalClearOpening').addEventListener('click',function(){
-      if(bankRentalOpeningBusy)return;
+      if(bankRentalOpeningBusy||bankRentalSaveBusy)return;
       var t=selectedBankRentalTenancy(),snapshot=bankRentalSnapshot,reason=el('bankRentalOpeningReason').value.trim(),msg=el('bankRentalOpeningMsg');
-      if(!cfg.canManageRentals||!t||t.securityOpening==null||!snapshot||!Number.isSafeInteger(snapshot.revision)||snapshot.revision<0||el('rentalReconKind').value!=='security'){msg.className='msg err';msg.textContent='Refresh and review this tenant’s active opening security first.';return;}
+      if(!cfg.canManageRentals||!t||t.securityOpening==null||!snapshot||!Number.isSafeInteger(snapshot.revision)||snapshot.revision<0||!['security','rent_security'].includes(el('rentalReconKind').value)){msg.className='msg err';msg.textContent='Refresh and review this tenant’s active opening security first.';return;}
       if(reason.length<10){msg.className='msg err';msg.textContent='Enter a reason of at least 10 characters identifying the replacement source.';return;}
       var review;
       try{review=bankRentalOpeningTarget(snapshot,t.id);}catch(error){msg.className='msg err';msg.textContent=error.message;return;}
-      review.revision=snapshot.revision;review.generation=bankRentalLoadGeneration;review.rowId=bankRentalRowId;review.draftId=bankDraftId;
+      review.revision=snapshot.revision;review.generation=bankRentalLoadGeneration;review.rowId=bankRentalRowId;review.draftId=bankDraftId;review.kind=el('rentalReconKind').value;
       bankRentalOpeningBusy=true;el('bankRentalClearOpening').disabled=true;el('bankRentalSave').disabled=true;el('bankRentalCancel').disabled=true;el('rentalReconTenancy').disabled=true;el('rentalReconKind').disabled=true;el('bankRentalOpeningReason').disabled=true;el('rentalReconNote').disabled=true;msg.className='msg';msg.textContent='Refreshing the register and checking this tenant’s opening security…';
       return prepareBankRentalOpeningClear(review).then(function(prepared){
         var current=prepared.target,tenant=current.tenancy;
@@ -2998,12 +3057,12 @@
       }).catch(function(error){msg.className='msg err';msg.textContent=error&&error.message||'Could not remove opening security. Reload the rental form before retrying.';}).finally(function(){bankRentalOpeningBusy=false;el('bankRentalCancel').disabled=false;el('rentalReconTenancy').disabled=false;el('rentalReconKind').disabled=false;el('bankRentalOpeningReason').disabled=false;el('rentalReconNote').disabled=false;renderBankRentalOpeningReview();});
     });
     window.openBankRental=function(rowId,kind){
-      if(bankRentalOpeningBusy)return;
+      if(bankRentalOpeningBusy||bankRentalSaveBusy)return;
       var row=bankReconRow(rowId),b=row&&row.bank||{},generation=++bankRentalLoadGeneration;
       kind=kind||'rent';
       if(!bankRentalKinds(row).includes(kind))return;
       bankRentalRowId=rowId;
-      bankRentalSnapshot=null;el('bankRentalOpeningReason').value='';el('bankRentalOpeningMsg').textContent='';
+      bankRentalSnapshot=null;el('bankRentalOpeningReason').value='';el('bankRentalOpeningMsg').textContent='';el('rentalReconRentAmount').value='';el('rentalReconSecurityAmount').value='';
       var direction=bankRentalDirection(row),fee=bankTenantFeeKind(kind);
       el('bankRentalSummary').textContent=(b.date||'')+' · '+(direction==='debit'?'Money paid ':'Money received ')+fmt(Number(direction==='debit'?b.debit:b.credit))+' · '+(b.description||'Bank transaction');
       el('bankRentalEntity').textContent=(direction==='debit'?'Paying':'Receiving')+' account: '+(bankReconView&&bankReconView.account||'')+' · Entity: '+(bankEntityTaggingActive()?bankEntityTagLabel(row.entityTag):bankNature);
@@ -3029,23 +3088,35 @@
       });
     };
     el('rentalReconKind').addEventListener('change',syncBankRentalKind);
-    el('bankRentalCancel').addEventListener('click',function(){if(!bankRentalOpeningBusy)el('bankRentalDlg').close();});
-    el('bankRentalDlg').addEventListener('cancel',function(event){if(bankRentalOpeningBusy)event.preventDefault();});
+    ['rentalReconRentAmount','rentalReconSecurityAmount'].forEach(function(id){el(id).addEventListener('input',renderBankRentalOpeningReview);});
+    el('bankRentalCancel').addEventListener('click',function(){if(!bankRentalOpeningBusy&&!bankRentalSaveBusy)el('bankRentalDlg').close();});
+    el('bankRentalDlg').addEventListener('cancel',function(event){if(bankRentalOpeningBusy||bankRentalSaveBusy)event.preventDefault();});
     el('bankRentalSave').addEventListener('click',function(){
       var tenancyId=el('rentalReconTenancy').value,kind=el('rentalReconKind').value,note=el('rentalReconNote').value.trim(),btn=this,error=bankRentalValidation(bankReconRow(bankRentalRowId));
-      if(btn.disabled||bankRentalOpeningBusy)return;
+      if(btn.disabled||bankRentalOpeningBusy||bankRentalSaveBusy)return;
       if(error){el('bankRentalMsg').className='msg err';el('bankRentalMsg').textContent=error;return;}
       if(!tenancyId){el('bankRentalMsg').textContent='Choose the floor / unit.';return;}
       if(!note){el('bankRentalMsg').textContent='Enter a reconciliation remark.';return;}
-      btn.disabled=true;
-      api('/api/expenses/bank-statements/create-rental',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({draftId:bankDraftId,rowId:bankRentalRowId,tenancyId:tenancyId,kind:kind,note:note})}).then(function(d){
+      var payload={draftId:bankDraftId,rowId:bankRentalRowId,tenancyId:tenancyId,kind:kind,note:note};
+      if(kind==='rent_security'){
+        var split=bankRentalSplitAmounts(bankReconRow(bankRentalRowId));
+        if(split.error){el('bankRentalMsg').className='msg err';el('bankRentalMsg').textContent=split.error;return;}
+        payload.rentAmount=(split.rent/100).toFixed(2);payload.securityAmount=(split.security/100).toFixed(2);
+      }
+      btn.disabled=true;bankRentalSaveBusy=true;
+      ['rentalReconKind','rentalReconTenancy','rentalReconRentAmount','rentalReconSecurityAmount','rentalReconNote','bankRentalCancel','bankRentalClearOpening'].forEach(function(id){el(id).disabled=true;});
+      api('/api/expenses/bank-statements/create-rental',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(d){
         if(!d.success)throw new Error(d.error||'Could not record rental money.');
         el('bankRentalDlg').close();renderBankReconciliation(d);loadCash();loadAccountLedger();
+        if(kind==='rent_security'){
+          var parts=d.receipts||[],rentReceipt=parts.find(function(receipt){return receipt.rentalKind==='rent';}),securityReceipt=parts.find(function(receipt){return receipt.rentalKind==='security';});
+          el('bs_msg').className='msg ok';el('bs_msg').textContent='Rent '+fmt(rentReceipt?rentReceipt.amount:Number(payload.rentAmount))+' + security deposit '+fmt(securityReceipt?securityReceipt.amount:Number(payload.securityAmount))+' recorded separately for '+d.tenancy.tenant+' · '+d.tenancy.floor+' against one bank receipt'+(rentReceipt&&securityReceipt?' · '+rentReceipt.id+' + '+securityReceipt.id:'')+'.';return;
+        }
         var recorded=d.expense||d.receipt||d.fee,label=bankTenantFeeKind(kind)?bankRentalKindLabel(kind,d.direction||bankRentalDirection(bankReconRow(bankRentalRowId))):kind==='security'?'Security deposit':'Rent';
         el('bs_msg').className='msg ok';el('bs_msg').textContent=label+' '+fmt(recorded.amount)+' recorded for '+d.tenancy.tenant+' · '+d.tenancy.floor+' and linked to '+recorded.id+'.';
       }).catch(function(error){
         el('bankRentalMsg').className='msg err';el('bankRentalMsg').textContent=error.message||'Could not record rental money. Refresh reconciliation before retrying.';
-      }).finally(function(){btn.disabled=false;});
+      }).finally(function(){bankRentalSaveBusy=false;btn.disabled=false;['rentalReconKind','rentalReconTenancy','rentalReconRentAmount','rentalReconSecurityAmount','rentalReconNote','bankRentalCancel','bankRentalClearOpening'].forEach(function(id){el(id).disabled=false;});if(el('bankRentalDlg').open)renderBankRentalOpeningReview();});
     });
     function syncBankTenantFeeAssignmentOptions(row){
       ['dealer_commission','documentation_fee'].forEach(function(kind){var option=el('brKind').querySelector('option[value="tenant_'+kind+'"]'),allowed=bankRentalAvailable(row,kind);if(!option)return;option.hidden=!allowed;option.disabled=!allowed;option.textContent=bankRentalKindLabel(kind,bankRentalDirection(row))+' — linked tenant';});

@@ -59,7 +59,7 @@ test('canceling or failing a bank-form opening correction keeps the source recei
   assert.ok(ui.calls.filter(call => call.options?.method === 'POST').every(call => JSON.parse(call.options.body).action === 'clear_security_opening'));
 });
 
-function harness({ nature = 'SAMAST', account = 'IndusInd Bank 7883', tag = 'SAMAST', canManageRentals = true, row: rowPatch = {}, responses = [] } = {}) {
+function harness({ nature = 'SAMAST', account = 'IndusInd Bank 7883', tag = 'SAMAST', canManageRentals = true, cfg: cfgPatch = {}, row: rowPatch = {}, responses = [] } = {}) {
   const nodes = {}, calls = [], rendered = [], refreshes = [];
   function node(id) {
     if (!nodes[id]) nodes[id] = {
@@ -79,7 +79,7 @@ function harness({ nature = 'SAMAST', account = 'IndusInd Bank 7883', tag = 'SAM
     entityTag: { nature: tag }, ...rowPatch
   };
   const context = {
-    cfg: { canManageRentals, isAdmin: true },
+    cfg: { canManageRentals, isAdmin: true, approvalNatures: ['SAMAST','PERSONAL'], canManagePersonalAccounting: true, ...cfgPatch },
     bankNature: nature, bankDraftId: 'BRD-7883', bankEntityTagRowId: '',
     bankReconView: { account, rows: [row] },
     el: node, esc: escapeHtml, fmt: value => '₹' + value,
@@ -127,7 +127,7 @@ function harness({ nature = 'SAMAST', account = 'IndusInd Bank 7883', tag = 'SAM
     clickRental: kind => {
       context.openBankReview(row.id);
       const buttons = Array.from(node('bankReviewActions').innerHTML.matchAll(/<button\b[^>]*onclick="([^"]*)"[^>]*>(.*?)<\/button>/g));
-      const expected = kind === 'security' ? 'Record security deposit' : 'Record rent';
+      const expected = kind === 'rent_security' ? 'Record rent + security' : kind === 'security' ? 'Record security deposit' : 'Record rent';
       const button = buttons.find(match => match[2] === expected);
       assert.ok(button, 'actual Review / Resolve button exists: ' + expected);
       vm.runInContext(button[1].replace(/&#39;/g, "'"), context);
@@ -140,6 +140,7 @@ for (const tag of ['SAMAST', 'PERSONAL', 'UNKNOWN']) test(`7883 Review / Resolve
   ui.context.openBankReview(ui.row.id);
   assert.match(ui.nodes.bankReviewActions.innerHTML, />Record rent</);
   assert.match(ui.nodes.bankReviewActions.innerHTML, />Record security deposit</);
+  assert.match(ui.nodes.bankReviewActions.innerHTML, />Record rent \+ security</);
   ui.clickRental('security');
   assert.equal(ui.nodes.bankReviewDlg.open, false);
   assert.equal(ui.nodes.bankRentalDlg.open, true);
@@ -230,6 +231,132 @@ test('changing receipt kind updates both save label and submitted kind', async (
   ui.fire('bankRentalSave');
   await flush();
   assert.equal(JSON.parse(ui.calls.at(-1).options.body).kind, 'security');
+});
+
+test('combined rent and security requires an explicit exact split and posts only the split plus source identity', async () => {
+  const ui = harness();
+  ui.clickRental('rent_security'); await flush();
+  assert.equal(ui.nodes.rentalReconSplit.style.display, 'block');
+  assert.equal(ui.nodes.rentalReconRentAmount.value, '');
+  assert.equal(ui.nodes.rentalReconSecurityAmount.value, '', 'no split is guessed from the bank amount');
+  assert.equal(ui.nodes.bankRentalSave.disabled, true);
+  assert.match(ui.nodes.bankRentalSave.textContent, /rent \+ security/);
+  ui.nodes.rentalReconTenancy.value = tenancy.id;
+  ui.nodes.rentalReconRentAmount.value = '10000.25';
+  ui.nodes.rentalReconSecurityAmount.value = '14999.75';
+  ui.fire('rentalReconSecurityAmount', 'input');
+  assert.equal(ui.nodes.bankRentalSave.disabled, false);
+  assert.match(ui.nodes.rentalReconSplitSummary.textContent, /One bank credit; two separately classified portions/);
+  ui.nodes.rentalReconNote.value = 'Tenant paid rent and refundable security together';
+  ui.fire('bankRentalSave'); await flush();
+  const writes = ui.calls.filter(call => call.options?.method === 'POST');
+  assert.equal(writes.length, 1);
+  assert.deepEqual(JSON.parse(writes[0].options.body), {
+    draftId: 'BRD-7883', rowId: 'bank-1', tenancyId: tenancy.id, kind: 'rent_security',
+    note: ui.nodes.rentalReconNote.value, rentAmount: '10000.25', securityAmount: '14999.75'
+  });
+  assert.match(ui.nodes.bs_msg.textContent, /Rent ₹10000.25 \+ security deposit ₹14999.75/);
+  assert.equal(ui.nodes.bankRentalDlg.open, false);
+  assert.deepEqual(ui.refreshes, ['cash', 'ledger']);
+});
+
+test('invalid, over-precise and mismatched combined amounts never submit', async () => {
+  for (const [rent, security] of [['', '25000'], ['0', '25000'], ['-1', '25001'], ['1e4', '15000'], ['10000.001', '14999.999'], ['10000', '14999.99'], ['10000', '15000.01'], ['9007199254740992', '1']]) {
+    const ui = harness(); ui.clickRental('rent_security'); await flush();
+    ui.nodes.rentalReconTenancy.value = tenancy.id;
+    ui.nodes.rentalReconRentAmount.value = rent; ui.nodes.rentalReconSecurityAmount.value = security;
+    ui.fire('rentalReconRentAmount', 'input');
+    assert.equal(ui.nodes.bankRentalSave.disabled, true, `${rent} + ${security}`);
+    assert.equal(ui.nodes.rentalReconSplitSummary.className, 'msg err');
+    ui.fire('bankRentalSave'); await flush();
+    assert.equal(ui.calls.filter(call => call.options?.method === 'POST').length, 0);
+  }
+});
+
+test('changing the bank amount at save time rejects a previously valid split', async () => {
+  const ui = harness(); ui.clickRental('rent_security'); await flush();
+  ui.nodes.rentalReconTenancy.value = tenancy.id;
+  ui.nodes.rentalReconRentAmount.value = '10000'; ui.nodes.rentalReconSecurityAmount.value = '15000';
+  ui.fire('rentalReconRentAmount', 'input'); assert.equal(ui.nodes.bankRentalSave.disabled, false);
+  ui.row.bank.credit = 25001;
+  ui.fire('bankRentalSave'); await flush();
+  assert.match(ui.nodes.bankRentalMsg.textContent, /must equal the bank receipt exactly/);
+  assert.equal(ui.calls.filter(call => call.options?.method === 'POST').length, 0);
+});
+
+test('combined amounts do not leak into a later single-kind receipt and reopening clears previous amounts', async () => {
+  const ui = harness(); ui.clickRental('rent_security'); await flush();
+  ui.nodes.rentalReconRentAmount.value = '10000'; ui.nodes.rentalReconSecurityAmount.value = '15000';
+  ui.nodes.rentalReconKind.value = 'security'; ui.fire('rentalReconKind', 'change');
+  assert.equal(ui.nodes.rentalReconSplit.style.display, 'none');
+  ui.nodes.rentalReconTenancy.value = tenancy.id; ui.fire('bankRentalSave'); await flush();
+  const payload = JSON.parse(ui.calls.find(call => call.options?.method === 'POST').options.body);
+  assert.equal(payload.kind, 'security'); assert.equal('rentAmount' in payload, false); assert.equal('securityAmount' in payload, false);
+  ui.clickRental('rent_security'); await flush();
+  assert.equal(ui.nodes.rentalReconRentAmount.value, ''); assert.equal(ui.nodes.rentalReconSecurityAmount.value, '');
+  assert.equal(ui.nodes.bankRentalSave.disabled, true);
+});
+
+test('combined receipts retain opening-security and bank eligibility guards', async () => {
+  const opening = { ...tenancy, securityOpening: 20000, securityOpeningDate: '2026-10-02', securityBalance: 20000 };
+  const ui = harness({ responses: [{ success: true, revision: 7, tenancies: [opening] }] });
+  ui.clickRental('rent_security'); await flush();
+  ui.nodes.rentalReconTenancy.value = tenancy.id;
+  ui.nodes.rentalReconRentAmount.value = '10000'; ui.nodes.rentalReconSecurityAmount.value = '15000';
+  ui.fire('rentalReconTenancy', 'change'); ui.fire('rentalReconSecurityAmount', 'input');
+  assert.equal(ui.nodes.bankRentalOpeningReview.style.display, 'block');
+  assert.equal(ui.nodes.bankRentalSave.disabled, true, 'security cannot be counted twice against an opening');
+  for (const options of [{ tag: 'UNKNOWN' }, { row: { bankClaimedElsewhere: true } }, { row: { reversalReviewRequired: true } }, { row: { bank: { debit: 25000, credit: 0 } } }, { canManageRentals: false }]) {
+    const blocked = harness(options);
+    blocked.context.openBankReview(blocked.row.id);
+    if (options.tag !== 'UNKNOWN') assert.doesNotMatch(blocked.nodes.bankReviewActions.innerHTML, />Record rent \+ security</);
+    blocked.context.openBankRental(blocked.row.id, 'rent_security'); await flush();
+    assert.equal(blocked.calls.filter(call => call.options?.method === 'POST').length, 0);
+    if (options.tag === 'UNKNOWN') assert.equal(blocked.nodes.bankRentalSave.disabled, true);
+  }
+});
+
+test('failed combined save preserves both exact amounts and the selected tenancy for review', async () => {
+  const ui = harness({ responses: [{ success: true, tenancies: [tenancy] }, { success: false, error: 'Bank evidence changed; refresh before retrying.' }] });
+  ui.clickRental('rent_security'); await flush();
+  ui.nodes.rentalReconTenancy.value = tenancy.id;
+  ui.nodes.rentalReconRentAmount.value = '10000.01'; ui.nodes.rentalReconSecurityAmount.value = '14999.99';
+  ui.fire('rentalReconRentAmount', 'input'); ui.fire('bankRentalSave'); await flush();
+  assert.equal(ui.nodes.bankRentalDlg.open, true); assert.equal(ui.nodes.bankRentalSave.disabled, false);
+  assert.equal(ui.nodes.rentalReconRentAmount.value, '10000.01'); assert.equal(ui.nodes.rentalReconSecurityAmount.value, '14999.99');
+  assert.equal(ui.nodes.rentalReconTenancy.value, tenancy.id); assert.match(ui.nodes.bankRentalMsg.textContent, /evidence changed/);
+  assert.equal(ui.rendered.length, 0); assert.equal(ui.refreshes.length, 0);
+});
+
+test('an in-flight combined receipt cannot be submitted twice or replaced by a different rental form', async () => {
+  let finish;
+  const ui = harness({ responses: [{ success: true, tenancies: [tenancy] }, () => new Promise(resolve => { finish = resolve; })] });
+  ui.clickRental('rent_security'); await flush();
+  ui.nodes.rentalReconTenancy.value = tenancy.id;
+  ui.nodes.rentalReconRentAmount.value = '10000'; ui.nodes.rentalReconSecurityAmount.value = '15000';
+  ui.fire('rentalReconRentAmount', 'input'); ui.fire('bankRentalSave');
+  for (const id of ['bankRentalSave', 'bankRentalCancel', 'bankRentalClearOpening', 'rentalReconTenancy', 'rentalReconKind', 'rentalReconRentAmount', 'rentalReconSecurityAmount']) assert.equal(ui.nodes[id].disabled, true, id);
+  ui.fire('bankRentalSave'); ui.fire('bankRentalCancel');
+  ui.context.openBankRental(ui.row.id, 'security');
+  assert.equal(ui.nodes.bankRentalDlg.open, true); assert.equal(ui.nodes.rentalReconKind.value, 'rent_security');
+  assert.equal(ui.calls.filter(call => call.options?.method === 'POST').length, 1);
+  finish({ success: false, error: 'Evidence changed' }); await flush();
+  assert.equal(ui.nodes.rentalReconRentAmount.disabled, false); assert.equal(ui.nodes.bankRentalSave.disabled, false);
+  assert.equal(ui.nodes.rentalReconRentAmount.value, '10000');
+});
+
+test('combined receipt choices match the selected entity and current personal-accounting permission', async () => {
+  for (const options of [{ tag: 'PERSONAL', cfg: { canManagePersonalAccounting: false } }, { tag: 'SAMAST', cfg: { approvalNatures: ['PERSONAL'] } }, { nature: 'PERSONAL', account: 'ICICI Bank 0993', tag: 'UNKNOWN', cfg: { canManagePersonalAccounting: false } }, { cfg: { approvalNatures: [] } }]) {
+    const ui = harness(options); ui.context.openBankReview(ui.row.id);
+    assert.doesNotMatch(ui.nodes.bankReviewActions.innerHTML, />Record rent \+ security</);
+    ui.context.openBankRental(ui.row.id, 'rent_security'); await flush();
+    assert.equal(ui.calls.length, 0);
+  }
+  const ui = harness(); ui.clickRental('rent_security'); await flush();
+  ui.nodes.rentalReconTenancy.value = tenancy.id; ui.nodes.rentalReconRentAmount.value = '10000'; ui.nodes.rentalReconSecurityAmount.value = '15000'; ui.fire('rentalReconRentAmount', 'input');
+  ui.context.cfg.approvalNatures = [];
+  ui.fire('bankRentalSave'); await flush();
+  assert.equal(ui.calls.filter(call => call.options?.method === 'POST').length, 0);
 });
 
 test('unknown or conflicting entity tags block receipt creation without silently assigning SAMAST', async () => {
