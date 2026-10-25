@@ -138,9 +138,9 @@ function proofList(value, fallback) { return Array.from(new Set([].concat(Array.
 function roundCashSale(n) { const amount=num(n);return amount>0?Math.ceil(amount/10)*10:amount; }
 function loadCreditCards(){bankAuthorityTransaction.recover(DATA_DIR);try{return JSON.parse(fs.readFileSync(CREDIT_CARD_PATH,'utf8'));}catch{return{cards:{}};}}
 function creditCardName(card){return card&&`${card.name} ${card.last4}`.trim();}
-function visibleCreditCards(req){return Object.values(loadCreditCards().cards||{}).filter(card=>card.active!==false&&(!card.ownerOnly||isOwner(req)));}
+function visibleCreditCards(req){return Object.values(loadCreditCards().cards||{}).filter(card=>card.active!==false&&canManageRestrictedCard(req,card));}
 function resolveCreditCard(req,value){const key=String(value||'').trim().toLowerCase();return visibleCreditCards(req).find(card=>card.id.toLowerCase()===key||creditCardName(card).toLowerCase()===key);}
-function creditCardByAccount(value){const key=String(value||'').trim().toLowerCase();return Object.values(loadCreditCards().cards||{}).find(card=>card.active!==false&&(String(card.id||'').toLowerCase()===key||creditCardName(card).toLowerCase()===key));}
+function creditCardByAccount(value,cardsSnapshot){const key=String(value||'').trim().toLowerCase(),cards=cardsSnapshot===undefined?loadCreditCards():cardsSnapshot;return Object.values(cards.cards||{}).find(card=>card.active!==false&&(String(card.id||'').toLowerCase()===key||creditCardName(card).toLowerCase()===key));}
 function cashEntryIsVisible(account,date) { return String(account||'')!==DEFAULT_COUNTER_CASH||String(date||'').slice(0,10)>=COUNTER_CASH_RESET_DATE; }
 function vendorKey(v) { return String(v || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); }
 function cleanVendorName(v) { return String(v||'').normalize('NFKC').replace(/[\u200B-\u200D\u2060\uFEFF]/g,'').replace(/\s+/g,' ').trim(); }
@@ -2012,6 +2012,9 @@ function canEditLedgerTransactions(req) {
   const access=require('./auth-users');
   return isAdmin(req)&&!claimantPolicy.claimantOnly(req)&&access.userCanAccessPath(req.user,'/expenses.html')&&require('../auth').apiAllowedForUser(req.user,'/api/expenses/ledger-entry','PATCH');
 }
+function canEditExpenseFinancials(req){return canEditLedgerTransactions(req)&&require('../auth').apiAllowedForUser(req.user,'/api/expenses/EX-correction','POST');}
+function canManageRestrictedCard(req,card){return !!card&&(!card.ownerOnly||(canEditLedgerTransactions(req)&&canManagePersonalAccounting(req)));}
+function canManageRestrictedExpense(req,e){return !!e&&(!e.ownerOnly||isOwner(req)||(normalizedNature(e.nature)==='PERSONAL'&&canEditLedgerTransactions(req)&&canManagePersonalAccounting(req)));}
 function isPrashant(req){return String(req&&req.user&&req.user.username||'').trim().toLowerCase()==='prashant';}
 function canManageCategoriesAndVendors(req){return isOwner(req)||isPrashant(req);}
 function canSelectOwnerPersonalTransferAccounts(req){return isOwner(req)||(rolesOfReq(req).includes('admin')&&isPrashant(req));}
@@ -2283,11 +2286,11 @@ function paytmReportView(s) {
 bankMatches.forEach(x=>{x.reconciliationStatus=statusById.get(x.settlementId);if(x.reconciliationStatus.historicalEvidenceLink){x.posted=true;x.postingId=x.reconciliationStatus.historicalEvidenceLink.historicalSettlementId;}x.readyToFinalize=x.reconciliationStatus.code==='ready';x.readyForBulkFinalize=x.reconciliationStatus.code==='ready';x.readyToPost=x.readyToPost&&x.reconciliationStatus.bankLinkReady;});
   return {transactions,payouts:bankMatches,orderMatches,returnReviews:returnResolutionView(s),imports:(s.paytmReportImports||[]).slice().reverse(),legacyDrafts,reportPreviews:paytmPreviewStatuses(s),reconciliationStatus:sharedStatus,paytmCoverage:paytmProjection.coverage,from:PAYTM_START_DATE,through:indiaBusinessDate()};
 }
-function reconciliationAccountsForNature(s,nature){
-  const n=normalizedNature(nature),cards=n==='SANKI'?Object.values(loadCreditCards().cards||{}).filter(card=>card.active!==false).map(creditCardName):[];
+function reconciliationAccountsForNature(s,nature,cardsSnapshot){
+  const n=normalizedNature(nature),cards=n==='SANKI'?Object.values((cardsSnapshot===undefined?loadCreditCards():cardsSnapshot).cards||{}).filter(card=>card.active!==false).map(creditCardName):[];
   return Array.from(new Set(ledgerAccountsForNature(s,n).concat(cards))).filter(account=>account&&!(n==='PERSONAL'&&isSharedBankReconciliationAccount(account))).sort((a,b)=>a.localeCompare(b));
 }
-function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||''),card=creditCardByAccount(name);if(sharedBankBookConflict(s,name))return false;if(isSharedBankReconciliationAccount(name)){if(n!=='SAMAST'||!(canManagePersonalAccounting(req)||isPrashant(req))||!accountVisibleToReq(req,name))return false;return reconciliationAccountsForNature(s,'SAMAST').some(x=>x.toLowerCase()===name.toLowerCase());}if((!isAdmin(req)&&!(n==='PERSONAL'&&canManagePersonalAccounting(req)))||!approvalNatures(req).includes(n)||!accountVisibleToReq(req,name))return false;if(n==='PERSONAL'&&!canManagePersonalAccounting(req))return false;if(card&&card.ownerOnly&&!isOwner(req))return false;return reconciliationAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase());}
+function canAccessBankReconciliation(req,s,nature,account,cardsSnapshot){const n=normalizedNature(nature),name=String(account||''),card=creditCardByAccount(name,cardsSnapshot);if(sharedBankBookConflict(s,name))return false;if(isSharedBankReconciliationAccount(name)){if(n!=='SAMAST'||!(canManagePersonalAccounting(req)||isPrashant(req))||!accountVisibleToReq(req,name))return false;return reconciliationAccountsForNature(s,'SAMAST',cardsSnapshot).some(x=>x.toLowerCase()===name.toLowerCase());}if((!isAdmin(req)&&!(n==='PERSONAL'&&canManagePersonalAccounting(req)))||!approvalNatures(req).includes(n)||!accountVisibleToReq(req,name))return false;if(n==='PERSONAL'&&!canManagePersonalAccounting(req))return false;if(card&&!canManageRestrictedCard(req,card))return false;return reconciliationAccountsForNature(s,n,cardsSnapshot).some(x=>x.toLowerCase()===name.toLowerCase());}
 function isBankLedgerName(name){return !/cash/i.test(String(name||''))&&![PAYTM_CLEARING_ACCOUNT,VELOCITY_CLEARING_ACCOUNT,'Velocity Shipping Wallet',gokwikAccounting.CLEARING].includes(String(name||''));}
 function canAccessBankDraft(req,s,draft){return !!draft&&canAccessBankReconciliation(req,s,draft.nature,draft.account);}
 // Who may APPROVE & PAY: admin or accounting. A pure claimant may only LOG.
@@ -2576,7 +2579,7 @@ router.get('/api/expenses/config', (req, res) => {
     accounts: visibleAccountsForReq(req,Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !personalView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n]))))),
     accountsByNature: Object.fromEntries(NATURES.map(n => [n, visibleAccountsForReq(req,n === 'PERSONAL' ? (allowed.includes(n) ? (personalView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : []))])),
     bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,ledgerAccountsForNature(s,n).filter(isBankLedgerName)) : []])),
-    reconciliationAccountsByNature: Object.fromEntries(NATURES.map(n => [n, (approvalNatures(req).includes(n)||n==='SAMAST'&&(canManagePersonalAccounting(req)||isPrashant(req))) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,reconciliationAccountsForNature(s,n).filter(name=>accountBelongsInLedgerBook(n,name)).filter(name=>{const card=creditCardByAccount(name);return !card||!card.ownerOnly||ownerView;})) : []])),
+    reconciliationAccountsByNature: Object.fromEntries(NATURES.map(n => [n, (approvalNatures(req).includes(n)||n==='SAMAST'&&(canManagePersonalAccounting(req)||isPrashant(req))) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,reconciliationAccountsForNature(s,n).filter(name=>accountBelongsInLedgerBook(n,name)).filter(name=>{const card=creditCardByAccount(name);return !card||canManageRestrictedCard(req,card);})) : []])),
     ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, n==='SANKI'&&isPrashant(req)&&!isAdmin(req)?[DEFAULT_COUNTER_CASH].concat(PRASHANT_VISIBLE_OWNER_ACCOUNTS):(allowed.includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).filter(name=>accountBelongsInLedgerBook(n,name)).sort((a,b)=>a.localeCompare(b)) : [])])),
     transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req)&&n!=='PERSONAL' ? (n==='SANKI'&&approvalNatures(req).includes(n)?visibleAccountsForReq(req,transferAccountsForNature(n)):[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
     ownerPersonalTransferAccounts: canSelectOwnerPersonalTransferAccounts(req)?OWNER_PERSONAL_TRANSFER_ACCOUNTS.map(account=>({nature:'PERSONAL',account,label:'Gagan Sir Personal · '+account})):[],
@@ -2592,6 +2595,8 @@ router.get('/api/expenses/config', (req, res) => {
     bills: BILLS.filter(b => b !== 'none'), paymentTypes: PAYMENT_TYPES,
     isAdmin: isAdmin(req),
     canEditLedgerTransactions: canEditLedgerTransactions(req),
+    canEditExpenseFinancials: canEditExpenseFinancials(req),
+    canManageCreditCards: canEditLedgerTransactions(req),
     canManageExpenseRefunds: isAdmin(req),
     canManageCategories: !claimantPolicy.claimantOnly(req)&&canManageCategoriesAndVendors(req),
     canManageVendors: !claimantPolicy.claimantOnly(req)&&canManageCategoriesAndVendors(req),
@@ -2750,6 +2755,56 @@ function reconciledExpensePayloadChanged(e,b) {
     return String(value==null?'':value).trim()!==String(expected[key]==null?'':expected[key]).trim();
   });
 }
+function validExpenseCorrectionMoney(value){return ['string','number'].includes(typeof value)&&/^\d+(?:\.\d{1,2})?$/.test(String(value))&&Number(value)>0&&Number.isSafeInteger(Math.round(Number(value)*100));}
+function assertExpenseFinancialCorrection(snapshot,req,e,b){
+  const guards=require('./source-correction-guards'),fail=(message,status=409)=>{const error=new Error(message);error.status=status;throw error;};
+  const editable=new Set(['nature','date','amount','requestedAmount','isInstallment','paidAlready','paymentType','paymentAccount','personalAccount','account','billPhoto','billPhotos','qrPhoto','personalPaymentProof','personalPaymentProofs','purchasePaymentProof','purchasePaymentProofs','bill','billNote','fundedBy','channel','exceptionEvidence','exceptionReason',...EXPENSE_METADATA_FIELDS]);
+  if(Object.keys(b).some(key=>!editable.has(key)))fail('Only expense correction fields are accepted.',400);
+  for(const key of ['amount','requestedAmount'])if(b[key]!=null&&!validExpenseCorrectionMoney(b[key]))fail('Enter positive amounts with no more than two decimal places.',400);
+  const nextAmount=b.amount==null?num(e.amount):Number(b.amount),nextRequested=b.requestedAmount==null?num(e.requestedAmount||e.amount):Number(b.requestedAmount);
+  if(!(nextRequested>0)||nextRequested>nextAmount)fail('The resulting requested payment cannot exceed the corrected expense total. Correct both amounts explicitly when needed.',400);
+  if(b.date!=null&&!guards.validDate(b.date))fail('Enter a valid date as YYYY-MM-DD.',400);
+  if(b.nature!=null&&!NATURES.includes(b.nature))fail('Select a valid accounting entity.',400);
+  const payments=e.payments||[],reimbursements=e.reimbursementPayments||[];
+  if(!Array.isArray(payments)||!Array.isArray(reimbursements)||e.vendorAdvanceApplications!=null&&!Array.isArray(e.vendorAdvanceApplications))fail('The saved payment graph cannot be verified.');
+  if(!canManageRestrictedExpense(req,e))fail('This expense is restricted to the Owner or an authorized PERSONAL manager.',403);
+  const personallyPaid=b.paidAlready==null?e.paidAlready:b.paidAlready===true||b.paidAlready==='true';
+  if(e.reconciliationSource||e.creditCardId||e.creditCardStatementId||personallyPaid&&(b.paymentType||e.paymentType)==='Credit'||payments.some(p=>p.creditCardId)||reimbursements.length||num(e.reimbursementAmount)>0||(e.vendorAdvanceApplications||[]).length||payments.filter(p=>p.personalFunds).length>1)fail('This expense has a linked card, advance or reimbursement workflow. Correct that source workflow first.');
+  if(e.paidAlready&&(payments.length!==1||!payments[0].personalFunds||!validExpenseCorrectionMoney(payments[0].amount)||num(payments[0].amount)!==num(e.requestedAmount||e.amount)||num(e.personalPaidAmount)!==num(payments[0].amount)||num(e.paidAmount)!==num(payments[0].amount)))fail('The existing personal expense/payment totals disagree. Review the source graph before correcting it; no payment is silently rebuilt.');
+  const sourceIds=[e.id,...payments.map(p=>e.id+'/'+p.id)];
+  if(!e.id||payments.some(p=>!p.id)||new Set(sourceIds).size!==sourceIds.length)fail('The expense/payment identity is missing or ambiguous.');
+  const currentNature=normalizedNature(e.nature),nextNature=b.nature||currentNature,personal=payments.find(p=>p.personalFunds),lastCompany=payments.filter(p=>!p.personalFunds).at(-1);
+  const changedAmount=['amount','requestedAmount'].some(key=>b[key]!=null&&Number(b[key])!==num(e[key]||e.amount));
+  const accountChange=(b.paymentAccount!=null&&String(b.paymentAccount).trim()!==String(lastCompany&&lastCompany.account||e.account||''))||(b.personalAccount!=null&&String(b.personalAccount).trim()!==String(personal&&personal.account||''))||(b.account!=null&&String(b.account).trim()!==String(e.account||''));
+  if((changedAmount||accountChange)&&!canEditExpenseFinancials(req))fail('Your Manage permissions do not allow expense amount or paying-account corrections.',403);
+  if(b.account!=null&&String(b.account).trim()!==String(e.account||''))fail('Use the paying-account correction field; the expense account cannot be changed independently.',400);
+  const scopes=[],dates=[e.date,...payments.map(p=>p.date||e.date),b.date||e.date];
+  const addScope=(nature,value,proposed=false)=>{
+    const account=canonicalAccountName(value),personalOnly=(ENTITY_ACCOUNTS.PERSONAL||[]).some(a=>canonicalAccountName(a).toLowerCase()===account.toLowerCase())&&!(ENTITY_ACCOUNTS[nature]||[]).some(a=>canonicalAccountName(a).toLowerCase()===account.toLowerCase());
+    if(!approvalNatures(req).includes(nature)||nature==='PERSONAL'&&!canManagePersonalAccounting(req)||personalOnly&&!canManagePersonalAccounting(req)||account&&!accountVisibleToReq(req,account))fail('You cannot correct this expense in one of its saved or proposed account scopes.',403);
+    if(proposed&&account){
+      const available=[...(ENTITY_ACCOUNTS[nature]||[]),...Object.values(CLAIMANT_ACCOUNTS).flat()];
+      if(!available.some(a=>canonicalAccountName(a).toLowerCase()===account.toLowerCase()))fail('Select an authorized existing paying account for this entity.',400);
+    }
+    if(!scopes.some(scope=>scope.nature===nature&&scope.account===account))scopes.push({nature,account,...(!account?{nonMonetary:true}:{})});
+  };
+  [e.account,...payments.map(p=>p.account)].filter(Boolean).forEach(account=>addScope(currentNature,account));
+  if(!scopes.length)addScope(currentNature,'');
+  if(nextNature!==currentNature)[e.account,...payments.map(p=>p.account)].filter(Boolean).forEach(account=>addScope(nextNature,account,true));
+  for(const field of ['paymentAccount','personalAccount'])if(b[field]!=null&&String(b[field]).trim()){const original=field==='paymentAccount'?lastCompany&&lastCompany.account||e.account||'':personal&&personal.account||'';addScope(nextNature,b[field],String(b[field]).trim()!==String(original));}
+  const nextPaidAlready=b.paidAlready==null?e.paidAlready:b.paidAlready===true||b.paidAlready==='true';
+  if(nextPaidAlready&&(b.paymentType||e.paymentType)==='Cash')addScope(nextNature,(e.claimant||e.createdBy)+' Cash',!personal||personal.account!==(e.claimant||e.createdBy)+' Cash');
+  if(nextNature!==currentNature&&!scopes.some(scope=>scope.nature===nextNature))addScope(nextNature,'');
+  guards.assertAudit(snapshot.store);
+  guards.assertUnlocked(snapshot.store,{ids:sourceIds,scopes,dates,records:[e,...payments],external:snapshot.external,bookKey:bankStatementBookKey,canonicalAccount:canonicalAccountName});
+}
+function commitExpenseFinancialCorrection(snapshot,s,id){
+  const guards=require('./source-correction-guards'),before=JSON.parse(snapshot.raw),current=readLedgerEditSnapshot();
+  if(current.raw!==snapshot.raw||JSON.stringify(current.externalRaw)!==JSON.stringify(snapshot.externalRaw))throw new Error('The expense or accounting evidence changed while saving. Reload and review it again.');
+  guards.assertPreserved(before,s,['expenses','auditLog','auditSeq']);
+  for(const key of new Set([...Object.keys(before.expenses||{}),...Object.keys(s.expenses||{})]))if(key!==id&&JSON.stringify(before.expenses[key])!==JSON.stringify(s.expenses[key]))throw new Error('This correction cannot change another expense. Use its source workflow.');
+  bankAuthorityTransaction.commit(DATA_DIR,[{fileName:'expenses.json',before:snapshot.raw,after:JSON.stringify(s)}]);
+}
 function editExpenseMetadata(s,req,e,b,editReason) {
   const before=JSON.parse(JSON.stringify(e)),next=Object.assign({},e);
   if(b.vendor!=null){
@@ -2793,8 +2848,9 @@ const RESERVED_POST = new Set(['expense-refunds', 'rentals', 'requests', 'accoun
 router.post('/api/expenses/:id', (req, res, next) => {
   if (RESERVED_POST.has(req.params.id)) return next();
   if (!canApprove(req)) return res.status(403).json({ success:false, error:'Claimants cannot edit submitted expenses. Ask an approver to make the correction.' });
-  const s = loadStore();
-  const e = s.expenses[req.params.id];
+  let snapshot;try{snapshot=readLedgerEditSnapshot();}catch(error){return res.status(409).json({success:false,error:error.message});}
+  const s = snapshot.store;
+  const e = (s.expenses||{})[req.params.id];
   if (!e) return res.status(404).json({ success: false, error: 'Not found.' });
   if (!canViewExpense(req, e)) return res.status(403).json({ success: false, error: normalizedNature(e.nature)==='PERSONAL'?'Only the Owner or the expense creator can view this PERSONAL record.':'You do not have access to this accounting entity.' });
   if(e.nonExpenseReimbursement||e.salaryAdvanceId)return res.status(409).json({success:false,error:'This entry is generated by the salary/reimbursement workflow. Correct it in its source workflow rather than as a vendor expense.'});
@@ -2802,6 +2858,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
     return res.status(403).json({ success: false, error: 'You can only edit your own pending expenses.' });
   }
   const b = req.body || {};
+  if(['amount','requestedAmount'].some(key=>b[key]!=null&&!validExpenseCorrectionMoney(b[key])))return res.status(400).json({success:false,error:'Enter positive amounts with no more than two decimal places.'});
   const finalized = e.status !== 'pending';
   const financialLock=expenseFinancialLock(s,e,{blockedReferences:unpayBlockedReferences(s)});
   if(financialLock.locked&&reconciledExpensePayloadChanged(e,b))return res.status(409).json({success:false,error:'This expense has a reconciled payment. Its amount, date and payment details are locked for every role, including the Owner. Only vendor, particulars and category/type may be edited.',financialFieldsLocked:true,financialLockReason:financialLock.reason});
@@ -2823,19 +2880,20 @@ router.post('/api/expenses/:id', (req, res, next) => {
     if(result.changed)saveStore(s);
     return res.json({success:true,expense:decoratedEditableExpense(s,req,e)});
   }
-  const beforeEdit = JSON.parse(JSON.stringify(e));
+  try{assertExpenseFinancialCorrection(snapshot,req,e,b);}catch(error){return res.status(error.status||409).json({success:false,error:error.message});}
+  const priorAudit=(s.auditLog||[]).slice(),beforeEdit = JSON.parse(JSON.stringify(e));
   const hasCompanyPayments=(e.payments||[]).some(p=>!p.personalFunds),hasReimbursements=(e.reimbursementPayments||[]).length>0||num(e.reimbursementAmount)>0;
   // A personally-paid amount is one accounting fact represented in the
   // expense and its linked personal payment. Owner/Admin may correct an OCR
   // mistake only while no company payment or reimbursement has followed; the
   // linked values are then updated together below and fully audited.
-  const canCorrectPersonalPayment=isOwner(req)&&e.paidAlready&&!hasCompanyPayments&&!hasReimbursements;
+  const canCorrectPersonalPayment=canEditExpenseFinancials(req)&&e.paidAlready&&!hasCompanyPayments&&!hasReimbursements;
   if (b.date != null) e.date = String(b.date).slice(0, 10);
   if (b.particulars != null) e.particulars = String(b.particulars).trim();
   if (b.amount != null) {
     const nextAmount = num(b.amount);
     if (!(nextAmount > 0)) return res.status(400).json({ success:false, error:'Expense amount must be greater than 0.' });
-    if(nextAmount!==num(e.amount)&&!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can change an expense amount.'});
+    if(nextAmount!==num(e.amount)&&!canEditExpenseFinancials(req))return res.status(403).json({success:false,error:'Your Manage permissions do not allow expense amount corrections.'});
     const alreadyMoved=roundMoney(num(e.paidAmount)+provisionalPaymentTotal(e));
     if (nextAmount < alreadyMoved&&!canCorrectPersonalPayment) return res.status(400).json({ success:false, error:'Expense amount cannot be lower than ₹'+round0(alreadyMoved)+' already paid or provisionally recorded.' });
     e.amount = nextAmount;
@@ -2844,7 +2902,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
   if (b.requestedAmount != null) {
     const requested = num(b.requestedAmount);
     if (!(requested > 0) || requested > e.amount) return res.status(400).json({ success: false, error: 'Requested payment must be greater than 0 and cannot exceed the total amount.' });
-    if(requested!==num(e.requestedAmount||e.amount)&&!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can change the payment amount.'});
+    if(requested!==num(e.requestedAmount||e.amount)&&!canEditExpenseFinancials(req))return res.status(403).json({success:false,error:'Your Manage permissions do not allow payment amount corrections.'});
     if (e.paidAlready && requested < num(e.personalPaidAmount)&&!canCorrectPersonalPayment) return res.status(400).json({ success: false, error: 'Requested payment cannot be less than the amount already paid personally.' });
     e.requestedAmount = requested;
   }
@@ -2876,15 +2934,12 @@ router.post('/api/expenses/:id', (req, res, next) => {
   if (canApprove(req) && CHANNELS.includes(b.channel)) e.channel = b.channel;
   if (PAYMENT_TYPES.includes(b.paymentType)) e.paymentType = b.paymentType;
   if(b.paymentAccount!=null&&String(b.paymentAccount).trim()&&(e.payments||[]).some(p=>!p.personalFunds)){
-    if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can change the account used for a recorded payment.'});
-    const nextAccount=allowedCompanyAccount(s,e.nature,b.paymentAccount);
-    if(!nextAccount)return res.status(400).json({success:false,error:'Select a paying account assigned to this accounting entity.'});
-    const companyPayments=(e.payments||[]).filter(p=>!p.personalFunds),target=companyPayments.at(-1),oldAccount=target.account||e.account||'',batchId=target.batchPaymentId||'';
-    if(nextAccount!==oldAccount){
-      if(Object.values(s.expenses||{}).some(x=>expenseRefunds.hasSource(s,x.id)&&(x.payments||[]).some(p=>!p.personalFunds&&(p===target||batchId&&p.batchPaymentId===batchId))))return res.status(409).json({success:false,error:'A bill in this consolidated payment has a linked refund. Correct its refund before changing the batch paying account.'});
-      const affected=[];
-      Object.values(s.expenses||{}).forEach(x=>(x.payments||[]).forEach(p=>{if(p.personalFunds)return;const same=p===target||(batchId&&p.batchPaymentId===batchId);if(!same)return;affected.push({expense:x,payment:p,before:p.account||x.account||''});p.account=nextAccount;if(x===e||((x.payments||[]).filter(q=>!q.personalFunds).at(-1)===p))x.account=nextAccount;}));
-      affected.filter(x=>x.expense!==e).forEach(x=>audit(s,req,'PAYMENT_ACCOUNT_CHANGED','expense',x.expense.id,{nature:x.expense.nature,account:nextAccount,paymentId:x.payment.id,before:{account:x.before},after:{account:nextAccount},note:`Linked payment account corrected with ${e.id}${editReason?' · '+editReason:''}`}));
+    const target=(e.payments||[]).filter(p=>!p.personalFunds).at(-1),oldAccount=target.account||e.account||'';
+    if(canonicalAccountName(b.paymentAccount).toLowerCase()!==canonicalAccountName(oldAccount).toLowerCase()){
+      if(!canEditExpenseFinancials(req))return res.status(403).json({success:false,error:'Your Manage permissions do not allow recorded paying-account corrections.'});
+      const nextAccount=allowedCompanyAccount(s,e.nature,b.paymentAccount);
+      if(!nextAccount)return res.status(400).json({success:false,error:'Select a paying account assigned to this accounting entity.'});
+      target.account=nextAccount;e.account=nextAccount;
     }
   }
   if (b.qrPhoto != null) e.qrPhoto = String(b.qrPhoto).trim();
@@ -2936,7 +2991,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
   }
   if (e.paymentType === 'Cash') e.qrPhoto = '';
   if (!e.paidAlready && finalized && e.status !== 'rejected') e.status = expenseRefunds.expenseDue(s,e)<=0 ? 'paid' : (num(e.paidAmount) > 0 ? 'partially_paid' : 'approved');
-  const tracked = ['nature','date','particulars','amount','isInstallment','requestedAmount','type','ledger','channel','paymentType','qrPhoto','bill','account','billPhoto','billPhotos','billNote','fundedBy','purchasePaymentProof','purchasePaymentProofs','vendor','paidAlready','personalPaidAmount','paidAmount','reimbursementStatus'];
+  const tracked = Array.from(new Set([...Object.keys(beforeEdit),...Object.keys(e)]));
   const changes = tracked.filter(k => JSON.stringify(beforeEdit[k]) !== JSON.stringify(e[k])).map(k => ({ field:k, before:beforeEdit[k] == null ? '' : beforeEdit[k], after:e[k] == null ? '' : e[k] }));
   if (changes.length) {
     e.auditHistory = Array.isArray(e.auditHistory) ? e.auditHistory : [];
@@ -2944,7 +2999,8 @@ router.post('/api/expenses/:id', (req, res, next) => {
     if(e.telegramNeedsReview)e.telegramNeedsReview=false;
     audit(s,req,'EDITED','expense',e.id,{nature:e.nature,before:beforeEdit,after:e,note:editReason||'Pending expense correction'});
   }
-  saveStore(s);
+  if((s.auditLog||[]).length!==priorAudit.length+(changes.length?1:0))s.auditLog=priorAudit.concat(changes.length?s.auditLog.at(-1):[]);
+  try{commitExpenseFinancialCorrection(snapshot,s,e.id);}catch(error){return res.status(409).json({success:false,error:error.message});}
   res.json({ success: true, expense: e });
 });
 
@@ -3015,7 +3071,7 @@ router.get('/api/expenses/:id/payment-candidates', (req, res) => {
   // Refund coupons are separate from money advances, and retain the refund
   // workflow's source-account and Owner-only access checks.
   const refundCredits=[];
-  if(isAdmin(req)&&!(source.ownerOnly&&!isOwner(req)))expenseRefunds.records(s).filter(expenseRefunds.received).forEach(record=>{
+  if(isAdmin(req)&&canManageRestrictedExpense(req,source))expenseRefunds.records(s).filter(expenseRefunds.received).forEach(record=>{
     if(record.nature!==nature)return;
     try{expenseRefundRoutes.checkRecordAccess(req,record,s,expenseRefundDeps);}catch{return;}
     record.components.filter(c=>c.vendorAdvanceId&&expenseRefunds.sameVendor(source.vendor,c.issuer)).forEach(c=>{
@@ -3043,7 +3099,7 @@ function recordBatchVendorPayment(req, res) {
   if (expenses.some(e => normalizedNature(e.nature)!==nature || vendorKey(e.vendor)!==vendor)) return res.status(400).json({ success:false, error:'Combined payments must use the same entity and vendor.' });
   const refundCredit=b.refundCredit||null,date=String(b.date||indiaBusinessDate()).slice(0,10),requestId=String(b.requestId||'');
   if(refundCredit&&!isAdmin(req))return res.status(403).json({success:false,error:'Only Admin or Owner can redeem refund coupons and credits.'});
-  if(refundCredit&&expenses.some(e=>e.ownerOnly&&!isOwner(req)))return res.status(403).json({success:false,error:'The receiving expense is restricted to the Owner.'});
+  if(refundCredit&&expenses.some(e=>!canManageRestrictedExpense(req,e)))return res.status(403).json({success:false,error:'The receiving expense is restricted to the Owner.'});
   if((requestId||refundCredit)&&!/^[a-zA-Z0-9-]{8,90}$/.test(requestId))return res.status(400).json({success:false,error:'Refresh the payment form and retry.'});
   const requestFingerprint=crypto.createHash('sha256').update(JSON.stringify({expenseIds:ids.slice().sort(),amount:b.amount==null?null:Number(b.amount),
     account:String(b.account||''),creditCardId:String(b.creditCardId||''),date,paymentType:b.paymentType||'',applyVendorCredit:b.applyVendorCredit===true,
@@ -3072,7 +3128,7 @@ function recordBatchVendorPayment(req, res) {
       const amount=roundMoney(Math.min(left,expenseRefunds.expenseDue(s,expense)));if(!(amount>0))return;
       const plan=expenseRefunds.prepareRedemption(s,record,{componentId:component.id,expenseId:expense.id,amount,date,reason:b.note,requestId:requestId+'-C'+index},{today:indiaBusinessDate(),
         checkRecord:r=>expenseRefundRoutes.checkRecordAccess(req,r,s,expenseRefundDeps),checkExpense:e=>{
-          if(!canViewExpense(req,e)||!canApproveExpenseNature(req,e)||e.ownerOnly&&!isOwner(req)){const error=new Error('The receiving expense is restricted.');error.status=403;throw error;}
+          if(!canViewExpense(req,e)||!canApproveExpenseNature(req,e)||!canManageRestrictedExpense(req,e)){const error=new Error('The receiving expense is restricted.');error.status=403;throw error;}
         }});
       refundCreditPlans.push(plan);left=roundMoney(left-amount);
     });
@@ -3203,7 +3259,7 @@ router.get('/api/expenses/reconciliation-reminders',(req,res)=>{
     const every=cadenceDays[account],key=bankStatementBookKey('SANKI',account),book=(s.bankStatements||{})[key]||{},through=String(book.reconciledThrough||''),draft=Object.values(s.bankReconciliationDrafts||{}).filter(x=>normalizedNature(x.nature)==='SANKI'&&x.account===account).sort((a,b)=>String(a.summary&&a.summary.from||'').localeCompare(String(b.summary&&b.summary.from||'')))[0],needsStatement=isDue(through,every),daysBehind=daysSince(through);
     return{type:'bank',account,nature:'SANKI',cadenceDays:every,cadenceLabel:every===2?'Every alternate day':'Weekly',reconciledThrough:through,requiredThrough,needsStatement,pendingDraft:!!draft,draftId:draft&&draft.id||'',draftFrom:draft&&draft.summary&&draft.summary.from||'',draftTo:draft&&draft.summary&&draft.summary.to||'',daysBehind,status:draft?'review_pending':(needsStatement?'statement_required':'up_to_date'),href:'/expenses.html?tab=cash&account='+encodeURIComponent(account)};
   });
-  const cards=loadCreditCards(),visibleCards=Object.values(cards.cards||{}).filter(card=>card.active!==false&&(!card.ownerOnly||isOwner(req)));
+  const cards=loadCreditCards(),visibleCards=Object.values(cards.cards||{}).filter(card=>card.active!==false&&canManageRestrictedCard(req,card));
   visibleCards.forEach(card=>{const every=cadenceDays['Credit cards'],statements=Object.values(cards.statements||{}).filter(x=>x.cardId===card.id&&(x.storedName||String(x.summary&&x.summary.format||'').toLowerCase()!=='manual')),statementThrough=x=>String(x&&x.summary&&x.summary.to||x&&x.periodTo||''),pending=statements.filter(x=>x.status!=='finalized').sort((a,b)=>String(b.uploadedAt||'').localeCompare(String(a.uploadedAt||'')))[0],latest=statements.filter(x=>x.status==='finalized').sort((a,b)=>statementThrough(b).localeCompare(statementThrough(a)))[0],through=statementThrough(latest),needsStatement=isDue(through,every);reminders.push({type:'credit_card',account:creditCardName(card),cardId:card.id,cadenceDays:every,cadenceLabel:'Weekly',reconciledThrough:through,requiredThrough,needsStatement,pendingDraft:!!pending,draftId:pending&&pending.id||'',draftFrom:pending&&pending.summary&&pending.summary.from||pending&&pending.periodFrom||'',draftTo:pending&&pending.summary&&pending.summary.to||pending&&pending.periodTo||'',daysBehind:daysSince(through),status:pending?'review_pending':(needsStatement?'statement_required':'up_to_date'),href:'/expenses.html?tab=creditcards'});});
   const cashRows=(s.cashReconciliations||[]),cashApproved=cashRows.filter(x=>x.status==='approved').sort((a,b)=>String(b.verifiedThrough||'').localeCompare(String(a.verifiedThrough||'')))[0],cashPending=cashRows.filter(x=>x.status==='pending').sort((a,b)=>String(b.requestedAt||'').localeCompare(String(a.requestedAt||'')))[0],cashThrough=String(cashApproved&&cashApproved.verifiedThrough||''),cashNeeds=!cashThrough||cashThrough<requiredThrough,cashDays=cashThrough?Math.max(0,Math.round((Date.parse(requiredThrough+'T00:00:00Z')-Date.parse(cashThrough+'T00:00:00Z'))/86400000)):null;
   reminders.push({type:'cash',account:'Counter Cash',nature:'SANKI',cadenceDays:1,cadenceLabel:'Daily',reconciledThrough:cashThrough,requiredThrough,needsStatement:cashNeeds,pendingDraft:!!cashPending,draftId:cashPending&&cashPending.id||'',draftFrom:cashPending&&cashPending.verifiedThrough||'',draftTo:cashPending&&cashPending.verifiedThrough||'',daysBehind:cashDays,status:cashPending?'approval_pending':(cashNeeds?'verification_required':'up_to_date'),href:'/expenses.html?tab=cash&account=Counter%20Cash'});
@@ -4302,7 +4358,7 @@ function readLedgerEditSnapshot(){
   return {raw,store,external,externalRaw};
 }
 const ledgerTransactionEditor=require('./ledger-transaction-edits').create({
-  canEdit:canEditLedgerTransactions,isOwner,approvalNatures,canPersonal:canManagePersonalAccounting,
+  canEdit:canEditLedgerTransactions,isOwner,canAccessExpense:canManageRestrictedExpense,approvalNatures,canPersonal:canManagePersonalAccounting,
   accountVisible:accountVisibleToReq,personalAccount:(account,nature)=>(ENTITY_ACCOUNTS.PERSONAL||[]).includes(account)&&!(ENTITY_ACCOUNTS[nature]||[]).includes(account),
   ledgerAccounts:ledgerAccountsForNature,accountBelongs:accountBelongsInLedgerBook,paymentPosted:paymentIsPosted,
   bookKey:bankStatementBookKey,
@@ -4549,6 +4605,29 @@ function privateBankAuthorityLedgerEntry(req,s,account,entry,sourceIds){
   if(!synthesized&&!privateSource)return entry;
   return{id:entry.id,date:entry.date,kind:privateSource?'personal_bank_cash_redacted':'verified_bank_cash',entity:entry.entity||'',description:privateSource?'Owner personal bank movement · private details restricted [PERSONAL]':'Verified bank cash movement · source details restricted',reference:entry.reference||'',debit:num(entry.debit),credit:num(entry.credit),proof:'',proofs:[],note:'',by:'',editable:false,deletable:false,privacyRedacted:true,bankMovementAuthority:marker,...(entry.sourceIds?{sourceIds:entry.sourceIds.slice()}:{}),...(entry.linkedEntryIds?{linkedEntryIds:entry.linkedEntryIds.slice()}:{}),...(entry.originalDate?{originalDate:entry.originalDate}:{}),...(entry.bankSourceMissing?{bankSourceMissing:true}:{})};
 }
+router.get('/api/expenses/bank-opening-anchor-evidence', (req, res) => {
+  const {nature,account,draftId}=req.query;
+  if(!['SANKI','SAMAST','PERSONAL'].includes(nature)||![account,draftId].every(value=>typeof value==='string'&&value.length>0&&value.length<=256&&value.trim()===value))return res.status(400).json({success:false,error:'Select an exact account, entity and saved draft.'});
+  const shared=isSharedBankReconciliationAccount(account);
+  if((!isAdmin(req)&&!(nature==='PERSONAL'&&canManagePersonalAccounting(req))&&!(shared&&nature==='SAMAST'&&(canManagePersonalAccounting(req)||isPrashant(req))))||(!shared&&!approvalNatures(req).includes(nature))||!accountVisibleToReq(req,account)||(nature==='PERSONAL'&&!canManagePersonalAccounting(req)))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation evidence.'});
+  let snapshot;try{snapshot=readLedgerEditSnapshot();}catch(error){return res.status(409).json({success:false,error:'The accounting evidence cannot be read safely. Complete its protected recovery workflow first; no records were changed.'});}
+  // Pass the already-read card snapshot: normal card discovery can recover an
+  // accounting journal, which is forbidden for this evidence-only endpoint.
+  try{
+    const s=snapshot.store,cards=snapshot.external[CREDIT_CARD_PATH]||{cards:{}};
+    if(!canAccessBankReconciliation(req,s,nature,account,cards))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation evidence.'});
+    const out=require('./bank-opening-anchor-evidence').snapshot(s,{nature,account,bookKey:bankStatementBookKey(nature,account),draftId});
+    return res.status(out.error?out.status||400:200).json(out.error?{success:false,error:out.error}:out);
+  }catch(error){return res.status(409).json({success:false,error:'The saved opening-anchor evidence cannot be interpreted safely. Review its retained sources; no records were changed.'});}
+});
+router.get('/api/expenses/bank-reconciliation-evidence', (req, res) => {
+  const nature=normalizedNature(req.query.nature),account=String(req.query.account||'');
+  if(nature!=='PERSONAL'||!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation evidence.'});
+  let s;try{s=readLedgerEditSnapshot().store;}catch(error){return res.status(409).json({success:false,error:'The accounting evidence cannot be read safely. Complete its protected recovery workflow first; no records were changed.'});}
+  if(!canAccessBankReconciliation(req,s,nature,account))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation evidence.'});
+  const out=require('./bank-reconciliation-evidence').snapshot(s,{nature,account,bookKey:bankStatementBookKey(nature,account),movementId:String(req.query.movementId||''),draftId:String(req.query.draftId||''),rowId:String(req.query.rowId||'')});
+  return res.status(out.error?out.status||400:200).json(out.error?{success:false,error:out.error}:out);
+});
 router.get('/api/expenses/account-ledger', (req, res) => {
   const nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim(),prashantSpecial=isPrashant(req)&&nature==='SANKI'&&(account===DEFAULT_COUNTER_CASH||account==='Services');
   if (!isAdmin(req)&&!prashantSpecial) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
@@ -5396,11 +5475,17 @@ function managedPersonalTransferDuplicateConflict(s,candidate,options={}){
   }
   const collisions=(s.transfers||[]).map(transfer=>({transfer,candidate:bankConfirmedPersonalTransferCandidateFromTransfer(s,transfer,candidate.key)})).filter(item=>item.candidate&&item.candidate.key===candidate.key&&!samePersonalTransferProvenance(item.candidate,candidate)),existing=collisions.filter(item=>personalTransferBankEvidenceRelation(candidate,item.candidate)!=='distinct'&&!(item.transfer.accountingExcluded&&personalTransferExcludedDuplicateHasDistinctRepresentative(candidate,item,collisions)));
   if(existing.length)return{type:'existing',existing,candidate};
-  const pending=[];Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>Object.entries(draft.resolutions||{}).forEach(([rowId,resolution])=>{const value=bankConfirmedPersonalTransferCandidateFromResolution(draft,rowId,resolution);if(value&&value.key===candidate.key&&!samePersonalTransferProvenance(value,candidate)&&personalTransferBankEvidenceRelation(candidate,value)!=='distinct')pending.push(value);}));
+  const pending=[];Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>Object.entries(draft.resolutions||{}).forEach(([rowId,resolution])=>{const value=bankConfirmedPersonalTransferCandidateFromResolution(draft,rowId,resolution);if(value&&value.key===candidate.key&&!samePersonalTransferProvenance(value,candidate)&&personalTransferBankEvidenceRelation(candidate,value)!=='distinct')pending.push(Object.assign({},value,{claimAccount:canonicalAccountName(draft.account),claimNature:normalizedNature(draft.nature)}));}));
   if(!pending.length)return null;
   const contenders=[candidate].concat(pending).filter((value,index,all)=>all.findIndex(other=>samePersonalTransferProvenance(value,other))===index).sort(comparePersonalTransferCandidates),winner=contenders[0];
   if(options.allowDeterministicWinner&&samePersonalTransferProvenance(candidate,winner))return null;
   return{type:'pending',pending,winner};
+}
+function managedPersonalTransferPendingClaim(conflict){
+  if(!conflict||conflict.type!=='pending'||!Array.isArray(conflict.pending)||!conflict.pending.length)return null;
+  // The deterministic finalization winner may be the current candidate. A
+  // rejection must identify an actual OTHER saved decision, never that new form.
+  return conflict.pending.find(value=>samePersonalTransferProvenance(value,conflict.winner))||conflict.pending.slice().sort(comparePersonalTransferCandidates)[0];
 }
 function managedPersonalTransferConflictMessage(conflict){
   if(!conflict)return'';
@@ -5411,8 +5496,18 @@ function managedPersonalTransferConflictMessage(conflict){
     if(ids.length===1)return'This PERSONAL bank transfer already exists as '+ids[0]+'. Link existing '+ids[0]+' instead of creating another transfer.';
     return'This PERSONAL bank transfer matches multiple existing bank-confirmed transfers ('+ids.join(', ')+'). Review and link the correct existing transfer; no new transfer was created.';
   }
-  const winner=conflict.winner||conflict.pending[0];
-  return'This PERSONAL bank transfer is already pending in reconciliation '+winner.draftId+' ('+winner.rowId+'). Finish or undo that decision before creating another transfer.';
+  const pending=managedPersonalTransferPendingClaim(conflict);if(!pending)return'This PERSONAL transfer has conflicting saved reconciliation evidence. Review its existing decision before creating another transfer.';
+  const evidence=pending.bankEvidence||{},reference=evidence.reference||'not reliably verified';
+  return'This PERSONAL bank transfer is already pending in reconciliation '+pending.draftId+' ('+pending.rowId+'). A specific saved transfer decision, not merely an open account reconciliation, claims '+(pending.claimAccount||evidence.account||'the bank account')+' · '+pending.date+' · principal ₹'+pending.amount.toFixed(2)+' · bank reference '+reference+'. Review it first; if it is this transfer, finish or undo that saved decision before creating another transfer. Nothing was posted and your current form is unchanged.';
+}
+function managedPersonalTransferConflictResponse(s,req,conflict){
+  const response={success:false,error:managedPersonalTransferConflictMessage(conflict)},pending=managedPersonalTransferPendingClaim(conflict);
+  if(!pending)return response;
+  const draft=(s.bankReconciliationDrafts||{})[pending.draftId];
+  if(!draft||!canAccessBankDraft(req,s,draft)){response.error='A specific saved transfer decision already claims or may represent this PERSONAL bank transaction; an open account alone is not a claim. Ask an authorized reviewer to inspect that decision before creating another transfer. Nothing was posted and your current form is unchanged.';return response;}
+  const evidence=pending.bankEvidence||{},nature=normalizedNature(draft.nature),account=canonicalAccountName(draft.account);
+  response.transferClaim={type:'pending_internal_transfer',draftId:pending.draftId,rowId:pending.rowId,nature,account,date:pending.date,principalAmount:pending.amount,bankReference:evidence.reference||'',bankReferenceVerified:!!evidence.reference,reviewUrl:'/expenses.html?tab=cash&nature='+encodeURIComponent(nature)+'&account='+encodeURIComponent(account)+'&draft='+encodeURIComponent(pending.draftId)};
+  return response;
 }
 function stagedManagedPersonalTransferDuplicateError(s,draft){
   for(const [rowId,resolution] of Object.entries(draft&&draft.resolutions||{})){
@@ -6161,20 +6256,32 @@ function bankAmountAuthorityError(req,res,error){
   }
   return res.status(error.status||409).json({success:false,error:error.message,bankAmountAuthorityBlocked:error.message});
 }
+function bankChargeSplitTarget(s,draft,view,bankRowId,appId){
+  if(draft.originalStatementPeriod||Object.values(s.bankReconciliationApprovals||{}).some(approval=>approval.draftId===draft.id&&approval.status==='pending'))throw new Error('This reconciliation is locked or awaiting Owner approval. Review or withdraw that request before changing its bank-charge allocation.');
+  const row=view.rows.find(value=>value.id===bankRowId&&value.bank),linked=view.rows.find(value=>value.app&&value.app.id===appId),movement=linked&&linked.app||(view.linkCandidates||[]).find(value=>value.id===appId);
+  if(!row||!movement||row.resolution||row.status==='already_reconciled'||row.reversalReviewRequired||linked&&linked.id!==bankRowId&&(linked.bank||linked.resolution))throw new Error('Choose an available bank debit and existing principal. Undo an incorrect saved decision before allocating its bank charge.');
+  const targetIds=new Set([appId].concat(movement.sourceIds||[])),otherClaims=otherDraftClaimedAppIds(s,draft,appBankMovements(s,draft.account,draft.nature));
+  if(Array.from(targetIds).some(id=>otherClaims.has(id))||view.rows.some(value=>value.bank&&value.id!==bankRowId&&([value.app].concat(value.app&&value.app.linkedEntries||[]).filter(Boolean).some(item=>targetIds.has(item.id)||(item.sourceIds||[]).some(id=>targetIds.has(id)))||resolutionLinkedAppIds(value.resolution).some(id=>targetIds.has(id)))))throw new Error('This ledger entry is already matched elsewhere. Undo the incorrect decision before allocating its bank charge.');
+  if(!(num(row.bank.debit)>0)||num(row.bank.credit)!==0||!(num(movement.debit)>0)||num(movement.credit)!==0)throw new Error('Bank charges can be allocated only to an outgoing bank debit and an outgoing existing principal.');
+  return{row,linked,movement};
+}
 router.post('/api/expenses/bank-statements/amount-authority-preview',(req,res)=>{
   const s=loadStore(),b=req.body||{},draft=(s.bankReconciliationDrafts||{})[String(b.draftId||'')];
   if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});
   if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot review this bank reconciliation.'});
   if(Array.isArray(b.amountAuthorityAllocations)&&b.amountAuthorityAllocations.some(row=>String(row&&(row.nature||row.beneficiaryNature)||'').trim().toUpperCase()==='PERSONAL')&&!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'The Owner must review private card ownership allocations.'});
   try{
-    const view=draftReconciliation(s,draft),bankRowId=String(b.bankRowId||b.rowId||''),row=view.rows.find(value=>value.id===bankRowId&&value.bank),appId=String(b.appId||row&&row.app&&row.app.id||''),movement=appBankMovements(s,draft.account,draft.nature).find(value=>value.id===appId);
+    const view=draftReconciliation(s,draft,{readOnly:true}),bankRowId=String(b.bankRowId||b.rowId||''),row=view.rows.find(value=>value.id===bankRowId&&value.bank),appId=String(b.appId||row&&row.app&&row.app.id||''),movement=appBankMovements(s,draft.account,draft.nature).find(value=>value.id===appId);
     if(!row||!movement||row.status==='already_reconciled'||row.resolution||row.reversalReviewRequired)throw new Error('Choose an available one-to-one bank transaction and ledger entry.');
     if(!view.rows.some(value=>value.app&&value.app.id===appId)&&!(view.linkCandidates||[]).some(value=>value.id===appId))throw new Error('This ledger entry is outside the available reconciliation candidates. Select an available entry.');
     const claims=otherDraftClaimedAppIds(s,draft,appBankMovements(s,draft.account,draft.nature));
     if(claims.has(appId)||view.rows.some(value=>value.bank&&value.id!==bankRowId&&([value.app].concat(value.app&&value.app.linkedEntries||[]).filter(Boolean).some(item=>item.id===appId||(item.sourceIds||[]).includes(appId))||resolutionLinkedAppIds(value.resolution).includes(appId))))throw new Error('This ledger entry is already matched elsewhere. Undo the incorrect decision first.');
     const originalAmount=roundMoney(num(movement.debit)+num(movement.credit)),bankAmount=roundMoney(num(row.bank.debit)+num(row.bank.credit));
     if(Math.sign(num(movement.credit)-num(movement.debit))!==Math.sign(num(row.bank.credit)-num(row.bank.debit)))return res.status(400).json({success:false,error:'Bank and ledger movements must have the same money direction.'});
-    if(reconciliationCandidate(row.bank,movement,draft.matchingPolicy,draft.account)?.axisTransferCharge)throw new Error('This bank amount includes a recognized Axis transfer charge. Keep the separate principal and Bank Charges allocation instead of replacing the principal.');
+    if(reconciliationCandidate(row.bank,movement,draft.matchingPolicy,draft.account)?.axisTransferCharge){
+      bankChargeSplitTarget(s,draft,view,bankRowId,appId);
+      return res.json({success:true,bankAmountAuthority:null,bankAmountAuthorityBlocked:'',bankDate:row.bank.date,originalAmount,bankAmount,axisTransferChargeSplit:{bankRowId,appId,principalAmount:originalAmount,chargeAmount:roundMoney(bankAmount-originalAmount),chargeCategory:'BANK CHARGES',grossAmount:bankAmount}});
+    }
     const plan=originalAmount===bankAmount?null:bankAmountAuthorityPolicy.prepare(s,draft,row.bank,movement,bankRowId,'manual',{amountAuthorityAllocations:b.amountAuthorityAllocations});
     return res.json({success:true,bankAmountAuthority:plan?bankAmountAuthorityPolicy.publicPlan(plan):null,bankAmountAuthorityBlocked:'',bankDate:row.bank.date,originalAmount,bankAmount});
   }catch(error){return bankAmountAuthorityError(req,res,error);}
@@ -6304,7 +6411,7 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
       if(String(salaryAdvance.account||'').trim().toLowerCase()!==fromAccount.toLowerCase())return res.status(400).json({success:false,error:'The selected salary advance was paid from a different source account.'});
     }
     const personalCandidate=bankConfirmedPersonalTransferCandidate({fromNature,toNature,fromAccount,toAccount,classification,date:bank.date,amount,draftId:draft.id,rowId:b.rowId,stagedAt:now,draftCreatedAt:draft.createdAt,bankAccount:draft.account,bank}),duplicate=managedPersonalTransferDuplicateConflict(s,personalCandidate);
-    if(duplicate)return res.status(409).json({success:false,error:managedPersonalTransferConflictMessage(duplicate)});
+    if(duplicate)return res.status(409).json(managedPersonalTransferConflictResponse(s,req,duplicate));
     const transferConflicts=findTransferCreationConflicts({store:s,draft,rowId:b.rowId,bank,fromAccount,toAccount,fromNature,toNature,principalAmount:amount});
     if(transferConflicts.length)return res.status(409).json({success:false,error:transferCreationConflictMessage(transferConflicts),transferConflicts});
     if(row.status!=='missing_in_app')return res.status(400).json({success:false,error:'Choose an incoming bank transaction that is missing in the app.'});
@@ -6523,7 +6630,7 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
     if(!split)return res.status(400).json({success:false,error:'Amount received plus bank charge must exactly equal the bank transaction. A bank credit cannot include a sender-side charge.'});
     if(otherNature!==reconciledNature&&split.charge>0&&(reconciledNature!=='SANKI'||!isBankLedgerName(draft.account)))return res.status(400).json({success:false,error:'A confirmed bank charge can be recorded only against the reconciled business bank account.'});
     const personalCandidate=bankConfirmedPersonalTransferCandidate({fromNature,toNature,fromAccount,toAccount,classification,date:row.bank.date,amount:split.principal,draftId:draft.id,rowId:b.rowId,stagedAt:new Date().toISOString(),draftCreatedAt:draft.createdAt,bankAccount:draft.account,bank:row.bank}),duplicate=managedPersonalTransferDuplicateConflict(s,personalCandidate);
-    if(duplicate)return res.status(409).json({success:false,error:managedPersonalTransferConflictMessage(duplicate)});
+    if(duplicate)return res.status(409).json(managedPersonalTransferConflictResponse(s,req,duplicate));
     const transferConflicts=findTransferCreationConflicts({store:s,draft,rowId:b.rowId,bank:row.bank,fromAccount,toAccount,fromNature,toNature,principalAmount:split.principal});
     if(transferConflicts.length)return res.status(409).json({success:false,error:transferCreationConflictMessage(transferConflicts),transferConflicts});
     b.principalAmount=split.principal;b.chargeAmount=split.charge;b.otherAccount=otherAccount;b.otherNature=otherNature;b.classification=classification;
@@ -6531,10 +6638,12 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   const chargeCategory=b.action==='paytm_settlement'?'PAYTM CHARGES':String(b.chargeCategory||'BANK CHARGES').trim();
   if(['create_split_adjustment','split_allocation'].includes(b.action)&&!['BANK CHARGES','PAYTM CHARGES'].includes(chargeCategory))return res.status(400).json({success:false,error:'Choose Bank Charges or Paytm Charges.'});
   if(b.action==='split_allocation'){
-    const total=num(row.bank&&row.bank.debit||row.bank&&row.bank.credit),principal=num(b.principalAmount),charge=num(b.chargeAmount),appId=String(b.appId||'').trim(),linked=view.rows.find(x=>x.app&&x.app.id===appId);
-    if(!row.bank||!appId||!linked||Math.abs(principal+charge-total)>.01||Math.abs((num(linked.app.debit)||num(linked.app.credit))-principal)>.01)return res.status(400).json({success:false,error:'Choose an existing ledger reference and make principal plus charge equal the bank amount.'});
-    const linkedNature=reconciliationOwnershipNature(linked.app.entity);if(isSharedBankReconciliationAccount(draft.account)){if(!linkedNature)return res.status(409).json({success:false,error:'The linked principal has no reliable SAMAST or PERSONAL entity.'});if(postingNature&&postingNature!==linkedNature)return res.status(409).json({success:false,error:'The manual transaction tag conflicts with the linked '+linkedNature+' principal.'});postingNature=linkedNature;}
-    draft.resolutions[linked.id]={action:'linked_split',reason:'Linked as principal component of '+b.rowId,appId,by:req.user.username,at:new Date().toISOString()};
+    const total=num(row.bank&&row.bank.debit),principal=num(b.principalAmount),charge=num(b.chargeAmount),appId=String(b.appId||'').trim();let selected;
+    try{selected=bankChargeSplitTarget(s,draft,view,b.rowId,appId);}catch(error){return res.status(409).json({success:false,error:error.message});}
+    const cents=value=>Math.round(value*100);
+    if(!(principal>0)||!(charge>0)||Math.abs(principal*100-cents(principal))>.000001||Math.abs(charge*100-cents(charge))>.000001||cents(principal)+cents(charge)!==cents(total)||cents(num(selected.movement.debit))!==cents(principal))return res.status(400).json({success:false,error:'Choose an existing ledger reference and make positive principal plus positive charge equal the bank debit exactly.'});
+    const linkedNature=reconciliationOwnershipNature(selected.movement.entity);if(isSharedBankReconciliationAccount(draft.account)){if(!linkedNature)return res.status(409).json({success:false,error:'The linked principal has no reliable SAMAST or PERSONAL entity.'});if(postingNature&&postingNature!==linkedNature)return res.status(409).json({success:false,error:'The manual transaction tag conflicts with the linked '+linkedNature+' principal.'});postingNature=linkedNature;}
+    if(selected.linked&&selected.linked.id!==b.rowId){draft.resolutions=draft.resolutions||{};draft.resolutions[selected.linked.id]={action:'linked_split',reason:'Linked as principal component of '+b.rowId,appId,linkedRowId:b.rowId,by:req.user.username,at:new Date().toISOString()};}
   }
   if(b.action==='opening_vendor_payable_split'){
     const total=num(row.bank&&row.bank.debit),principal=num(b.principalAmount),openingPayable=num(b.openingPayableAmount),appId=String(b.appId||'').trim(),vendor=String(b.vendor||'').trim(),linked=view.rows.find(x=>x.app&&x.app.id===appId);
@@ -7452,9 +7561,30 @@ if(startupExpenseFileExists&&applyCashCounterMissingEntries(startupExpenseStore)
 if(startupExpenseFileExists&&applyAxis3448PaytmBankTruthSettlements(startupExpenseStore))saveStore(startupExpenseStore);
 if(Object.values(startupExpenseStore.bankReconciliationDrafts||{}).reduce((count,draft)=>count+(draft.originalStatementPeriod?0:applyReviewedBankDates(startupExpenseStore,draft)),0)>0)saveStore(startupExpenseStore);
 
+const sourceCorrectionPolicy = {
+  canEdit:canEditLedgerTransactions,isOwner,canAccessCard:canManageRestrictedCard,canAccessExpense:canManageRestrictedExpense,natures:approvalNatures,
+  personalAccount:(account,nature)=>{const key=canonicalAccountName(account).toLowerCase(),has=n=>(ENTITY_ACCOUNTS[n]||[]).some(value=>canonicalAccountName(value).toLowerCase()===key);return has('PERSONAL')&&!has(nature);},
+  accountVisible:(req,account)=>{const key=canonicalAccountName(account).toLowerCase(),has=n=>(ENTITY_ACCOUNTS[n]||[]).some(value=>canonicalAccountName(value).toLowerCase()===key);return accountVisibleToReq(req,account)&&(!has('PERSONAL')||['SANKI','SAMAST'].some(has)||canManagePersonalAccounting(req));},
+  canonicalAccount:canonicalAccountName,
+  canPersonal:canManagePersonalAccounting,bookKey:bankStatementBookKey,
+  assertUnlocked:(s,options)=>require('./source-correction-guards').assertUnlocked(s,{...options,bookKey:bankStatementBookKey,canonicalAccount:canonicalAccountName}),
+  read:()=>{const snapshot=readLedgerEditSnapshot();require('./source-correction-guards').assertAudit(snapshot.store);require('./source-correction-guards').assertAudit(snapshot.external[CREDIT_CARD_PATH]||{},'audit','CCA-');return Object.assign(snapshot,{cards:snapshot.external[CREDIT_CARD_PATH]||{},cardRaw:snapshot.externalRaw[CREDIT_CARD_PATH]});},
+  audit:(s,req,action,subjectType,subjectId,details)=>{require('./source-correction-guards').assertAudit(s);const previous=Array.isArray(s.auditLog)?s.auditLog.slice():[];audit(s,req,action,subjectType,subjectId,details);if(s.auditLog.length!==previous.length+1)s.auditLog=previous.concat(s.auditLog.at(-1));},
+  commit:(snapshot,s,cards)=>{
+    const current=readLedgerEditSnapshot();
+    if(current.raw!==snapshot.raw||JSON.stringify(current.externalRaw)!==JSON.stringify(snapshot.externalRaw))throw new Error('The source or its accounting evidence changed after preview. Refresh and review the correction again.');
+    const preserve=require('./source-correction-guards').assertPreserved;
+    preserve(JSON.parse(snapshot.raw),s,['transfers','creditCardSettlementAllocations','expenseRefunds','receipts','vendorAdvances','auditLog','auditSeq']);
+    if(cards!==undefined)preserve(snapshot.externalRaw[CREDIT_CARD_PATH]===null?{}:JSON.parse(snapshot.externalRaw[CREDIT_CARD_PATH]),cards,['payments','audit','auditSeq']);
+    const entries=[{fileName:'expenses.json',before:snapshot.raw,after:JSON.stringify(s)}];
+    if(cards!==undefined)entries.push({fileName:'credit-cards.json',before:snapshot.externalRaw[CREDIT_CARD_PATH],after:JSON.stringify(cards)});
+    return bankAuthorityTransaction.commit(DATA_DIR,entries);
+  }
+};
 const expenseRefundDeps = {
-  loadStore,saveStore,audit,isAdmin,isOwner,natures:approvalNatures,nature:normalizedNature,
-  accountVisible:(req,account)=>accountVisibleToReq(req,account)&&(!creditCardByAccount(account)||!creditCardByAccount(account).ownerOnly||isOwner(req)),
+  correctionPolicy:sourceCorrectionPolicy,
+  loadStore,saveStore,audit,isAdmin,isOwner,canAccessExpense:canManageRestrictedExpense,natures:approvalNatures,nature:normalizedNature,
+  accountVisible:(req,account)=>accountVisibleToReq(req,account)&&(!creditCardByAccount(account)||canManageRestrictedCard(req,creditCardByAccount(account))),
   expenses:s=>Object.values(s.expenses||{}).concat(cardExpenseRecords(s)),canView:canViewExpense,today:indiaBusinessDate,
   claimant:reimbursementClaimantForExpense,card:resolveCreditCard,cardName:creditCardName,companyAccount:allowedCompanyAccount,
   ensureVendor:(s,n,name)=>registerVendorForNature(s,n,name,{tags:['Refund credit issuer']}),
@@ -7508,6 +7638,7 @@ module.exports.creditCardSettlementPolicy = {
     return !!candidate&&accounts.some(name=>canonicalAccountName(name).toLowerCase()===candidate||(digits&&canonicalAccountName(name).replace(/\D/g,'').endsWith(digits)));
   }
 };
+module.exports.sourceCorrectionPolicy = sourceCorrectionPolicy;
 module.exports.mergeActiveBankReconciliationDrafts = mergeActiveBankReconciliationDrafts;
 module.exports.extendPendingDraftThroughFinalizedCoverage = extendPendingDraftThroughFinalizedCoverage;
 module.exports.bankFinalizationImportPlan = bankFinalizationImportPlan;

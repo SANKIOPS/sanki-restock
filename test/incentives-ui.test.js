@@ -15,15 +15,64 @@ async function render(view,options={}){
   function element(id){
     if(!elements.has(id))elements.set(id,{id,value:'',innerHTML:'',textContent:'',dataset:{},classList:{toggle(){}},querySelectorAll(selector){
       const name=selector.replace(/^\[|\]$/g,''),matches=Array.from(this.innerHTML.matchAll(new RegExp(name+'="([^"]+)"','g')));
-      this.buttons=matches.map(match=>({dataset:{[name.replace(/^data-/,'').replace(/-([a-z])/g,(_,letter)=>letter.toUpperCase())]:match[1]}}));return this.buttons;
+      this.buttons=matches.map(match=>({dataset:{[name.replace(/^data-/,'').replace(/-([a-z])/g,(_,letter)=>letter.toUpperCase())]:match[1]}}));this.buttonGroups=this.buttonGroups||{};this.buttonGroups[selector]=this.buttons;return this.buttons;
     },showModal(){this.open=true;},close(){this.open=false;}});
     return elements.get(id);
   }
   const document={getElementById:element,querySelectorAll(){return[];}};
-  vm.runInNewContext(source,{document,fetch:async(url,options)=>{requests.push({url,options});return{json:async()=>view};},console,Intl,Date,confirm:options.confirm||(()=>{throw new Error('Unexpected approval confirmation');})},{filename:'incentives.js'});
+  vm.runInNewContext(source,{document,fetch:async(url,requestOptions)=>{requests.push({url,options:requestOptions});return{json:async()=>options.respond?options.respond(url,requestOptions):view};},console,Intl,Date,confirm:options.confirm||(()=>{throw new Error('Unexpected approval confirmation');})},{filename:'incentives.js'});
   await new Promise(resolve=>setImmediate(resolve));
   return{elements,requests};
 }
+
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+function impact(){return{success:true,orderId:'1',orderNumber:'#1',excluded:true,previewToken:'fresh-preview',totalAdjustment:-240,affectedDays:[{date:'2026-10-01',salesperson:'Shivam',previousEligible:12000,eligible:0,hasApproval:true,approvedBefore:240,approvedAfter:0}],balances:[{salesperson:'Shivam',previousBalance:140,balance:-100,overpaid:100}]};}
+
+test('approved receipt offers exclusion, previews before saving and requires a reason and token',async()=>{
+  const current=emptyState();current.approvals['2026-10-01|Shivam']={id:'2026-10-01|Shivam',date:'2026-10-01',salesperson:'Shivam',eligibleAmount:12000,incentive:240};
+  const view=buildView([sale(1,'Shivam',12000)],current),{elements,requests}=await render(view,{respond:url=>url.endsWith('/preview')?impact():view});
+  assert.match(elements.get('orders').innerHTML,/Exclude incentive/);assert.match(elements.get('orders').innerHTML,/approved/);
+  elements.get('orders').buttons[0].onclick();await tick();
+  assert.equal(elements.get('exclusionDialog').open,true);assert.equal(requests.length,2);assert.ok(requests[1].url.endsWith('/preview'));
+  assert.match(elements.get('exclusionImpact').innerHTML,/₹240 → ₹0/);assert.match(elements.get('exclusionImpact').innerHTML,/Overpaid \/ recoverable ₹100/);
+  elements.get('exclusionForm').onsubmit({preventDefault(){}});assert.equal(requests.length,2);assert.match(elements.get('exclusionError').textContent,/reason/);
+  elements.get('exclusionReason').value='Owner reviewed';elements.get('exclusionForm').onsubmit({preventDefault(){}});await tick();
+  const body=JSON.parse(requests[2].options.body);assert.equal(body.previewToken,'fresh-preview');assert.equal(body.reason,'Owner reviewed');assert.equal(body.excluded,true);
+  assert.equal(elements.get('exclusionDialog').open,false);assert.match(elements.get('message').textContent,/payments are unchanged/);
+});
+
+test('restoration is explicit and escaping dialog never commits a decision',async()=>{
+  const current=emptyState();current.exclusions={'1':{excluded:true,reason:'Reviewed',by:'owner',at:'2026-10-25'}};
+  const view=buildView([sale(1,'Shivam',12000)],current),{elements,requests}=await render(view,{respond:url=>url.endsWith('/preview')?{...impact(),excluded:false}:view});
+  assert.match(elements.get('orders').innerHTML,/Restore incentive/);assert.match(elements.get('orders').innerHTML,/Manually excluded: Reviewed/);
+  elements.get('orders').buttons[0].onclick();await tick();
+  assert.equal(JSON.parse(requests[1].options.body).excluded,false);assert.match(elements.get('exclusionSave').textContent,/Restore/);
+  elements.get('exclusionDialog').oncancel({preventDefault(){assert.fail('Not saving, escape should be allowed');}});
+  elements.get('exclusionReason').value='Restored';elements.get('exclusionForm').onsubmit({preventDefault(){}});assert.equal(requests.length,2);
+});
+
+test('stale-save error requires another impact preview before retry',async()=>{
+  const view=buildView([sale(1,'Shivam',12000)],emptyState()),{elements,requests}=await render(view,{respond:url=>url.endsWith('/preview')?impact():url.includes('/exclusions/')?{success:false,error:'Orders changed. Refresh the impact preview.'}:view});
+  elements.get('orders').buttons[0].onclick();await tick();elements.get('exclusionReason').value='Reviewed';elements.get('exclusionForm').onsubmit({preventDefault(){}});await tick();
+  assert.equal(elements.get('exclusionDialog').open,true);assert.equal(elements.get('exclusionSave').disabled,true);assert.match(elements.get('exclusionError').textContent,/Refresh/);
+  elements.get('exclusionForm').onsubmit({preventDefault(){}});assert.equal(requests.length,3);
+  elements.get('exclusionRefresh').onclick();await tick();assert.equal(requests.length,4);assert.equal(elements.get('exclusionSave').disabled,false);
+});
+
+test('negative adjustment ledger shows recoverable amount and never enables another payment',async()=>{
+  const current=emptyState();current.approvals['2026-10-01|Shivam']={id:'2026-10-01|Shivam',date:'2026-10-01',salesperson:'Shivam',eligibleAmount:12000,incentive:240};
+  current.payments=[{id:'INCP-1',salesperson:'Shivam',date:'2026-10-02',amount:100}];
+  current.exclusionAdjustments=[{id:'INCX-1',approvalKey:'2026-10-01|Shivam',salesperson:'Shivam',date:'2026-10-25',qualifyingDate:'2026-10-01',orderNumber:'#1',excluded:true,amount:-240,reason:'Manual owner decision',by:'owner'}];
+  const {elements}=await render(buildView([],current)),html=elements.get('ledgers').innerHTML;
+  assert.match(html,/Overpaid \/ recoverable ₹100/);assert.match(html,/data-pay="Shivam" disabled/);assert.match(html,/num excluded">-₹240/);assert.match(html,/Manual owner decision · owner/);
+});
+
+test('reviewing a manually excluded order does not silently change its underlying salesperson decision',async()=>{
+  const current=emptyState();current.exclusions={'1':{excluded:true,reason:'Manual decision'}};
+  const {elements}=await render(buildView([sale(1,'Shivam',12000)],current));
+  elements.get('orders').buttonGroups['[data-review]'][0].onclick();
+  assert.equal(elements.get('noSalesperson').checked,false,'restoring later must not be blocked by a no-salesperson decision the user never made');
+});
 
 test('record-only UI labels former sales and offers no approval or payment action',async()=>{
   const view=buildView([sale(1,'Isha',25000),sale(2,'Nandini',30000),sale(4,'Simran',35000)],emptyState()),{elements,requests}=await render(view);
@@ -58,7 +107,8 @@ test('salesperson filters and manual review list all former names with explicit 
     assert.match(html,new RegExp('name="reviewPerson" value="'+name+'"> '+name+' — former, record only'));
   }
   assert.match(html,/<option value="record_only">Former employee — record only<\/option>/);
-  assert.match(html,/<script src="\/incentives\.js\?v=20261010-qualified-receipts"><\/script>/,'qualification UI must load a versioned script instead of a previously cached renderer');
+  assert.match(html,/<script src="\/incentives\.js\?v=20261025-manual-exclusions"><\/script>/,'exclusion UI must load a versioned script instead of a previously cached renderer');
+  assert.match(html,/<link rel="stylesheet" href="\/incentives\.css\?v=20261025-manual-exclusions">/,'exclusion preview must also refresh cached stylesheets');
   assert.match(html,/same order earn 2% without meeting the threshold again, on the date received/);
 });
 

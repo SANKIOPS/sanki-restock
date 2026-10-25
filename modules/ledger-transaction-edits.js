@@ -48,7 +48,7 @@ function create(deps) {
     if (kind === 'transfer') scopes = [{ nature: nature(record.fromNature || record.nature), account: text(record.fromAccount) }, { nature: nature(record.toNature || record.nature), account: text(record.toAccount) }];
     else scopes = [{ nature: nature(expense ? expense.nature : record.nature), account: text(record.account || expense && expense.account) }];
     if (expense && kind !== (record.personalFunds ? 'personal_expense' : 'expense')) fail('The selected payment kind changed. Refresh the ledger.');
-    if (expense && expense.ownerOnly && !deps.isOwner(req)) fail('This expense is restricted to the Owner.', 403);
+    if (expense && (typeof deps.canAccessExpense === 'function' ? deps.canAccessExpense(req, expense) !== true : expense.ownerOnly && !deps.isOwner(req))) fail('Your accounting permissions do not allow this expense correction.', 403);
     for (const scope of scopes) {
       if (!scope.account || !deps.approvalNatures(req).includes(scope.nature) || scope.nature === 'PERSONAL' && !deps.canPersonal(req) || !deps.accountVisible(req, scope.account)) fail('You cannot edit this transaction in one of its saved account scopes.', 403);
       if (deps.personalAccount(scope.account,scope.nature) && !deps.canPersonal(req)) fail('This transaction touches a PERSONAL account. Personal Accounting permission is required.', 403);

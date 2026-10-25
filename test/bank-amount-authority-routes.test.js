@@ -521,9 +521,13 @@ test('manual confirmation of recognized Axis charges preserves principal and pos
     assert.equal(row.axisTransferCharge, true);
     assert.equal(row.chargeAmount, fee);
     assert.equal(row.bankAmountAuthority, undefined, 'a known fee must never inflate the transfer principal');
-    const blockedPreview = await preview('admin', { appId: transferId });
-    assert.equal(blockedPreview.status, 409, JSON.stringify(blockedPreview.body));
-    assert.match(blockedPreview.body.error, /recognized Axis transfer charge|separate principal/i);
+    const feePreview = await preview('admin', { appId: transferId });
+    assert.equal(feePreview.status, 200, JSON.stringify(feePreview.body));
+    assert.equal(feePreview.body.bankAmountAuthority, null);
+    assert.deepEqual(feePreview.body.axisTransferChargeSplit, {
+      bankRowId: 'bank-0', appId: transferId, principalAmount: 1000,
+      chargeAmount: fee, chargeCategory: 'BANK CHARGES', grossAmount: bankTotal
+    });
     const confirmed = await resolveMatch('', { action: 'accept_match', appId: transferId,
       confirmBankAmount: false, reason: 'Confirmed the transfer principal and separate Axis bank fee' }, 'admin');
     assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
@@ -559,6 +563,151 @@ test('manual confirmation of recognized Axis charges preserves principal and pos
     assert.equal(read().adjustments.length, 1);
     assert.equal(read().reconciliationExpenses.length, 1);
     assert.equal(read().transfers[0].amount, 1000);
+  }
+});
+
+function seedSeparatedAxisCharge({ fee = 5.9, principal = 10490 } = {}) {
+  const axisAccount = 'Axis Bank 3448', transferId = 'TR-AXIS-SEPARATED',
+    gross = Math.round((principal + fee) * 100) / 100;
+  const store = seed({ bankAmount: gross, date: bankDate });
+  store.expenses = {};
+  store.openingBalances = { [axisAccount]: 20000 };
+  store.openingBalanceDates = { [axisAccount]: '2098-01-01' };
+  store.transfers = [{ id: transferId, nature: 'SANKI', fromNature: 'SANKI', toNature: 'SANKI',
+    fromAccount: axisAccount, toAccount: 'IndusInd Bank 8181', amount: principal, date: bankDate,
+    classification: 'internal_transfer', bankReference: reference }];
+  const draft = store.bankReconciliationDrafts[draftId];
+  draft.account = axisAccount;
+  draft.matchingPolicy = 'strict_identity_v3';
+  draft.summary.openingBalance = 20000;
+  draft.summary.closingBalance = Math.round((20000 - gross) * 100) / 100;
+  draft.transactions[0].balance = draft.summary.closingBalance;
+  draft.transactions[0].description = 'IMPS/P2A/' + reference + '/PRADEEP K MEERWAL/X468181/INDUSINDBANKLTD/';
+  draft.matchingExclusions = { 'bank-0': { appId: transferId, reason: 'Reviewer separated this pair for manual fee review', by: 'owner-user' } };
+  write(store);
+  return { store, draft, axisAccount, transferId, gross, fee, principal };
+}
+
+for (const fee of [2.95, 5.9]) for (const side of ['bank', 'ledger']) {
+  test('separated Axis fee can be explicitly linked from ' + side + ' side without changing principal: ' + fee, async () => {
+    const fixture = seedSeparatedAxisCharge({ fee, principal: fee === 2.95 ? 7000 : 10490 });
+    const comparison = await invoke('POST', '/api/expenses/bank-statements/reconcile', {
+      body: { draftId, account: fixture.axisAccount }
+    });
+    assert.equal(comparison.status, 200, JSON.stringify(comparison.body));
+    assert.equal(comparison.body.rows.find(row => row.id === 'bank-0').status, 'missing_in_app');
+    const ledgerRow = comparison.body.rows.find(row => row.app && row.app.id === fixture.transferId);
+    assert.equal(ledgerRow.status, 'missing_in_bank');
+    const beforePreview = fs.readFileSync(file, 'utf8');
+    const inspected = await preview('admin', { rowId: side === 'bank' ? 'bank-0' : ledgerRow.id,
+      bankRowId: 'bank-0', appId: fixture.transferId });
+    assert.equal(inspected.status, 200, JSON.stringify(inspected.body));
+    assert.equal(fs.readFileSync(file, 'utf8'), beforePreview, 'fee preview is read-only');
+    assert.equal(inspected.body.bankAmountAuthority, null);
+    assert.deepEqual(inspected.body.axisTransferChargeSplit, { bankRowId: 'bank-0', appId: fixture.transferId,
+      principalAmount: fixture.principal, chargeAmount: fee, chargeCategory: 'BANK CHARGES', grossAmount: fixture.gross });
+
+    const ordinaryLink = await resolveMatch('', { appId: fixture.transferId }, 'admin');
+    assert.equal(ordinaryLink.status, 409, JSON.stringify(ordinaryLink.body));
+    assert.match(ordinaryLink.body.error, /recognized transfer charge|separate principal/i);
+    assert.equal(fs.readFileSync(file, 'utf8'), beforePreview, 'ordinary link cannot inflate the principal');
+
+    const reviewed = await resolveMatch('', { action: 'split_allocation', appId: fixture.transferId,
+      principalAmount: fixture.principal, chargeAmount: fee, chargeCategory: 'BANK CHARGES',
+      confirmBankAmount: false, reason: 'Confirmed existing transfer principal and the separate Axis charge' }, 'admin');
+    assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+    let saved = read();
+    assert.deepEqual(saved.transfers, fixture.store.transfers);
+    assert.equal(saved.adjustments.length, 0);
+    assert.equal(saved.reconciliationExpenses.length, 0);
+    assert.deepEqual(saved.bankAmountAuthorityProposals, {});
+    assert.deepEqual(saved.bankReconciliationDrafts[draftId].matchingExclusions, fixture.draft.matchingExclusions);
+    assert.equal(saved.bankReconciliationDrafts[draftId].resolutions['bank-0'].action, 'split_allocation');
+    assert.equal(reviewed.body.pendingPostingNet, -fee);
+    assert.equal(reviewed.body.canFinalize, true, JSON.stringify(reviewed.body));
+
+    const submission = await finalize('admin');
+    assert.equal(submission.status, 202, JSON.stringify(submission.body));
+    assert.equal(read().adjustments.length, 0, 'Admin submission does not post charges');
+    const approved = await finalize('owner', { approveRequestId: submission.body.approval.id });
+    assert.equal(approved.status, 200, JSON.stringify(approved.body));
+    saved = read();
+    assert.deepEqual(saved.transfers, fixture.store.transfers);
+    assert.equal(saved.adjustments.length, 1);
+    assert.equal(saved.adjustments[0].amount, -fee);
+    assert.equal(saved.reconciliationExpenses.length, 1);
+    assert.equal(saved.reconciliationExpenses[0].amount, fee);
+    assert.equal(saved.reconciliationExpenses[0].category, 'BANK CHARGES');
+    assert.deepEqual(saved.bankAmountAuthorityApplications, {});
+    assert.equal(Object.values(saved.bankStatements[fixture.axisAccount].transactions)[0].debit, fixture.gross);
+    const retry = await finalize('owner', { approveRequestId: submission.body.approval.id });
+    assert.ok([404, 409].includes(retry.status));
+    assert.equal(read().adjustments.length, 1);
+    assert.equal(read().reconciliationExpenses.length, 1);
+  });
+}
+
+for (const blocker of ['other draft claim', 'same draft claim', 'pending approval', 'reversal evidence', 'saved bank decision', 'finalized bank row']) {
+  test('Axis charge preview and split preserve ' + blocker, async () => {
+    const fixture = seedSeparatedAxisCharge();
+    if (blocker === 'other draft claim') {
+      fixture.store.bankReconciliationDrafts['BRD-OTHER-FEE-CLAIM'] = { ...clone(fixture.draft), id: 'BRD-OTHER-FEE-CLAIM',
+        resolutions: { 'bank-0': { action: 'link_existing', appId: fixture.transferId, reason: 'Already reviewed elsewhere' } } };
+    } else if (blocker === 'same draft claim') {
+      fixture.draft.transactions.push({ ...clone(fixture.draft.transactions[0]), reference: '991122334455', debit: fixture.principal });
+      fixture.draft.resolutions['bank-1'] = { action: 'link_existing', appId: fixture.transferId, reason: 'Already reviewed here' };
+    } else if (blocker === 'pending approval') {
+      fixture.store.bankReconciliationApprovals['BA-FEE-PENDING'] = { id: 'BA-FEE-PENDING', draftId, status: 'pending' };
+    } else if (blocker === 'reversal evidence') {
+      fixture.draft.transactions[0].reversal = true;
+    } else if (blocker === 'saved bank decision') {
+      fixture.draft.resolutions['bank-0'] = { action: 'exclude', reason: 'Owner decision retained', by: 'owner-user' };
+    } else {
+      fixture.store.bankStatements[fixture.axisAccount] = { transactions: {
+        saved: { ...clone(fixture.draft.transactions[0]), id: 'BTX-EXISTING-AXIS-FEE' }
+      }, imports: [] };
+    }
+    write(fixture.store);
+    const before = fs.readFileSync(file, 'utf8');
+    const inspected = await preview('admin', { appId: fixture.transferId });
+    assert.equal(inspected.status, 409, JSON.stringify(inspected.body));
+    const reviewed = await resolveMatch('', { action: 'split_allocation', appId: fixture.transferId,
+      principalAmount: fixture.principal, chargeAmount: fixture.fee, chargeCategory: 'BANK CHARGES',
+      confirmBankAmount: false }, 'admin');
+    assert.equal(reviewed.status, 409, JSON.stringify(reviewed.body));
+    assert.equal(fs.readFileSync(file, 'utf8'), before, 'blocked preview and save preserve all stored evidence');
+  });
+}
+
+test('bank-charge split rejects changed, negative and fractional-cent amounts without saving', async () => {
+  for (const values of [{ principalAmount: 10490, chargeAmount: 5.91 },
+    { principalAmount: 10490.005, chargeAmount: 5.895 }, { principalAmount: 10496, chargeAmount: -0.1 }]) {
+    const fixture = seedSeparatedAxisCharge();
+    const before = fs.readFileSync(file, 'utf8');
+    const reviewed = await resolveMatch('', { action: 'split_allocation', appId: fixture.transferId,
+      ...values, chargeCategory: 'BANK CHARGES', confirmBankAmount: false }, 'admin');
+    assert.equal(reviewed.status, 400, JSON.stringify(reviewed.body));
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+  }
+});
+
+test('bank-charge split rechecks source amount after preview and rejects an incoming principal', async () => {
+  for (const change of ['principal changed', 'direction changed']) {
+    const fixture = seedSeparatedAxisCharge();
+    const inspected = await preview('admin', { appId: fixture.transferId });
+    assert.equal(inspected.status, 200);
+    if (change === 'principal changed') fixture.store.transfers[0].amount = 10489;
+    else {
+      fixture.store.transfers[0].fromAccount = 'IndusInd Bank 8181';
+      fixture.store.transfers[0].toAccount = fixture.axisAccount;
+    }
+    write(fixture.store);
+    const before = fs.readFileSync(file, 'utf8');
+    const reviewed = await resolveMatch('', { action: 'split_allocation', appId: fixture.transferId,
+      principalAmount: fixture.principal, chargeAmount: fixture.fee, chargeCategory: 'BANK CHARGES',
+      confirmBankAmount: false }, 'admin');
+    assert.equal(reviewed.status, change === 'principal changed' ? 400 : 409, JSON.stringify(reviewed.body));
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
   }
 });
 

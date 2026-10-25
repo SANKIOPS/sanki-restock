@@ -7,6 +7,65 @@
   function classification(row) { var values = Number(row.credit) > 0 ? ['unclassified_credit', 'refund', 'card_payment'] : ['expense', 'emi_principal', 'emi_interest', 'fee']; return values.indexOf(row.classification) >= 0 ? row.classification : values[0]; }
   function value(tr, selector) { var node = tr.querySelector(selector); return node ? node.value : ''; }
   function candidate(row, id) { return (row.settlementCandidates || []).find(function (x) { return x.id === id; }); }
+  var merchantFields = ['classification', 'type', 'category', 'nature', 'channel'];
+  var merchantSelectors = { classification: '.cc_class', type: '.cc_type', category: '.cc_category', nature: '.cc_nature', channel: '.cc_channel' };
+  function merchantTouches(metadata) {
+    return metadata && metadata.version === 1 && Array.isArray(metadata.touchedFields) ? merchantFields.filter(function (field) { return metadata.touchedFields.indexOf(field) >= 0; }) : [];
+  }
+  function normalizedMerchant(tr) { var input = tr.querySelector('.cc_merchant'), row = tr._ccReviewDraft || {}; return String(input ? input.value : row.merchant || row.narration || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
+  function merchantEligible(tr, statement) {
+    var row = tr._ccReviewDraft || {}, cls = value(tr, '.cc_class');
+    return statement.status === 'review' && tr._ccReviewStatement === statement && tr.isConnected !== false && !row.settlementProtected && !row.finalized && !row.reconciled && !row.linkedExpenseId && !row.duplicateOf && !row.replaces && !row.supersededBy && Number(row.debit) > 0 && !(Number(row.credit) > 0) && ['expense', 'emi_interest', 'fee'].indexOf(cls) >= 0;
+  }
+  /* Review-local, one-use field flags only. No merchant rule or cross-statement memory is written. */
+  function bindStatement(rows, statement, settings) {
+    rows = Array.prototype.slice.call(rows || []).filter(function (tr) { return tr._ccReviewDraft && tr._ccReviewStatement === statement; }); settings = settings || {};
+    function busy() { return typeof settings.isBusy === 'function' && settings.isBusy() || rows.some(function (tr) { return !!tr._ccCandidateRefreshRunning || tr.dataset.ccCandidateRefreshing === 'true'; }); }
+    function touch(tr, field) {
+      var draft = tr._ccReviewDraft, fields = merchantTouches(draft.merchantAutofill);
+      if (fields.indexOf(field) < 0) fields.push(field);
+      draft.merchantAutofill = { version: 1, touchedFields: merchantFields.filter(function (name) { return fields.indexOf(name) >= 0; }) };
+    }
+    function attach(tr) {
+      merchantFields.forEach(function (field) {
+        var node = tr.querySelector(merchantSelectors[field]); if (!node || node._ccMerchantOnceOwner === attach && node.onchange === node._ccMerchantOnceHandler) return;
+        var previous = node.onchange === node._ccMerchantOnceHandler ? node._ccMerchantOncePrevious : node.onchange;
+        node._ccMerchantOnceOwner = attach; node._ccMerchantOncePrevious = previous;
+        node.onchange = node._ccMerchantOnceHandler = function () {
+          if (node.disabled || tr._ccReviewStatement !== statement) return;
+          var propagationPaused = busy(), draft = tr._ccReviewDraft, used = merchantTouches(draft.merchantAutofill).indexOf(field) >= 0, name = normalizedMerchant(tr), selected = node.value;
+          touch(tr, field);
+          if (typeof previous === 'function') previous.apply(this, arguments);
+          else if (tr._ccRememberReview) tr._ccRememberReview();
+          if (settings.markDirty) settings.markDirty();
+          if (propagationPaused || used || !name || !selected || !merchantEligible(tr, statement)) return;
+          var first = rows.find(function (other) { var item = other._ccReviewDraft || {}; return normalizedMerchant(other) === name && Number(item.debit) > 0 && !(Number(item.credit) > 0); });
+          if (first !== tr) return;
+          rows.forEach(function (other) {
+            if (other === tr || normalizedMerchant(other) !== name || !merchantEligible(other, statement)) return;
+            var target = other.querySelector(merchantSelectors[field]);
+            if (!target || target.disabled || merchantTouches(other._ccReviewDraft.merchantAutofill).indexOf(field) >= 0) return;
+            if (target.value !== String(field === 'classification' ? classification(other._ccReviewDraft) : other._ccReviewDraft[field] || '')) { touch(other, field); if (other._ccRememberReview) other._ccRememberReview(); return; }
+            if (other._ccRememberReview) other._ccRememberReview(false);
+            touch(other, field); other._ccReviewDraft[field] = selected;
+            if (field === 'classification' && other._ccRenderReview) other._ccRenderReview();
+            else target.value = selected;
+          });
+        };
+      });
+    }
+    rows.forEach(function (tr) {
+      var draft = tr._ccReviewDraft; if (!draft || tr._ccReviewStatement !== statement) return;
+      if (!draft.merchantAutofill || draft.merchantAutofill.version !== 1 || !Array.isArray(draft.merchantAutofill.touchedFields)) {
+        draft.merchantAutofill = { version: 1, touchedFields: merchantFields.filter(function (field) {
+          if (field === 'classification') return draft.confirmed === true || Number(statement.reviewRevision) > 0;
+          if (field === 'category' && Number(statement.reviewRevision) === 0 && draft.confirmed !== true && draft.category === draft.suggestedCategory) return false;
+          return !!String(draft[field] || '').trim();
+        }) };
+      } else draft.merchantAutofill = { version: 1, touchedFields: merchantTouches(draft.merchantAutofill) };
+      tr._ccMerchantOnceAttach = attach; attach(tr);
+    });
+  }
   function candidateRefreshMetadata(statement, original, data) {
     if (!data || !data.success || !Array.isArray(data.statements)) throw new Error(data && data.error || 'Could not refresh existing payments. Your review was not changed.');
     var matches = data.statements.filter(function (x) { return x.id === statement.id; }), fresh = matches[0];
@@ -83,9 +142,11 @@
         out.refundLinkDecision = refund === 'separate' ? 'separate' : ''; out.refundLinkReason = value(tr, '.cc_refund_reason');
       }
     }
+    if (tr._ccReviewDraft && tr._ccReviewDraft.merchantAutofill) out.merchantAutofill = { version: 1, touchedFields: merchantTouches(tr._ccReviewDraft.merchantAutofill) };
     return out;
   }
   function bindRow(tr, original, index, statement, natures, fmt, markDirty, loadCandidates) {
+    if (tr._ccReviewStatement && tr._ccReviewStatement !== statement) { delete tr._ccReviewDraft; delete tr._ccMerchantOnceAttach; }
     tr._ccReviewDraft = Object.assign({}, original, tr._ccReviewDraft || {});
     tr._ccReviewStatement = statement;
     function remember(changed) {
@@ -98,7 +159,9 @@
       var changedFields = Object.keys(previous).some(function (key) { return tr._ccReviewDraft[key] !== previous[key]; });
       tr._ccReviewDraft = Object.assign({}, tr._ccReviewDraft, previous); if ((changed !== false || changedFields) && markDirty) markDirty();
     }
-    function redraw(changed) { remember(changed); tr.innerHTML = rowCells(tr._ccReviewDraft, index, statement, natures, fmt); bindRow(tr, original, index, statement, natures, fmt, markDirty, loadCandidates); }
+    function render() { tr.innerHTML = rowCells(tr._ccReviewDraft, index, statement, natures, fmt); bindRow(tr, original, index, statement, natures, fmt, markDirty, loadCandidates); }
+    function redraw(changed) { remember(changed); render(); }
+    tr._ccRememberReview = remember; tr._ccRenderReview = render;
     var cls = tr.querySelector('.cc_class'), mode = tr.querySelector('.cc_settlement_mode'), source = tr.querySelector('.cc_settlement_source');
     if (cls) cls.onchange = redraw;
     if (mode) mode.onchange = redraw;
@@ -129,7 +192,8 @@
         });
       };
     }
+    if (tr._ccMerchantOnceAttach) tr._ccMerchantOnceAttach(tr);
   }
-  var api = { labels: labels, classification: classification, rowCells: rowCells, collectRow: collectRow, bindRow: bindRow, candidateRefreshMetadata: candidateRefreshMetadata };
+  var api = { labels: labels, classification: classification, rowCells: rowCells, collectRow: collectRow, bindRow: bindRow, bindStatement: bindStatement, candidateRefreshMetadata: candidateRefreshMetadata };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.CreditCardReview = api;
 }(typeof window !== 'undefined' ? window : this));

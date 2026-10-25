@@ -3279,9 +3279,10 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html, /matches\('img\.thumb'\)/);
   assert.match(html, /\.claim-card summary \{ padding:3px 7px/);
   assert.doesNotMatch(html, /fmt\(approvedNow\)\+' now/);
-  assert.match(html,/\['editAmount','editTotal','editRequested'\]\.forEach\(function\(x\)\{el\(x\)\.disabled=locked\|\|!cfg\.isOwner/);
+  assert.match(html,/canEditFinancials=cfg\.canEditExpenseFinancials===true/);
+  assert.match(html,/\['editAmount','editTotal','editRequested'\]\.forEach\(function\(x\)\{el\(x\)\.disabled=locked\|\|!canEditFinancials/);
   assert.match(html,/el\(x\)\.title=locked\?'Locked for every role: this payment is reconciled\.'/);
-  assert.match(html,/Only the Owner can change amounts/);
+  assert.match(html,/Manage expense financial-edit permission is required to change amounts/);
   assert.match(html,/<label>Paying account<\/label><select id="lf_account">/);
   assert.match(html,/payingAccount='\+encodeURIComponent/);
   assert.match(html,/var claimantName=e\.claimant\|\|e\.createdBy/);
@@ -3334,7 +3335,8 @@ test('Owner/Admin can edit finalized expenses with a mandatory audit reason', ()
   const oldLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448'}}).body;
   const newLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645'}}).body;
   assert.ok(!oldLedger.entries.some(x=>x.id===created.body.expense.id+'/PAY-001'));assert.ok(newLedger.entries.some(x=>x.id===created.body.expense.id+'/PAY-001'));
-  assert.equal(invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},role:'admin',body:{paymentAccount:'Tiana 0425',editReason:'Admin tries account'}}).status,403);
+  const adminUnchanged=invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},role:'admin',body:{paymentAccount:'Prashant Axis 3645',editReason:'Admin confirms unchanged paying account'}});
+  assert.equal(adminUnchanged.status,200);assert.equal(adminUnchanged.body.expense.payments.at(-1).account,'Prashant Axis 3645');
 });
 
 test('Owner/Admin can correct an expense entity before payment and the change is audited', () => {

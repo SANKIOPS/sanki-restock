@@ -18,3 +18,11 @@
 .barcode-entry{display:flex;gap:8px}.barcode-entry input{min-width:0;flex:1;padding:10px;border:1px solid var(--line);border-radius:8px;color:var(--ink);font-size:16px}.barcode-entry button{flex:none}
 .inventory-barcode-dialog .barcode-cancel{background:transparent;color:var(--green)}
 @media(max-width:400px){.inventory-barcode-dialog{padding:16px}.barcode-entry{flex-wrap:wrap}.barcode-entry button{width:100%}}
+.barcode-preview{position:relative;overflow:hidden;border-radius:10px;background:#17342e}
+.barcode-preview video{display:block;max-height:320px;object-fit:contain}
+.barcode-guide{position:absolute;pointer-events:none;inset:20% 7%;border:2px solid #fff;border-radius:10px;box-shadow:0 0 0 120px #0003}
+.inventory-barcode-dialog .barcode-close{min-width:44px;min-height:44px}
+.inventory-search-clear{min-height:44px}
+.inventory-barcode-dialog button{min-height:44px;touch-action:manipulation}
+@media(max-width:600px){.inventory-barcode-dialog{width:calc(100% - 20px);max-height:calc(100dvh - 20px);padding:16px}.barcode-heading h2{font-size:19px}}
+@media(max-height:520px) and (orientation:landscape){.barcode-preview video{max-height:160px}.inventory-barcode-dialog p{margin:8px 0}}

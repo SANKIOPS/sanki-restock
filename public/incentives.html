@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
   <title>Sales incentives · SANKI Business OS</title>
-  <link rel="stylesheet" href="/incentives.css">
+  <link rel="stylesheet" href="/incentives.css?v=20261025-manual-exclusions">
 </head>
 <body>
   <main class="wrap">
@@ -31,7 +31,7 @@
     </section>
 
     <section class="card section-card">
-      <div class="section-head"><div><h2>POS order receipts</h2><p class="muted">Customer appears below the Shopify order number. Refunds are shown for reference and do not reduce earned incentive.</p></div></div>
+      <div class="section-head"><div><h2>POS order receipts</h2><p class="muted">Customer appears below the Shopify order number. Refunds are shown for reference and do not reduce earned incentive. Use Exclude incentive even after approval: preview and confirm the recalculation with a reason. Excluded orders remain visible and can be restored.</p></div></div>
       <div class="table-wrap"><table><thead><tr><th>Date</th><th>Order / customer</th><th>Salesperson</th><th class="num">Bill</th><th class="num">Received</th><th>Payment mode</th><th class="num">Store credit</th><th class="num">Refund / return</th><th class="num">Eligible</th><th>Exclusion reason</th><th>Shopify order note</th><th>Review status</th><th>Rate / incentive</th><th>Approved</th></tr></thead><tbody id="orders"></tbody></table></div>
     </section>
 
@@ -45,14 +45,22 @@
     <input id="reviewOrderId" type="hidden">
     <fieldset><legend>Salesperson</legend><label class="check"><input type="checkbox" name="reviewPerson" value="Shivam"> Shivam</label><label class="check"><input type="checkbox" name="reviewPerson" value="Krishnakant"> Krishnakant</label><label class="check"><input type="checkbox" name="reviewPerson" value="Isha"> Isha — former, record only</label><label class="check"><input type="checkbox" name="reviewPerson" value="Nandini"> Nandini — former, record only</label><label class="check"><input type="checkbox" name="reviewPerson" value="Simran"> Simran — former, record only</label><label class="check"><input id="noSalesperson" type="checkbox"> No eligible salesperson</label></fieldset>
     <div id="gatewayReview"></div>
+    <p class="muted">To remove an order from already-approved incentives, use Exclude incentive on its receipt row. This review form corrects classifications; it does not reverse past approvals.</p>
     <label>Review reason<textarea id="reviewReason" maxlength="500" placeholder="What was checked or corrected?"></textarea></label>
     <p class="form-error" id="reviewError"></p><button class="primary" type="submit">Save review decision</button>
+  </div></form></dialog>
+
+  <dialog id="exclusionDialog"><form id="exclusionForm" method="dialog"><div class="dialog-head"><div><h2 id="exclusionTitle">Exclude order incentive</h2><p id="exclusionOrder" class="muted"></p></div><button type="button" data-close aria-label="Close">×</button></div><div class="dialog-body">
+    <p class="muted">Recalculates the whole qualifying day and later receipts that depend on it, including shared salespeople. Shopify orders, salary balances and recorded payments stay unchanged. Original approvals are retained with separate adjustment entries. Pending earnings still need approval. Restoring does not override store-credit, customer or salesperson exclusions.</p>
+    <div id="exclusionImpact" role="status" aria-live="polite"></div>
+    <label>Reason (required)<textarea id="exclusionReason" maxlength="500" required placeholder="Why should this order be excluded or restored?"></textarea></label>
+    <p id="exclusionError" class="form-error" role="alert"></p><div class="exclusion-buttons"><button type="button" id="exclusionRefresh">Refresh impact preview</button><button type="submit" class="primary" id="exclusionSave" disabled>Exclude order and recalculate</button><button type="button" data-close>Cancel</button></div>
   </div></form></dialog>
 
   <dialog id="paymentDialog"><form id="paymentForm" method="dialog"><div class="dialog-head"><div><h2>Record incentive payment</h2><p id="paymentBalance" class="muted"></p></div><button type="button" data-close aria-label="Close">×</button></div><div class="dialog-body grid">
     <input id="paymentPerson" type="hidden"><label>Amount ₹<input id="paymentAmount" type="number" min="0.01" step="0.01" required></label><label>Payment date<input id="paymentDate" type="date" required></label><label>Paying account<select id="paymentAccount"></select></label><label>Reference<input id="paymentReference" maxlength="100"></label><label class="full">Payment proof<input id="paymentProof" type="file" accept="image/*,.pdf" multiple required></label><label class="full">Note<textarea id="paymentNote" maxlength="500"></textarea></label><p class="form-error full" id="paymentError"></p><button class="primary full" type="submit">Record payment</button>
   </div></form></dialog>
 
-  <script src="/sidebar.js"></script><script src="/incentives.js?v=20261010-qualified-receipts"></script>
+  <script src="/sidebar.js"></script><script src="/incentives.js?v=20261025-manual-exclusions"></script>
 </body>
 </html>
