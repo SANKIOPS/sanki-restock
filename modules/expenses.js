@@ -7452,7 +7452,28 @@ if(startupExpenseFileExists&&applyCashCounterMissingEntries(startupExpenseStore)
 if(startupExpenseFileExists&&applyAxis3448PaytmBankTruthSettlements(startupExpenseStore))saveStore(startupExpenseStore);
 if(Object.values(startupExpenseStore.bankReconciliationDrafts||{}).reduce((count,draft)=>count+(draft.originalStatementPeriod?0:applyReviewedBankDates(startupExpenseStore,draft)),0)>0)saveStore(startupExpenseStore);
 
+const sourceCorrectionPolicy = {
+  canEdit:canEditLedgerTransactions,isOwner,natures:approvalNatures,
+  personalAccount:(account,nature)=>{const key=canonicalAccountName(account).toLowerCase(),has=n=>(ENTITY_ACCOUNTS[n]||[]).some(value=>canonicalAccountName(value).toLowerCase()===key);return has('PERSONAL')&&!has(nature);},
+  accountVisible:(req,account)=>{const key=canonicalAccountName(account).toLowerCase(),has=n=>(ENTITY_ACCOUNTS[n]||[]).some(value=>canonicalAccountName(value).toLowerCase()===key);return accountVisibleToReq(req,account)&&(!has('PERSONAL')||['SANKI','SAMAST'].some(has)||canManagePersonalAccounting(req));},
+  canonicalAccount:canonicalAccountName,
+  canPersonal:canManagePersonalAccounting,bookKey:bankStatementBookKey,
+  assertUnlocked:(s,options)=>require('./source-correction-guards').assertUnlocked(s,{...options,bookKey:bankStatementBookKey,canonicalAccount:canonicalAccountName}),
+  read:()=>{const snapshot=readLedgerEditSnapshot();require('./source-correction-guards').assertAudit(snapshot.store);require('./source-correction-guards').assertAudit(snapshot.external[CREDIT_CARD_PATH]||{},'audit','CCA-');return Object.assign(snapshot,{cards:snapshot.external[CREDIT_CARD_PATH]||{},cardRaw:snapshot.externalRaw[CREDIT_CARD_PATH]});},
+  audit:(s,req,action,subjectType,subjectId,details)=>{require('./source-correction-guards').assertAudit(s);const previous=Array.isArray(s.auditLog)?s.auditLog.slice():[];audit(s,req,action,subjectType,subjectId,details);if(s.auditLog.length!==previous.length+1)s.auditLog=previous.concat(s.auditLog.at(-1));},
+  commit:(snapshot,s,cards)=>{
+    const current=readLedgerEditSnapshot();
+    if(current.raw!==snapshot.raw||JSON.stringify(current.externalRaw)!==JSON.stringify(snapshot.externalRaw))throw new Error('The source or its accounting evidence changed after preview. Refresh and review the correction again.');
+    const preserve=require('./source-correction-guards').assertPreserved;
+    preserve(JSON.parse(snapshot.raw),s,['transfers','creditCardSettlementAllocations','expenseRefunds','receipts','vendorAdvances','auditLog','auditSeq']);
+    if(cards!==undefined)preserve(snapshot.externalRaw[CREDIT_CARD_PATH]===null?{}:JSON.parse(snapshot.externalRaw[CREDIT_CARD_PATH]),cards,['payments','audit','auditSeq']);
+    const entries=[{fileName:'expenses.json',before:snapshot.raw,after:JSON.stringify(s)}];
+    if(cards!==undefined)entries.push({fileName:'credit-cards.json',before:snapshot.externalRaw[CREDIT_CARD_PATH],after:JSON.stringify(cards)});
+    return bankAuthorityTransaction.commit(DATA_DIR,entries);
+  }
+};
 const expenseRefundDeps = {
+  correctionPolicy:sourceCorrectionPolicy,
   loadStore,saveStore,audit,isAdmin,isOwner,natures:approvalNatures,nature:normalizedNature,
   accountVisible:(req,account)=>accountVisibleToReq(req,account)&&(!creditCardByAccount(account)||!creditCardByAccount(account).ownerOnly||isOwner(req)),
   expenses:s=>Object.values(s.expenses||{}).concat(cardExpenseRecords(s)),canView:canViewExpense,today:indiaBusinessDate,
@@ -7508,6 +7529,7 @@ module.exports.creditCardSettlementPolicy = {
     return !!candidate&&accounts.some(name=>canonicalAccountName(name).toLowerCase()===candidate||(digits&&canonicalAccountName(name).replace(/\D/g,'').endsWith(digits)));
   }
 };
+module.exports.sourceCorrectionPolicy = sourceCorrectionPolicy;
 module.exports.mergeActiveBankReconciliationDrafts = mergeActiveBankReconciliationDrafts;
 module.exports.extendPendingDraftThroughFinalizedCoverage = extendPendingDraftThroughFinalizedCoverage;
 module.exports.bankFinalizationImportPlan = bankFinalizationImportPlan;
