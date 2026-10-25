@@ -62,7 +62,7 @@ function roles(req){return req.user&&(req.user.roles||(req.user.role?[req.user.r
 function allowed(req){return roles(req).some(x=>['admin','owner','accounting'].includes(x));}
 function owner(req){return roles(req).some(x=>['admin','owner'].includes(x));}
 function guard(req,res,next){return allowed(req)?next():res.status(403).json({success:false,error:'Credit cards are admin/accounting only.'});}
-function visibleCard(req,c){return !c.ownerOnly||owner(req);}
+function visibleCard(req,c){const policy=expenseModule.sourceCorrectionPolicy;return !!c&&(policy&&typeof policy.canAccessCard==='function'?policy.canAccessCard(req,c)===true:!c.ownerOnly||roles(req).includes('owner'));}
 function audit(s,req,action,subjectId,details){s.auditSeq=(s.auditSeq||0)+1;s.audit.push({id:'CCA-'+String(s.auditSeq).padStart(6,'0'),at:new Date().toISOString(),by:req.user&&req.user.username||'admin',action,subjectId,details:details||{}});}
 function cardName(c){return c.name+' '+c.last4;}
 function merchantText(v){return String(v||'').toLowerCase().replace(/\b(?:upi|pos|txn|ref|payment|purchase|debit|credit)\b/g,' ').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();}

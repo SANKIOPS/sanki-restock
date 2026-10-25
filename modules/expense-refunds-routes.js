@@ -3,6 +3,14 @@ const refunds = require('./expense-refunds');
 const corrections = require('./expense-refund-corrections');
 const reject = (message, status = 400) => { const error = new Error(message); error.status = status; throw error; };
 const clone = value => JSON.parse(JSON.stringify(value));
+function canAccessExpense(req, expense, deps) {
+  return !!expense && (typeof deps.canAccessExpense === 'function'
+    ? deps.canAccessExpense(req, expense) === true : !expense.ownerOnly || deps.isOwner(req));
+}
+function canAccessCard(req, card, policy) {
+  return !!card && (typeof policy.canAccessCard === 'function'
+    ? policy.canAccessCard(req, card) === true : !card.ownerOnly || policy.isOwner(req));
+}
 
 function checkRecordAccess(req, record, store, deps) {
     if (!deps.natures(req).includes(record.nature)) reject('You cannot access refunds for this entity.', 403);
@@ -10,7 +18,7 @@ function checkRecordAccess(req, record, store, deps) {
     const expenses = deps.expenses(store);
     record.sources.forEach(source => {
       const expense = source.expenseId && expenses.find(e => e.id === source.expenseId);
-      if (expense && (!deps.canView(req, expense) || expense.ownerOnly && !deps.isOwner(req))) reject('A refund source is restricted to the Owner.', 403);
+      if (expense && (!deps.canView(req, expense) || !canAccessExpense(req, expense, deps))) reject('Your accounting permissions do not allow this refund source.', 403);
       const advance = source.advanceId && store.vendorAdvances.find(a => a.id === source.advanceId);
       const accounts = [...(source.paymentAllocations || []).map(p => p.account), advance && !advance.creditOnly && advance.account].filter(a => a && a !== 'Refund credit');
       if (accounts.some(a => !deps.accountVisible(req, a))) reject('The original paying account is restricted.', 403);
@@ -28,7 +36,7 @@ function register(router, deps) {
         if (!deps.natures(req).includes(source.nature)) reject('You cannot log a refund for this entity.', 403);
         const expense = source.expenseId && expenses.find(e => e.id === source.expenseId);
         if (source.expenseId && !expense) reject('Expense access is restricted.', 403);
-        if (expense && expense.ownerOnly && !deps.isOwner(req)) reject('This source is restricted to the Owner.', 403);
+        if (expense && !canAccessExpense(req, expense, deps)) reject('Your accounting permissions do not allow this refund source.', 403);
         const accounts = [source.creditOnly ? '' : source.account, ...(source.payments || []).filter(p => !p.creditOnly).map(p => p.account)].filter(Boolean);
         if (accounts.some(account => !deps.accountVisible(req, account))) reject('The original paying account is restricted.', 403);
       },
@@ -99,7 +107,7 @@ function register(router, deps) {
       amount: refunds.reimbursementPosition(store, e).recoverable })).filter(r => r.amount > 0 && (!selected || r.nature === selected));
     const existingMovements = (store.receipts || []).filter(r => !r.accountingExcluded && ['refund', 'expense_refund'].includes(r.receiptType) && allowed.includes(deps.nature(r.nature)) && deps.accountVisible(req, r.account))
       .map(r => ({ id: r.id, nature: deps.nature(r.nature), date: r.date, amount: r.amount, account: r.account, reference: r.bankReference || '', source: r.source, mode: r.creditCardRefund ? 'card' : /cash/i.test(r.account) ? 'cash' : 'bank' }));
-    (store.reconciliationExpenses || []).filter(r => r.creditCardStatementId && !r.expenseRefundReceiptId && Number(r.amount) < 0 && allowed.includes(deps.nature(r.nature)) && deps.accountVisible(req,r.account) && (!r.ownerOnly || deps.isOwner(req)))
+    (store.reconciliationExpenses || []).filter(r => r.creditCardStatementId && !r.expenseRefundReceiptId && Number(r.amount) < 0 && allowed.includes(deps.nature(r.nature)) && deps.accountVisible(req,r.account) && canAccessExpense(req, r, deps))
       .forEach(r => existingMovements.push({ id: r.id, nature: deps.nature(r.nature), date: r.date, amount: Math.abs(r.amount), account: r.account, reference: '', source: r.particulars, mode: 'card' }));
     existingMovements.forEach(m => {
       const used = refunds.records(store).filter(refunds.received).flatMap(r => r.components).filter(c => c.externalMovementId === m.id || c.receiptId === m.id).reduce((sum, c) => sum + c.amount, 0);
@@ -116,14 +124,15 @@ function register(router, deps) {
       const found = Object.values(snapshot.cards && snapshot.cards.cards || {}).filter(row => row.active !== false &&
         (String(row.id || '').toLowerCase() === key || cardName(row).toLowerCase() === key));
       if (found.length > 1) reject('The saved card identity is ambiguous.', 409);
-      return found[0] && (!found[0].ownerOnly || deps.correctionPolicy.isOwner(req)) ? found[0] : null;
+      return canAccessCard(req, found[0], deps.correctionPolicy) ? found[0] : null;
     };
     const accountVisible = (req, account) => {
       const all = Object.values(snapshot.cards && snapshot.cards.cards || {}), key = String(account || '').trim().toLowerCase();
       const matching = all.filter(row => String(row.id || '').toLowerCase() === key || cardName(row).toLowerCase() === key);
-      return matching.length <= 1 && deps.correctionPolicy.accountVisible(req, account, snapshot) && !matching.some(row => row.ownerOnly && !deps.correctionPolicy.isOwner(req));
+      return matching.length <= 1 && deps.correctionPolicy.accountVisible(req, account, snapshot) && matching.every(row => canAccessCard(req, row, deps.correctionPolicy));
     };
-    const safe = { ...deps, card, cardName, accountVisible };
+    const safe = { ...deps, card, cardName, accountVisible,
+      canAccessExpense: (req, expense) => canAccessExpense(req, expense, deps.correctionPolicy) };
     return { policy: { ...deps.correctionPolicy, accountVisible }, context: (req, store, date) => context(req, store, date, safe), today: deps.today };
   }
   function correctionSnapshot(req) {
@@ -199,7 +208,7 @@ function register(router, deps) {
     const plan = refunds.prepareRedemption(store, record, req.body, { today: deps.today(),
       checkRecord: r => checkRecord(req, r, store), checkExpense: expense => {
         if (!deps.canView(req, expense) || !deps.natures(req).includes(deps.nature(expense.nature))) reject('Select an accessible credit and approved expense.');
-        if (expense.ownerOnly && !deps.isOwner(req)) reject('The receiving expense is restricted to the Owner.', 403);
+        if (!canAccessExpense(req, expense, deps)) reject('Your accounting permissions do not allow this receiving expense.', 403);
       } });
     if (plan.prior) return res.json({ success: true, already: true, view: view(req, store, { nature: record.nature }) });
     const application = refunds.applyRedemption(store, plan, { username: req.user.username });
