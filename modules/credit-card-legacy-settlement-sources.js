@@ -50,6 +50,22 @@ function linkedElsewhere(exp, expense, payment, movementId) {
   for (const field of ['transfers', 'receipts', 'adjustments', 'vendorAdvances', 'vendorOpeningPayables', 'loanRepayments', 'salesRefunds', 'paytmSettlements', 'paytmPayoutPostings', 'creditCardSettlementAllocations']) if (values(exp[field]).some(record => active(record) && (references(record) || list(record.applications).some(references)))) return true;
   return values(exp.bankReconciliationDrafts).some(draft => values(draft.resolutions).some(references));
 }
+function exactFinalizationOrigin(exp, evidence, account, origin) {
+  const { key, record } = evidence, book = (exp.bankStatements || {})[key] || {};
+  const instant = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value) && Number.isFinite(Date.parse(value));
+  const metadata = value => !!value && value.at === record.finalizedAt && value.by === record.finalizedBy && value.through === record.to && value.transactionsReconciled === true;
+  // Old imports sometimes omitted draftId. Never infer it from similar amounts,
+  // a nearby timestamp, or the override itself: require the exact completed
+  // finalization metadata retained independently in this account's audit/book.
+  if (evidence.carried || text(record.draftId) || !instant(record.finalizedAt) || !date(record.to) || !text(record.finalizedBy)) return { error: 'The existing repayment source draft differs from its finalized bank import.' };
+  if (list(book.imports).filter(item => item && item.finalizedAt === record.finalizedAt && item.to === record.to && item.finalizedBy === record.finalizedBy).length !== 1) return { error: 'The historical bank source-draft evidence is ambiguous.' };
+  const audits = values(exp.auditLog).filter(entry => entry && entry.action === 'BANK_RECONCILIATION_FINALIZED' && entry.subjectType === 'account' && entry.nature === 'PERSONAL' && accountKey(entry.account) === accountKey(account) && accountKey(entry.subjectId) === accountKey(account) && entry.user === record.finalizedBy && instant(entry.at) && metadata(entry.after));
+  const last = metadata(book.lastReconciliation) ? book.lastReconciliation : null;
+  if (audits.length > 1 || audits.some(entry => text(entry.after.draftId) !== origin) || last && text(last.draftId) !== origin) return { error: 'The historical bank source-draft evidence is conflicting or ambiguous.' };
+  if (!audits.length && !last) return { error: 'The historical bank import has no verified source-draft provenance.' };
+  if (audits.some(entry => !text(entry.id))) return { error: 'The historical bank import has no verified source-draft provenance.' };
+  return { error: '', proof: { origin, ...(audits.length ? { audit: audits[0] } : { lastReconciliation: last }) } };
+}
 function bankEvidence(exp, expense, payment, movementId) {
   const expectedBook = 'PERSONAL|' + text(payment.account), matching = [], pendingCarry = [];
   for (const [key, book] of Object.entries(exp.bankStatements || {})) for (const record of list(book.imports)) {
@@ -69,14 +85,27 @@ function bankEvidence(exp, expense, payment, movementId) {
   // Carried copies of one identified transaction are evidence, not more money.
   if (included.length > 1 && (!text(first.row.bank.transactionId) || included.filter(evidence => !evidence.carried).length !== 1 || included.some(evidence => signature(evidence) !== signature(first)))) return { error: invalid, matching };
   const override = (exp.bankDateOverrides || {})[movementId], link = (exp.bankReconciliationLinks || {})[movementId], bank = first.row.bank;
+  if (override && override.provisional) return { error: 'The existing repayment still has a provisional bank-date decision. Review its bank reconciliation first.', matching };
   const origins = new Set(included.flatMap(evidence => [evidence.record.id, evidence.record.draftId]).filter(Boolean));
-  if (override && (!date(override.bankDate) || override.bankDate !== bank.date || override.originalDate && override.originalDate !== payment.date || override.bankTransactionId && override.bankTransactionId !== bank.transactionId || override.reconciliationDraft && !origins.has(override.reconciliationDraft) || override.bankReference && bank.reference && normalized(override.bankReference) !== normalized(bank.reference))) return { error: 'The existing repayment and its effective bank date or reference no longer agree.', matching };
-  if (link && (link.provisional || link.reconciliationDraft && !origins.has(link.reconciliationDraft) || link.bankTransactionId && link.bankTransactionId !== bank.transactionId || link.bankImportId && !origins.has(link.bankImportId))) return { error: invalid, matching };
+  const provenance = [];
+  for (const origin of [...new Set([override && override.reconciliationDraft, link && link.reconciliationDraft].filter(Boolean))]) {
+    if (origins.has(origin)) continue;
+    const primary = included.filter(evidence => !evidence.carried);
+    if (primary.length !== 1) return { error: 'The historical bank source-draft evidence is ambiguous.', matching };
+    const proof = exactFinalizationOrigin(exp, primary[0], payment.account, origin);
+    if (proof.error) return { error: proof.error, matching };
+    origins.add(origin); provenance.push(proof.proof);
+  }
+  if (override && (!date(override.bankDate) || override.bankDate !== bank.date)) return { error: 'The existing repayment saved bank date differs from its finalized bank evidence.', matching };
+  if (override && override.originalDate && override.originalDate !== payment.date) return { error: 'The existing repayment original payment date differs from its bank-date audit.', matching };
+  if (override && override.bankTransactionId && override.bankTransactionId !== bank.transactionId) return { error: 'The existing repayment bank-transaction identity differs from its finalized bank evidence.', matching };
+  if (override && override.bankReference && bank.reference && normalized(override.bankReference) !== normalized(bank.reference)) return { error: 'The existing repayment reference differs from its finalized bank evidence.', matching };
+  if (link && (link.provisional || link.bankTransactionId && link.bankTransactionId !== bank.transactionId || link.bankImportId && !origins.has(link.bankImportId))) return { error: invalid, matching };
   const authorities = Object.entries(exp.bankMovementAuthority || {}).filter(([, authority]) => authority && movementIds(authority).includes(movementId));
   if (authorities.some(([key, authority]) => key !== cashAuthority.key(payment.account, 'PERSONAL', movementId) || authority.movementId !== movementId || accountKey(authority.account) !== accountKey(payment.account) || list(authority.sourceIds).length || list(authority.linkedEntryIds).length || list(authority.linkedEntries).length || !authority.original || !authority.after || cents(authority.original.debit) !== cents(payment.amount) || cents(authority.original.credit || 0) !== 0 || authority.original.date !== payment.date || cents(authority.after.debit) !== cents(payment.amount) || cents(authority.after.credit || 0) !== 0 || authority.after.date !== bank.date) || authorities.length > 1) return { error: 'The effective bank amount or source identity changed; review its protected bank workflow first.', matching };
   if (!override && !authorities.length && payment.date !== bank.date) return { error: 'The existing repayment and its finalized bank date no longer agree.', matching };
   for (const reference of [payment.reference, payment.bankReference, expense.bankReference]) if (reference && bank.reference && normalized(reference) !== normalized(bank.reference)) return { error: 'The existing repayment and its finalized bank reference no longer agree.', matching };
-  return { error: '', matching, bank, override, link, authorities, reference: text(bank.reference || payment.bankReference || payment.reference || override && override.bankReference), date: bank.date };
+  return { error: '', matching, bank, override, link, authorities, provenance, reference: text(bank.reference || payment.bankReference || payment.reference || override && override.bankReference), date: bank.date };
 }
 function samePhysicalPayment(source, payment, evidence) {
   if (accountKey(source.account || source.fromAccount) !== accountKey(payment.account)) return false;
@@ -106,7 +135,7 @@ function sources(store, exp, statement, recognized = []) {
       source: payment, expense, evidence: [{ amount: payment.amount, date: payment.date, reference: text(payment.bankReference || payment.reference) }, ...(bank.bank ? [{ amount: bank.bank.debit, date: bank.bank.date, reference: text(bank.bank.reference) }] : [])],
       date: bank.date || payment.date, amount: payment.amount, account: text(payment.account), nature: 'PERSONAL', reference: bank.reference || text(payment.bankReference || payment.reference), blockedReason,
       bankMovementRecorded: !bank.error, status: bank.error ? 'Legacy PERSONAL repayment source; finalized bank evidence needs review. No accounting records will be changed.' : 'Legacy PERSONAL card repayment; original expense and reconciled bank entry stay unchanged. This links liability settlement only, not an expense offset.',
-      fingerprint: fingerprint({ card, expense, payment, bankEvidence: bank.matching.map(evidence => ({ key: evidence.key, record: Object.fromEntries(Object.entries(evidence.record).filter(([key]) => !['reconciliationRows', 'carriedReconciliationRows', 'carryForwardMovements'].includes(key))), row: evidence.row })), override: bank.override || null, link: bank.link || null, authorities: bank.authorities || [] }) });
+      fingerprint: fingerprint({ card, expense, payment, bankEvidence: bank.matching.map(evidence => ({ key: evidence.key, record: Object.fromEntries(Object.entries(evidence.record).filter(([key]) => !['reconciliationRows', 'carriedReconciliationRows', 'carryForwardMovements'].includes(key))), row: evidence.row })), override: bank.override || null, link: bank.link || null, authorities: bank.authorities || [], ...(bank.provenance && bank.provenance.length ? { finalizationProvenance: bank.provenance } : {}) }) });
   }
   return result;
 }
