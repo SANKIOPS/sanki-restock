@@ -23,6 +23,12 @@ window.MetaLinkedWorkspace=(()=>{
   const switchFor=(...records)=>{const status=statusFor(...records);if(status.label==='Unconfirmed')return '<span class="status-unknown" role="status">Unconfirmed</span>';return '<span class="state-switch '+(status.on?'on':'')+'" role="img" title="'+esc(status.label)+' · saved app status, not live Meta" aria-label="Row status: '+esc(status.label)+'"></span><small>'+esc(status.label)+'</small>';};
   const setCounts=(campaign,sets)=>{const counts={On:0,Off:0,Unconfirmed:0};for(const set of sets)counts[statusFor(set).label]++;if(!sets.length)return 'Not supplied';return sets.length+' ad sets<small title="Ad-set switches, independent of the campaign switch">'+counts.On+' on · '+counts.Off+' off'+(counts.Unconfirmed?' · '+counts.Unconfirmed+' unconfirmed':'')+'</small>';};
   const canEdit=(level,owner)=>level===owner||(level==='ads'&&owner==='results');
+  function performanceSummary(items,ads){
+    const matches=items.filter(r=>ads.some(a=>a.id===r.adId));
+    const sum=key=>matches.length===ads.length&&matches.length&&matches.every(r=>r[key]!=null)?matches.reduce((n,r)=>n+r[key],0):null;
+    const spend=sum('spend'),impressions=sum('impressions'),clicks=sum('linkClicks'),purchases=sum('metaPurchases'),value=sum('metaPurchaseValue');
+    return {spend,impressions,reach:matches.length===1&&ads.length===1?matches[0].reach:null,profileVisits:sum('profileVisits'),instagramFollows:sum('instagramFollows'),messagingStarts:sum('messagingStarts'),linkClicks:clicks,ctr:clicks!=null&&impressions>0?clicks/impressions*100:null,cpc:spend!=null&&clicks>0?spend/clicks:null,cpm:spend!=null&&impressions>0?spend/impressions*1000:null,frequency:matches.length===1&&matches[0].reach>0&&impressions!=null?impressions/matches[0].reach:null,videoPlays3s:sum('videoPlays3s'),thruPlays:sum('thruPlays'),metaPurchases:purchases,metaPurchaseValue:value,roas:value!=null&&spend>0?value/spend:null,attribution:matches.length?[...new Set(matches.map(r=>r.attribution||'Not supplied'))].join(', '):'Not supplied',coverage:matches.length+'/'+ads.length+' ads'};
+  }
   function render(root,state,callbacks){
     const rows=state.ads.map(ad=>({ad,set:state.adSets.find(s=>s.id===ad.adSetId)})).map(r=>({...r,campaign:state.campaigns.find(c=>c.id===r.set?.campaignId)})).filter(r=>r.set&&r.campaign&&!r.ad.archived&&!r.set.archived&&!r.campaign.archived);
     const types=[...new Set(['Aesthetic','Vocal','UGC','Other',...state.ads.flatMap(a=>a.creativeTypes||[])])];
@@ -124,6 +130,11 @@ window.MetaLinkedWorkspace=(()=>{
         const panel=document.createElement('section');panel.className='lw-cell-editor';panel.innerHTML='<strong>Copy settings from '+esc(source.name)+'</strong><p>Choose settings and target ad sets. Selected values replace existing values. Blank source fields are skipped. Creative tags apply to all ads in the target sets; creative URLs remain separate.</p><div>'+[['destination','Destination / goal'],['budget','Budget'],['locations','Locations'],['interests','Interests / behaviours / placements'],['age','Age / gender'],['collection','Collection'],['creativeTypes','Creative type'],['model','Model']].map(([key,label])=>'<label><input type="checkbox" data-copy-group="'+key+'" checked> '+label+'</label>').join('')+'</div><strong>Copy to</strong>'+targets.map(t=>'<label><input type="checkbox" data-copy-target="'+esc(t.id)+'" checked> '+esc(t.name)+'</label>').join('')+(targets.length?'':'<p>No other ad sets in this campaign.</p>')+'<button type="button" data-copy-apply>Copy selected settings</button><button type="button" data-copy-cancel>Cancel</button><small class="lw-inline-error" role="alert"></small>';
         root.querySelector('#lwRows').prepend(panel);
       }
+      if(state.columnMode==='performance'){
+        const columns=[['spend','Spend ₹','money'],['profileVisits','Profile visits'],['instagramFollows','Instagram follows'],['messagingStarts','Messaging conversations'],['linkClicks','Link clicks'],['ctr','Link CTR','percent'],['cpc','Link CPC ₹','money'],['impressions','Impressions'],['reach','Reach'],['frequency','Frequency','decimal'],['cpm','CPM ₹','money'],['videoPlays3s','3-second video plays'],['thruPlays','ThruPlays'],['metaPurchases','Purchases'],['metaPurchaseValue','Purchase value ₹','money'],['roas','Purchase ROAS','decimal'],['attribution','Attribution'],['coverage','Report coverage']];
+        const format=(value,type)=>value==null?'Not supplied':typeof value==='string'?esc(value):(type==='money'?'₹':'')+Number(value).toLocaleString('en-IN',{maximumFractionDigits:type?2:0})+(type==='percent'?'%':'');
+        root.querySelector('.table-wrap').innerHTML='<table class="lw-performance"><thead><tr>'+['Campaign','Ad set','Ad',...columns.map(c=>c[1])].map(label=>'<th>'+label+'</th>').join('')+'</tr></thead><tbody>'+displayed.map(row=>{const values=performanceSummary(items,row.ads);return '<tr><td>'+drill(row.campaign.id,esc(row.campaign.name))+'</td><td>'+(row.set?drill(row.campaign.id,esc(row.set.name),row.set.id):drill(row.campaign.id,row.sets.length+' ad sets'))+'</td><td>'+(row.ad?esc(row.ad.name):drill(row.campaign.id,row.ads.length+' ads',row.set?.id))+'</td>'+columns.map(([key,,type])=>'<td>'+format(values[key],type)+'</td>').join('')+'</tr>';}).join('')+'</tbody></table><p class="muted">Figures follow the selected dates. Reach and frequency require unique audience totals and are unavailable when combining daily or multiple-ad reports. Not supplied means the metric is absent or coverage is incomplete.</p>';
+      }
       callbacks.scope?.(c,set,displayed.length);
     }
     root.querySelector('#lwRows').addEventListener('change',e=>{if(e.target.dataset.selectCampaign)callbacks.selectCampaign?.(e.target.dataset.selectCampaign,e.target.checked);});
@@ -163,5 +174,5 @@ window.MetaLinkedWorkspace=(()=>{
     });
     update();
   }
-  return {render,statusFor,switchFor,setCounts,canEdit,resetScope:()=>{scope.campaign=scope.set=null;}};
+  return {render,statusFor,switchFor,setCounts,canEdit,performanceSummary,resetScope:()=>{scope.campaign=scope.set=null;}};
 })();

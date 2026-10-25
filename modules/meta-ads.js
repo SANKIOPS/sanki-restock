@@ -15,7 +15,7 @@ const PROCESS_INSTANCE = crypto.randomUUID();
 const TYPES = { campaigns: 'campaigns', adsets: 'adSets', ads: 'ads', results: 'results' };
 const ENTITY = { campaigns: 'campaign', adSets: 'adSet', ads: 'ad', results: 'result' };
 const STATUSES = new Set(['draft', 'reported_running', 'delivery_unconfirmed', 'active', 'paused', 'completed', 'archived', 'unknown', 'pending']);
-const METRICS = ['spend', 'impressions', 'reach', 'linkClicks', 'profileVisits', 'messagingStarts', 'qualifiedEnquiries', 'orders', 'revenue', 'storeVisits','metaPurchases','metaPurchaseValue','videoPlays3s','thruPlays','reportedResults'];
+const METRICS = ['spend', 'impressions', 'reach', 'linkClicks', 'profileVisits', 'messagingStarts', 'qualifiedEnquiries', 'orders', 'revenue', 'storeVisits','metaPurchases','metaPurchaseValue','videoPlays3s','thruPlays','instagramFollows','reportedResults'];
 const MONEY = new Set(['budgetDaily', 'spend', 'revenue','metaPurchaseValue']);
 const SCHEMAS = {
   campaigns: {
