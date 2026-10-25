@@ -24,6 +24,43 @@ function mergeMetadata(row, input) {
   return { version: 1, touchedFields: FIELDS.filter(field => next && next.touchedFields.includes(field) || previous && previous.touchedFields.includes(field) || changed.includes(field)) };
 }
 const FINANCIAL = ['transfers', 'receipts', 'expenses', 'adjustments', 'reconciliationExpenses', 'expenseRefunds', 'vendorAdvances', 'vendorOpeningPayables', 'receivables', 'refunds', 'loanRepayments', 'creditCardSettlementAllocations', 'gokwikPostings', 'paytmSettlements', 'reimbursements', 'salaryAdvanceTransfers', 'rentals', 'requests'];
+function duplicateTarget(cards, statement, card, row, used, { canPersonal, visibleSource, visibleExpense }, expenses) {
+  const pointer = row.duplicateOf;
+  if (!object(pointer) || Object.keys(pointer).length !== 2 || Object.keys(pointer).some(key => !['statementId', 'rowId'].includes(key)) || typeof pointer.statementId !== 'string' || !pointer.statementId || typeof pointer.rowId !== 'string' || !pointer.rowId || pointer.statementId === statement.id || row.duplicateResolution) fail('The duplicate statement provenance cannot be verified. Use its source correction workflow.');
+  const source = cards.statements[pointer.statementId];
+  if (!object(source) || source.id !== pointer.statementId || source.cardId !== card.id || source.status !== 'finalized' || !Array.isArray(source.rows)) fail('The duplicate must refer to an active finalized statement for this same card.');
+  const matches = source.rows.filter(item => object(item) && item.id === pointer.rowId), key = pointer.statementId + '/' + pointer.rowId;
+  if (matches.length !== 1 || used.has(key)) fail('The duplicate statement row identity is missing, ambiguous or reused.');
+  const target = matches[0];
+  if (target.replaces || target.duplicateOf || target.supersededBy || target.linkedStatementId || target.statementId || target.creditCardStatementId || target.active === false || target.accountingExcluded || target.deletedAt || target.voidedAt || target.reversedAt || ['duplicate', 'link', 'merge', 'replace'].includes(target.duplicateResolution) || ['voided', 'cancelled', 'canceled', 'reversed', 'rejected', 'deleted'].includes(target.status)) fail('The original duplicate source is inactive or linked to another correction workflow.');
+  const reference = value => value == null ? '' : typeof value === 'string' ? value.trim() : null;
+  if (row.date !== target.date || row.amount !== target.amount || row.debit !== target.debit || row.credit !== target.credit || row.narration !== target.narration || reference(row.reference) === null || reference(target.reference) === null || reference(row.reference) !== reference(target.reference) || (row.postingDate || '') !== (target.postingDate || '')) fail('The duplicate no longer agrees with its original statement transaction. No review was discarded.');
+  if (target.allocations != null && !Array.isArray(target.allocations)) fail('The original statement ownership allocation cannot be verified.');
+  if (target.nature === 'PERSONAL' && !canPersonal || (target.allocations || []).some(item => item && item.nature === 'PERSONAL' && !canPersonal)) fail('A private original statement allocation is not accessible. Its duplicate review was preserved.', 403);
+  if (target.payingAccount && !visibleSource(target.payingNature, target.payingAccount)) fail('An inaccessible original settlement source prevents discarding this duplicate review.', 403);
+  const linkedExpense = target.linkedExpenseId && (expenses.expenses || {})[target.linkedExpenseId];
+  if (target.linkedExpenseId && (!linkedExpense || !visibleExpense(linkedExpense))) fail('An original linked expense is missing or inaccessible. Its duplicate review was preserved.', 403);
+  const receipt = target.expenseRefundReceiptId && (expenses.receipts || []).find(item => item.id === target.expenseRefundReceiptId);
+  if (target.expenseRefundReceiptId && (!receipt || (receipt.nature === 'PERSONAL' || receipt.ownerOnly) && !canPersonal)) fail('An original refund receipt is missing or inaccessible. Its duplicate review was preserved.', 403);
+  used.add(key);
+  return { statement: source, row: target };
+}
+function dependencyProjection(expenses, targets, card, account) {
+  if (!targets.length) return expenses;
+  const projected = clone(expenses);
+  // The original finalized posting owns its qualified row identity. Clear only
+  // that one raw-id field in a validation copy; unknown or draft-owned pointers
+  // elsewhere remain visible to every normal dependent-source protection.
+  const records = Object.values(projected.reconciliationExpenses || {});
+  for (const record of records) {
+    if (!object(record)) continue;
+    const source = targets.find(target => record.id === 'CCE-' + target.statement.id + '-' + target.row.id && record.creditCardStatementId === target.statement.id && record.creditCardRowId === target.row.id);
+    if (!source || records.filter(item => object(item) && item.id === record.id).length !== 1) continue;
+    const row = source.row, amount = row.classification === 'refund' ? -row.amount : row.amount;
+    if (['expense', 'fee', 'emi_interest', 'refund'].includes(row.classification) && record.source === 'credit_card_statement' && record.creditCardId === card.id && record.date === row.date && record.account === account && record.amount === amount && record.classification === row.classification && record.nature === row.nature && record.particulars === row.narration) delete record.creditCardRowId;
+  }
+  return projected;
+}
 function assertDiscardable({ cards, expenses, statement, card, external = {}, canPersonal, visibleSource, visibleExpense, assertUnlocked }) {
   if (!object(cards) || !object(cards.cards) || !object(cards.statements) || !object(expenses) || !object(statement) || !object(card) || cards.statements[statement.id] !== statement || cards.cards[statement.cardId] !== card || !statement.id || !card.id || statement.cardId !== card.id) fail('The statement identity or accounting store cannot be verified.');
   for (const key of ['payments', 'audit']) if (cards[key] != null && !Array.isArray(cards[key])) fail('The card accounting history cannot be verified.');
@@ -33,7 +70,7 @@ function assertDiscardable({ cards, expenses, statement, card, external = {}, ca
   if ((cards.audit || []).some(entry => entry.subjectId === statement.id && ['STATEMENT_FINALIZED', 'STATEMENT_REOPENED'].includes(entry.action))) fail('This statement was previously finalized or reopened. Its accounting review cannot be discarded.');
   if (statement.reviewRevision != null && (!Number.isSafeInteger(statement.reviewRevision) || statement.reviewRevision < 0) || !Number.isSafeInteger((statement.reviewRevision || 0) + 1)) fail('The saved review revision cannot be verified.');
   if (!Array.isArray(statement.rows) || !statement.rows.length) fail('The original statement rows are unavailable.');
-  const ids = new Set([statement.id]), rowIds = new Set(), scopes = [], records = [], dates = new Set();
+  const ids = new Set([statement.id]), rowIds = new Set(), scopes = [], records = [], dates = new Set(), targets = [], usedTargets = new Set();
   const account = String(card.name || '').trim() + ' ' + String(card.last4 || '').trim();
   if (!card.name || !/^\d{4}$/.test(String(card.last4 || ''))) fail('The original card identity cannot be verified.');
   for (const row of statement.rows) {
@@ -41,7 +78,8 @@ function assertDiscardable({ cards, expenses, statement, card, external = {}, ca
     rowIds.add(row.id); ids.add(row.id); ids.add(statement.id + '/' + row.id); ids.add('CCE-' + statement.id + '-' + row.id);
     const values = [row.debit, row.credit, row.amount];
     if (values.some(value => typeof value !== 'number' || !Number.isFinite(value) || value < 0 || !Number.isSafeInteger(Math.round(value * 100)) || Math.abs(value * 100 - Math.round(value * 100)) > 0.00001) || !(row.amount > 0) || !((row.debit > 0 && row.credit === 0) || (row.credit > 0 && row.debit === 0)) || Math.round((row.debit + row.credit) * 100) !== Math.round(row.amount * 100)) fail('The original statement amounts cannot be verified. No review was discarded.');
-    if (row.replaces || row.duplicateOf || row.supersededBy || row.linkedStatementId || row.statementId || row.creditCardStatementId) fail('This review contains a linked or overlapping statement row. Use its source correction workflow.');
+    if (row.replaces || row.supersededBy || row.linkedStatementId || row.statementId || row.creditCardStatementId) fail('This review contains a linked or overlapping statement row. Use its source correction workflow.');
+    if (row.duplicateOf) targets.push(duplicateTarget(cards, statement, card, row, usedTargets, { canPersonal, visibleSource, visibleExpense }, expenses));
     if (row.allocations != null && !Array.isArray(row.allocations)) fail('The statement ownership allocation is invalid.');
     if (row.nature === 'PERSONAL' && !canPersonal || (row.allocations || []).some(item => item && item.nature === 'PERSONAL' && !canPersonal)) fail('A private statement allocation is not accessible. Its saved review was preserved.', 403);
     if (row.merchantAutofill != null) metadata(row.merchantAutofill);
@@ -57,13 +95,18 @@ function assertDiscardable({ cards, expenses, statement, card, external = {}, ca
   }
   // A review referring outward does not own that source. Any independent record
   // pointing back to the draft blocks discard, including retained approvals.
-  const dependent = guards.references(FINANCIAL.map(key => expenses[key]));
+  const projectedExpenses = dependencyProjection(expenses, targets, card, account);
+  const dependent = guards.references(FINANCIAL.map(key => projectedExpenses[key]));
   if ([...ids].some(id => dependent.has(id))) fail('An accounting record or approval depends on this statement. Its saved review cannot be discarded.');
-  const otherCards = { payments: cards.payments || [], statements: Object.fromEntries(Object.entries(cards.statements).filter(([id]) => id !== statement.id)) };
+  const otherCards = clone({ payments: cards.payments || [], statements: Object.fromEntries(Object.entries(cards.statements).filter(([id]) => id !== statement.id)) });
+  // Canonical transaction IDs can repeat on an identical upload. A verified
+  // original row definition is not an incoming reference to this review; no
+  // nested values, other rows, statements or payment pointers are exempted.
+  for (const target of targets) delete otherCards.statements[target.statement.id].rows.find(row => row.id === target.row.id).id;
   const otherReferences = guards.references(otherCards);
   if ([...ids].some(id => otherReferences.has(id))) fail('Another card statement or payment depends on this review. Nothing was discarded.');
   if (typeof assertUnlocked !== 'function') fail('The reconciliation protection service is unavailable.');
-  assertUnlocked(expenses, { ids: [...ids], scopes, dates: [...dates], records, external });
+  assertUnlocked(projectedExpenses, { ids: [...ids], scopes, dates: [...dates], records, external });
   // Existing source decisions retain their bank and approval protection even
   // though discard would only clear the referencing draft.
   for (const row of statement.rows) {

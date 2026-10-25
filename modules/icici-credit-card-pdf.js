@@ -92,8 +92,9 @@ function rowAmount(items, row) {
   if (overlays.length && amounts.some(item => !item.encoded && item.order > value.order)) fail('transaction ' + row + ' has an ambiguous replacement layer.');
   const sides = new Set([value.side, ...marks.filter(item => !overlays.length || item.order > value.order).map(item => item.text.toUpperCase())].filter(Boolean));
   if (sides.size > 1) fail('transaction ' + row + ' has conflicting debit / credit markers.');
-  if (!value.amount) fail('transaction ' + row + ' has a zero INR amount.');
-  return { amount: value.amount, credit: sides.has('CR') };
+  // Zero is validated only after the complete narration (including wrapped
+  // lines) is known. It is never returned as a financial posting by itself.
+  return { amount: value.amount, credit: sides.has('CR'), side: [...sides][0] || '' };
 }
 
 function printedAmountDue(pdf) {
@@ -181,7 +182,7 @@ function parseIciciCreditCardPdf(pdf) {
         if (!description.length) fail('a transaction has no merchant / particulars.');
         const money = rowAmount(relevant.filter(item => item.x >= cols.amount), records.length + 1);
         active = { date, description, reference: references[0].text, debit: money.credit ? 0 : money.amount,
-          credit: money.credit ? money.amount : 0, row: records.length + 1, ...(cardLast4 ? { cardLast4 } : {}) };
+          credit: money.credit ? money.amount : 0, side: money.side, row: records.length + 1, ...(cardLast4 ? { cardLast4 } : {}) };
         records.push(active);
       } else {
         if (relevant.some(item => item.x < cols.reference && /^[0-9/]+$/.test(item.text))) fail('a transaction date is missing or malformed.');
@@ -191,19 +192,36 @@ function parseIciciCreditCardPdf(pdf) {
       }
     }
   }
-  if (!records.length) fail('no complete dated transactions were found.');
-  const debits = records.reduce((sum, row) => sum + row.debit, 0), parsedCredits = records.reduce((sum, row) => sum + row.credit, 0);
+  const financialRecords = [], nonPostingEntries = [];
+  for (const record of records) {
+    const description = record.description.join(' ');
+    if (record.debit || record.credit) { financialRecords.push(record); continue; }
+    // ICICI prints a zero-value auto-debit-return notification as a dated CR
+    // row. This exact bank notice is evidence, not a payment, refund or expense.
+    // All column, currency, date, reference and overlay checks still ran above;
+    // any other zero amount (including the same text with DR/no direction)
+    // fails closed instead of disappearing from a preview.
+    if (record.side !== 'CR' || !/^auto\s+dr\.\s*retn\s*-\s*insuff\.\s*fund$/i.test(description.trim())) {
+      fail('transaction ' + record.row + ' has a zero INR amount.');
+    }
+    nonPostingEntries.push({ date: record.date, reference: record.reference, description,
+      cardLast4: record.cardLast4 || '', amount: 0, debit: 0, credit: 0, sourceRow: record.row,
+      reason: 'zero_value_bank_notice',
+      explanation: 'ICICI auto-debit return notice: insufficient funds; no money moved and no ledger entry is posted.' });
+  }
+  if (!financialRecords.length) fail('no complete dated transactions were found.');
+  const debits = financialRecords.reduce((sum, row) => sum + row.debit, 0), parsedCredits = financialRecords.reduce((sum, row) => sum + row.credit, 0);
   if (debits !== purchases + cashAdvances || parsedCredits !== credits) fail('parsed Purchases / Charges ₹' + debits / 100 + ' and Payments / Credits ₹' + parsedCredits / 100 + ' do not match declared totals ₹' + (purchases + cashAdvances) / 100 + ' and ₹' + credits / 100 + '.');
   let running = opening;
-  records.sort((a, b) => a.date.localeCompare(b.date) || a.row - b.row);
-  const rows = records.map(record => {
+  financialRecords.sort((a, b) => a.date.localeCompare(b.date) || a.row - b.row);
+  const rows = financialRecords.map(({ side, ...record }) => {
     running += record.debit - record.credit;
     return { ...record, description: record.description.join(' '), debit: record.debit / 100, credit: record.credit / 100, balance: running / 100 };
   });
   if (running !== due) fail('transactions do not reproduce the printed Total Amount Due.');
   rows.statementSummary = { format: 'ICICI Bank credit-card PDF', from, to, openingBalance: opening / 100,
     closingBalance: due / 100, totalDebits: debits / 100, totalCredits: parsedCredits / 100,
-    validated: true, accountType: 'credit_card', cardLast4s: [...cardLast4s],
+    validated: true, accountType: 'credit_card', cardLast4s: [...cardLast4s], nonPostingEntries,
     ...(cardLast4s.size === 1 ? { accountLast4: [...cardLast4s][0] } : {}) };
   return rows;
 }
