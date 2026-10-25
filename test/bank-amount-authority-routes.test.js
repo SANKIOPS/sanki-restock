@@ -190,6 +190,38 @@ test('manual unequal amount requires explicit confirmation and the exact reviewe
   }
 });
 
+test('Prashant can manually match a bank difference below three rupees without separate Owner permission', async () => {
+  seed({ amount: 26701, bankAmount: 26698.63 });
+  const candidate = await preview('admin');
+  assert.equal(candidate.status, 200, JSON.stringify(candidate.body));
+  assert.deepEqual(candidate.body.manualMatchApproval, {
+    difference: 2.37, limit: 3, authorized: true, ownerApprovalRequired: false, policy: 'prashant_under_3'
+  });
+  const staged = await resolveMatch(candidate.body.bankAmountAuthority.fingerprint, {}, 'admin');
+  assert.equal(staged.status, 200, JSON.stringify(staged.body));
+  const resolution = read().bankReconciliationDrafts[draftId].resolutions['bank-0'];
+  assert.ok(resolution.manualMatchApproval, JSON.stringify(resolution));
+  assert.equal(resolution.manualMatchApproval.policy, 'prashant_under_3');
+  assert.equal(resolution.manualMatchApproval.amountDifference, 2.37);
+  assert.equal(resolution.manualMatchApproval.authorizedBy, 'prashant');
+});
+
+test('Prashant needs the Owner when a manual bank difference is three rupees or more', async () => {
+  seed({ amount: 26701, bankAmount: 26698 });
+  const candidate = await preview('admin');
+  assert.equal(candidate.status, 200, JSON.stringify(candidate.body));
+  assert.equal(candidate.body.manualMatchApproval.ownerApprovalRequired, true);
+  const blocked = await resolveMatch(candidate.body.bankAmountAuthority.fingerprint, {}, 'admin');
+  assert.equal(blocked.status, 403, JSON.stringify(blocked.body));
+  assert.equal(blocked.body.ownerApprovalRequired, true);
+  assert.match(blocked.body.error, /requires the Owner/);
+  assert.deepEqual(read().bankReconciliationDrafts[draftId].resolutions, {});
+  assert.deepEqual(read().bankAmountAuthorityProposals, {});
+  const ownerCandidate = await preview('owner');
+  const ownerMatch = await resolveMatch(ownerCandidate.body.bankAmountAuthority.fingerprint, {}, 'owner');
+  assert.equal(ownerMatch.status, 200, JSON.stringify(ownerMatch.body));
+});
+
 test('manual correction is staged by Admin, submitted without posting, and applied once by Owner', async () => {
   seed({ bankAmount: 499.5 });
   const candidate = await preview('admin');
@@ -729,8 +761,8 @@ test('a forged internal correction plan in a normal equal-amount match is ignore
 
 for (const bank of [{ account, nature: 'SANKI' }, { account: 'IndusInd Bank 7883', nature: 'SAMAST' }]) {
   test('PERSONAL source invoice stays private during bank amount review in ' + bank.account, async () => {
-    const invoiceBefore = 12345.67, invoiceAfter = 12558.95;
-    const store = seed({ expenseAmount: invoiceBefore, bankAmount: 713.28,
+    const invoiceBefore = 12345.67, invoiceAfter = 12347.95;
+    const store = seed({ expenseAmount: invoiceBefore, bankAmount: 502.28,
       expense: { nature: 'PERSONAL', particulars: 'Private invoice details that must remain private' } });
     const expense = store.expenses[expenseId];
     expense.payments[0].account = bank.account;
@@ -747,7 +779,7 @@ for (const bank of [{ account, nature: 'SANKI' }, { account: 'IndusInd Bank 7883
     const publicPlan = candidate.body.bankAmountAuthority;
     assert.equal(publicPlan.privacyRestricted, true);
     assert.equal(publicPlan.originalAmount, 500);
-    assert.equal(publicPlan.bankAmount, 713.28);
+    assert.equal(publicPlan.bankAmount, 502.28);
     assert.equal(Object.hasOwn(publicPlan, 'expenseAmountBefore'), false);
     assert.equal(Object.hasOwn(publicPlan, 'expenseAmountAfter'), false);
     assert.equal(Object.hasOwn(publicPlan, 'before'), false);
@@ -781,7 +813,7 @@ for (const bank of [{ account, nature: 'SANKI' }, { account: 'IndusInd Bank 7883
     assert.equal(result.status, 200, JSON.stringify(result.body));
     const finalStore = read();
     assert.equal(finalStore.expenses[expenseId].amount, invoiceAfter);
-    assert.equal(finalStore.expenses[expenseId].payments[0].amount, 713.28);
+    assert.equal(finalStore.expenses[expenseId].payments[0].amount, 502.28);
     const applicationAudit = finalStore.auditLog.filter(entry => entry.action === 'BANK_AMOUNT_AUTHORITY_APPLIED');
     assert.equal(applicationAudit.length, 1);
     assert.equal(applicationAudit[0].nature, 'PERSONAL', 'private source audit cannot inherit business-bank visibility');
