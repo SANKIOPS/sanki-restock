@@ -3,6 +3,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const exclusions = require('./incentive-exclusions');
 
 const DATA_DIR = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..');
 const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json');
@@ -94,7 +95,8 @@ function buildRecords(orders, state){
   // order's current lifecycle label, decide whether value was collected.
   (orders || []).filter(order=>String(order.channel || '').toUpperCase()==='POS').forEach(order=>{
     const review=(state.reviews || {})[String(order.id)] || {},parsed=parseSalespeople(order.note),salespersons=Array.isArray(review.salespersons)?review.salespersons.filter(name=>SALESPERSONS.some(person=>person.name===name)):parsed.salespersons;
-    const customerExclusion=excludedCustomer(order),noSalesperson=review.noSalesperson===true||!!customerExclusion,transactions=(order.paymentTransactions || []).filter(successfulReceipt),groups=new Map();
+    const manualExclusion=(state.exclusions||{})[String(order.id)]||{},manuallyExcluded=manualExclusion.excluded===true;
+    const customerExclusion=excludedCustomer(order),noSalesperson=review.noSalesperson===true||!!customerExclusion||manuallyExcluded,transactions=(order.paymentTransactions || []).filter(successfulReceipt),groups=new Map();
     if(!transactions.length){
       const date=String(order.processedAt || order.createdAt || '').slice(0,10);groups.set(date,[]);
     } else transactions.forEach(tx=>{const date=receiptDate(tx,order);if(!groups.has(date))groups.set(date,[]);groups.get(date).push(tx);});
@@ -111,11 +113,11 @@ function buildRecords(orders, state){
       // but do not force the already-reviewed exclusion back into Needs review.
       const issues=[];if(!recordOnly&&!noSalesperson&&!rows.length)issues.push('Payment transactions have not been synced from Shopify.');if(!noSalesperson&&!salespersons.length)issues.push(parsed.suggestions.length?'Confirm the suggested salesperson spelling.':'Salesperson was not found in the order note.');if(!recordOnly&&!noSalesperson&&unknown>0)issues.push('Classify '+mapped.filter(tx=>tx.effectiveMode==='unknown').map(tx=>tx.gateway||'unnamed gateway').join(', ')+'.');
       const portions=splitMoney(eligible,salespersons.length),recordOnlyAmount=noSalesperson?0:money(salespersons.reduce((total,name,index)=>total+(!incentiveEligible(name)?portions[index]:0),0)),incentiveEligibleAmount=noSalesperson?0:money(eligible-recordOnlyAmount);
-      let exclusionReason='';if(customerExclusion)exclusionReason=customerExclusion.name+': customer orders excluded from incentives';else if(noSalesperson)exclusionReason='Confirmed: no eligible salesperson';else if(recordOnlySalespersons.length)exclusionReason=recordOnlySalespersons.join(' + ')+': former employee — record only; no incentive payable on their share.';else if(!issues.length&&eligible<=0)exclusionReason=storeCredit>0&&storeCredit===totalReceived?'Store credit only':'No eligible cash, UPI or card-machine receipt';
+      let exclusionReason='';if(manuallyExcluded)exclusionReason='Manually excluded: '+(manualExclusion.reason||'incentive exclusion');else if(customerExclusion)exclusionReason=customerExclusion.name+': customer orders excluded from incentives';else if(noSalesperson)exclusionReason='Confirmed: no eligible salesperson';else if(recordOnlySalespersons.length)exclusionReason=recordOnlySalespersons.join(' + ')+': former employee — record only; no incentive payable on their share.';else if(!issues.length&&eligible<=0)exclusionReason=storeCredit>0&&storeCredit===totalReceived?'Store credit only':'No eligible cash, UPI or card-machine receipt';
       const status=recordOnly?'record_only':issues.length?'needs_review':(noSalesperson||eligible<=0?'excluded':'ready');
       records.push({
         id:String(order.id)+'|'+date,orderId:String(order.id),orderNumber:String(order.name || order.number || order.id),customerName:String(order.customer&&order.customer.name || ''),receiptDate:date,
-        salespersons,noSalesperson,recordOnly,recordOnlySalespersons,salespersonSuggestions:parsed.suggestions,matchConfidence:Array.isArray(review.salespersons)?'reviewed':parsed.confidence,transactionReference:parsed.reference,
+        salespersons,noSalesperson,reviewNoSalesperson:review.noSalesperson===true,manuallyExcluded,manualExclusion:manuallyExcluded?manualExclusion:null,recordOnly,recordOnlySalespersons,salespersonSuggestions:parsed.suggestions,matchConfidence:Array.isArray(review.salespersons)?'reviewed':parsed.confidence,transactionReference:parsed.reference,
         billAmount:money(order.total),totalReceived,cashAmount:cash,upiCardAmount:upiCard,storeCreditAmount:storeCredit,otherExcludedAmount:otherExcluded,unknownAmount:unknown,eligibleTenderAmount:eligible,eligibleAmount:incentiveEligibleAmount,recordOnlyAmount,
         refundAmount:money(order.refundAmount),orderNote:String(order.note || ''),transactions:mapped,reviewStatus:status,reviewIssues:issues,exclusionReason,reviewedAt:review.reviewedAt || '',reviewedBy:review.reviewedBy || ''
       });
@@ -162,7 +164,7 @@ function calculate(orders,state){
       if(day.thresholdMet&&!prior)qualifiedOrders.set(orderKey,{date:day.date,eligibleAmount:day.eligibleAmount});
     });
     day.qualifies=day.incentiveBaseAmount>0;day.incentive=money(day.incentiveBaseAmount*RATE);day.unresolved=day.unresolved||day.qualificationReviewDates.length>0;
-    const approval=(state.approvals || {})[day.key];
+    const originalApproval=(state.approvals || {})[day.key],approval=originalApproval?{...originalApproval,...(state.approvalRevisions||{})[day.key],incentive:exclusions.approvedAmount(state,day.key)}:null;
     const sameApproval=approval&&money(approval.eligibleAmount)===day.eligibleAmount&&money(approval.incentiveBaseAmount==null?approval.eligibleAmount:approval.incentiveBaseAmount)===day.incentiveBaseAmount&&money(approval.incentive)===day.incentive&&(!approval.qualificationSources||JSON.stringify(approval.qualificationSources)===JSON.stringify(day.qualificationSources));
     day.approval=approval || null;day.approvalStatus=!day.qualifies?'not_eligible':!approval?'pending':sameApproval?'approved':'needs_reapproval';
     day.records.forEach(({share})=>{share.approvalStatus=share.qualifies?day.approvalStatus:'not_eligible';});
@@ -175,10 +177,11 @@ function ledgerView(state){
     const entries=[];
     Object.values(state.approvals || {}).filter(item=>item.salesperson===person.name).forEach(item=>entries.push({id:item.id,date:item.date,type:'earned',description:'Approved incentive · qualifying receipts ₹'+money(item.incentiveBaseAmount==null?item.eligibleAmount:item.incentiveBaseAmount).toFixed(2)+(item.carriedQualifiedAmount?' · previously qualified orders ₹'+money(item.carriedQualifiedAmount).toFixed(2):''),reference:item.id,credit:money(item.incentive),debit:0,proofs:[],by:item.approvedBy,at:item.approvedAt,qualificationSources:item.qualificationSources||[]}));
     (state.payments || []).filter(item=>item.active!==false&&item.salesperson===person.name).forEach(item=>entries.push({id:item.id,date:item.date,type:'payment',description:'Incentive payment from '+item.account,reference:item.reference||item.id,credit:0,debit:money(item.amount),proofs:item.proofs||[],by:item.createdBy,at:item.createdAt,note:item.note||''}));
+    (state.exclusionAdjustments||[]).filter(item=>item.salesperson===person.name).forEach(item=>entries.push({id:item.id,date:item.date,type:'exclusion_adjustment',description:item.reapproval?'Adjustment superseded by day reapproval':item.orderNumber+(item.excluded?' excluded':' restored')+' · recalculated '+item.qualifyingDate,reference:item.id,credit:money(item.amount),debit:0,proofs:[],by:item.by,at:item.at,note:item.reason,qualifyingDate:item.qualifyingDate}));
     entries.sort((a,b)=>a.date.localeCompare(b.date)||String(a.at||'').localeCompare(String(b.at||''))||a.id.localeCompare(b.id));let balance=0;entries.forEach(entry=>{balance=money(balance+entry.credit-entry.debit);entry.balance=balance;});
     // Preserve any historical entries, but former employees have no current
     // payable and cannot receive a new approval or payment through this book.
-    return {salesperson:person.name,recordOnly:!person.incentiveEligible,earned:money(entries.reduce((n,x)=>n+x.credit,0)),paid:money(entries.reduce((n,x)=>n+x.debit,0)),balance,payableBalance:person.incentiveEligible?balance:0,entries};
+    return {salesperson:person.name,recordOnly:!person.incentiveEligible,earned:money(entries.reduce((n,x)=>n+x.credit,0)),paid:money(entries.reduce((n,x)=>n+x.debit,0)),balance,payableBalance:person.incentiveEligible?Math.max(0,balance):0,overpaidAmount:Math.max(0,-balance),entries};
   });
 }
 
@@ -190,10 +193,11 @@ function buildView(orders,state,filters={}){
   const days=calculated.daily.filter(day=>(!from||day.date>=from)&&(!to||day.date<=to)&&(!salesperson||day.salesperson===salesperson));
   const orderIds=new Set(records.map(row=>row.orderId)),uniqueOrders=calculated.records.filter(row=>orderIds.has(row.orderId)).filter((row,index,list)=>list.findIndex(item=>item.orderId===row.orderId)===index),ledgers=ledgerView(state);
   const periodApprovals=Object.values(state.approvals || {}).filter(item=>incentiveEligible(item.salesperson)&&(!from||item.date>=from)&&(!to||item.date<=to)&&(!salesperson||item.salesperson===salesperson));
+  const periodAdjustment=money((state.exclusionAdjustments||[]).filter(item=>incentiveEligible(item.salesperson)&&(!from||item.qualifyingDate>=from)&&(!to||item.qualifyingDate<=to)&&(!salesperson||item.salesperson===salesperson)).reduce((sum,item)=>sum+money(item.amount),0));
   const periodPayments=(state.payments || []).filter(item=>item.active!==false&&(!from||item.date>=from)&&(!to||item.date<=to)&&(!salesperson||item.salesperson===salesperson));
   return {
     success:true,configuration:{rate:RATE,dailyThreshold:DAILY_THRESHOLD,salespersons:SALESPERSONS.map(person=>person.name),salespersonDetails:SALESPERSONS.map(person=>({name:person.name,incentiveEligible:person.incentiveEligible,recordOnly:!person.incentiveEligible})),payingAccounts:PAYING_ACCOUNTS},filters:{from,to,salesperson,status},records:records.slice().sort((a,b)=>b.receiptDate.localeCompare(a.receiptDate)||b.orderNumber.localeCompare(a.orderNumber,undefined,{numeric:true})),days:days.slice().sort((a,b)=>b.date.localeCompare(a.date)||a.salesperson.localeCompare(b.salesperson)),ledgers,
-    summary:{orders:orderIds.size,totalBilling:money(uniqueOrders.reduce((n,row)=>n+row.billAmount,0)),totalReceived:money(records.reduce((n,row)=>n+row.totalReceived,0)),eligibleReceived:money(records.filter(row=>row.reviewStatus==='ready').reduce((n,row)=>n+row.eligibleAmount,0)),recordOnlyReceipts:money(records.reduce((n,row)=>n+row.recordOnlyAmount,0)),storeCreditExcluded:money(records.reduce((n,row)=>n+row.storeCreditAmount,0)),refundsReturns:money(uniqueOrders.reduce((n,row)=>n+row.refundAmount,0)),incentiveEarned:money(days.reduce((n,day)=>n+day.incentive,0)),approvedIncentive:money(periodApprovals.reduce((n,item)=>n+money(item.incentive),0)),paidInPeriod:money(periodPayments.reduce((n,item)=>n+money(item.amount),0)),outstanding:money(ledgers.reduce((n,ledger)=>n+ledger.payableBalance,0)),needsReview:records.filter(row=>row.reviewStatus==='needs_review').length}
+    summary:{orders:orderIds.size,totalBilling:money(uniqueOrders.reduce((n,row)=>n+row.billAmount,0)),totalReceived:money(records.reduce((n,row)=>n+row.totalReceived,0)),eligibleReceived:money(records.filter(row=>row.reviewStatus==='ready').reduce((n,row)=>n+row.eligibleAmount,0)),recordOnlyReceipts:money(records.reduce((n,row)=>n+row.recordOnlyAmount,0)),storeCreditExcluded:money(records.reduce((n,row)=>n+row.storeCreditAmount,0)),refundsReturns:money(uniqueOrders.reduce((n,row)=>n+row.refundAmount,0)),incentiveEarned:money(days.reduce((n,day)=>n+day.incentive,0)),approvedIncentive:money(periodApprovals.reduce((n,item)=>n+money(item.incentive),0)+periodAdjustment),paidInPeriod:money(periodPayments.reduce((n,item)=>n+money(item.amount),0)),outstanding:money(ledgers.reduce((n,ledger)=>n+ledger.payableBalance,0)),needsReview:records.filter(row=>row.reviewStatus==='needs_review').length}
   };
 }
 
@@ -210,11 +214,25 @@ function createRouter(deps={}){
     const ids=new Set((order.paymentTransactions||[]).map(tx=>String(tx.id))),gatewayModes={};Object.entries(body.gatewayModes||{}).forEach(([id,mode])=>{if(ids.has(String(id))&&['cash','upi_card','store_credit','excluded'].includes(mode))gatewayModes[String(id)]=mode;});
     const before=state.reviews[orderId]||null;state.reviews[orderId]={salespersons,noSalesperson:body.noSalesperson===true,gatewayModes,reason:text(body.reason,500),reviewedAt:new Date().toISOString(),reviewedBy:req.user.username};state.revision++;audit(state,req,'INCENTIVE_ORDER_REVIEWED',{orderId,before,after:state.reviews[orderId]});stateSaver(state);res.json(buildView(orders,state,body.filters||{}));
   });
+  route('post','/api/incentives/exclusions/:orderId/preview',(req,res)=>{
+    res.json(exclusions.preview(ordersLoader(),stateLoader(),String(req.params.orderId),(req.body||{}).excluded,calculate,ledgerView,parseSalespeople));
+  });
+  route('post','/api/incentives/exclusions/:orderId',(req,res)=>{
+    const body=req.body||{},reason=text(body.reason,500);
+    if(!reason){const error=new Error('Enter a reason for excluding or restoring the incentive.');error.status=400;throw error;}
+    const state=JSON.parse(JSON.stringify(stateLoader())),orders=ordersLoader(),plan=exclusions.preview(orders,state,String(req.params.orderId),body.excluded,calculate,ledgerView,parseSalespeople);
+    if(plan.alreadyApplied)return res.json(buildView(orders,state,body.filters||{}));
+    if(body.previewToken!==plan.previewToken){const error=new Error('Orders, approvals or payments changed. Refresh the impact preview before confirming.');error.status=409;throw error;}
+    const before=exclusions.apply(state,plan,reason,req.user.username);
+    state.revision=Number(state.revision||0)+1;state.audit=state.audit||[];
+    audit(state,req,plan.excluded?'INCENTIVE_ORDER_EXCLUDED':'INCENTIVE_ORDER_RESTORED',{orderId:plan.orderId,orderNumber:plan.orderNumber,before,after:state.exclusions[plan.orderId],affectedDays:plan.affectedDays,balances:plan.balances});
+    stateSaver(state);res.json(buildView(orders,state,body.filters||{}));
+  });
   route('post','/api/incentives/approve-day',(req,res)=>{
     const body=req.body||{},date=String(body.date||''),salesperson=String(body.salesperson||'');if(!validDate(date)||!SALESPERSONS.some(person=>person.name===salesperson)){const error=new Error('Choose a valid incentive date and salesperson.');error.status=400;throw error;}
     if(!incentiveEligible(salesperson)){const error=new Error(salesperson+' is a former employee — record only. Incentives cannot be approved.');error.status=409;throw error;}
     const state=stateLoader(),orders=ordersLoader(),calculated=calculate(orders,state),day=calculated.daily.find(item=>item.date===date&&item.salesperson===salesperson);if(calculated.records.some(row=>row.receiptDate===date&&row.reviewStatus==='needs_review')){const error=new Error('Review every uncertain POS order on '+date+' before approving incentives.');error.status=409;throw error;}if(!day||!day.qualifies){const error=new Error(salesperson+' has neither reached ₹'+DAILY_THRESHOLD.toLocaleString('en-IN')+' in eligible receipts on '+date+' nor received a balance for an already-qualified order.');error.status=409;throw error;}if(day.unresolved){const error=new Error('Review uncertain POS orders on the qualifying date(s) '+day.qualificationReviewDates.join(', ')+' before approving this later collection.');error.status=409;throw error;}
-    const id=date+'|'+salesperson,before=state.approvals[id]||null;state.approvals[id]={id,date,salesperson,eligibleAmount:day.eligibleAmount,incentiveBaseAmount:day.incentiveBaseAmount,carriedQualifiedAmount:day.carriedQualifiedAmount,thresholdMet:day.thresholdMet,qualificationSources:day.qualificationSources,incentive:day.incentive,rate:RATE,threshold:DAILY_THRESHOLD,note:text(body.note,500),approvedAt:new Date().toISOString(),approvedBy:req.user.username};state.revision++;audit(state,req,'INCENTIVE_DAY_APPROVED',{id,before,after:state.approvals[id]});stateSaver(state);res.json(buildView(orders,state,body.filters||{}));
+    const id=date+'|'+salesperson,before=state.approvals[id]||null;exclusions.resetForApproval(state,id,req.user.username);state.approvals[id]={id,date,salesperson,eligibleAmount:day.eligibleAmount,incentiveBaseAmount:day.incentiveBaseAmount,carriedQualifiedAmount:day.carriedQualifiedAmount,thresholdMet:day.thresholdMet,qualificationSources:day.qualificationSources,incentive:day.incentive,rate:RATE,threshold:DAILY_THRESHOLD,note:text(body.note,500),approvedAt:new Date().toISOString(),approvedBy:req.user.username};state.revision++;audit(state,req,'INCENTIVE_DAY_APPROVED',{id,before,after:state.approvals[id]});stateSaver(state);res.json(buildView(orders,state,body.filters||{}));
   });
   route('post','/api/incentives/payments',(req,res)=>{
     const state=stateLoader(),body=req.body||{},salesperson=String(body.salesperson||''),amount=money(body.amount),date=String(body.date||''),account=String(body.account||''),proofs=Array.isArray(body.proofs)?body.proofs.map(x=>text(x,500)).filter(Boolean):[];
