@@ -1915,6 +1915,9 @@ function reimbursementClaimantForExpense(expense){
 }
 function vendorPaymentAccountsForReq(req,nature) {
   const company=payingAccountsForReq(req,nature);
+  // Recording an actual SAMAST payment from Sir's 0992 account does not
+  // grant access to the private ledger, payroll or other payment purposes.
+  if(isAdmin(req)&&normalizedNature(nature)==='SAMAST')company.push('ICICI Bank 0992');
   // 7883 is a shared physical bank, not a SANKI-owned account. An admin who
   // already controls it may fund a SANKI vendor bill without changing the
   // expense entity or creating a claimant reimbursement.
@@ -2231,9 +2234,15 @@ function isAdminOwnerContributionTransfer(req,fromNature,toNature,fromAccount,to
 function canLogCreditCardExpense(req){return isAdmin(req)||isPrashant(req);}
 const SHARED_BANK_RECONCILIATION_ACCOUNT='IndusInd Bank 7883';
 function isSharedBankReconciliationAccount(account){return canonicalAccountName(account).toLowerCase()===SHARED_BANK_RECONCILIATION_ACCOUNT.toLowerCase();}
-// A vendor payment keeps its expense entity while the real bank moves. This
-// does not register 7883 as a SANKI account or authorize any new source account.
-function accountVendorPaymentInScope(recordNature,nature,account){return normalizedNature(recordNature)===normalizedNature(nature)||isSharedBankReconciliationAccount(account)&&normalizedNature(recordNature)==='SANKI';}
+// A vendor payment keeps its expense entity while the real bank moves. Gross
+// payments/advances must follow the same physical source as bill allocations.
+// These projection rules do not grant account access or merge statement books.
+function isSamastOwnerVendorPaymentAccount(nature,account){return normalizedNature(nature)==='SAMAST'&&canonicalAccountName(account).toLowerCase()==='icici bank 0992';}
+function accountVendorPaymentInScope(recordNature,nature,account){
+  return normalizedNature(recordNature)===normalizedNature(nature)
+    ||isSharedBankReconciliationAccount(account)&&normalizedNature(recordNature)==='SANKI'
+    ||normalizedNature(nature)==='PERSONAL'&&isSamastOwnerVendorPaymentAccount(recordNature,account);
+}
 // Only finalization writes this evidence. An arbitrary SANKI adjustment must
 // not become a posting to the shared physical account merely by its entity.
 function verifiedSharedVendorCharge(record){const source=record&&record.sharedVendorPaymentSource;return !!(record&&isSharedBankReconciliationAccount(record.account)&&normalizedNature(record.nature)==='SANKI'&&(record.splitBankCharge||record.roundingDifference)&&source&&source.version===1&&source.nature==='SANKI'&&source.draftId===record.reconciliationDraft&&source.rowId===record.bankRowId&&Array.isArray(source.appIds)&&source.appIds.length);}
@@ -3172,8 +3181,11 @@ function recordBatchVendorPayment(req, res) {
   if (requestedTotal>0&&!account) return res.status(400).json({ success:false, error:paymentType==='Credit'?'Select the credit card used.':'Select a paying account assigned to this accounting entity.' });
   if(requestedTotal>0&&!card)paymentType=/cash/i.test(account)?'Cash':'UPI';
   const claimantPayer=vendorAccount&&vendorAccount.claimant||'';
-  const warningNatures=nature==='SANKI'&&isSharedBankReconciliationAccount(account)?NATURES:[nature];
-  const reconIssues = requestedTotal>0?(card||claimantPayer?[]:Array.from(new Map(warningNatures.flatMap(n=>reconciliationIssues(s,n,account)).map(issue=>[issue.code+'|'+issue.reference,issue])).values())):[], overrideReason = String(b.reconciliationOverrideReason || '').trim();
+  const warningNatures=nature==='SANKI'&&isSharedBankReconciliationAccount(account)?NATURES:isSamastOwnerVendorPaymentAccount(nature,account)?['SAMAST','PERSONAL']:[nature];
+  const reconIssues = requestedTotal>0?(card||claimantPayer?[]:Array.from(new Map(warningNatures.flatMap(n=>reconciliationIssues(s,n,account).map(issue=>
+    n==='PERSONAL'&&isSamastOwnerVendorPaymentAccount(nature,account)&&!canManagePersonalAccounting(req)
+      ?{code:issue.code,reference:account,message:'This paying account has a personal-ledger reconciliation warning. Ask the Owner to review it.'}:issue
+  )).map(issue=>[issue.code+'|'+issue.reference,issue])).values())):[], overrideReason = String(b.reconciliationOverrideReason || '').trim();
   if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });
   const paidBy = (req.user&&req.user.username)||'admin';
   const batchPaymentId = 'BPAY-' + Date.now().toString(36).toUpperCase();
@@ -5120,7 +5132,7 @@ async function parseBankStatementUpload(filePath,originalName,password,options={
 }
 function bankRowKey(account,row,occurrence){return crypto.createHash('sha256').update([account,row.date,row.debit,row.credit,reconciliationReference(row.reference),String(row.description||'').toLowerCase().replace(/\s+/g,' ').trim(),row.balance,occurrence].join('|')).digest('hex').slice(0,24);}
 function wasLedgerMovementCarried(s,account,nature,id){const book=(s.bankStatements||{})[bankStatementBookKey(nature,account)]||{};return(book.imports||[]).some(record=>(record.carryForwardMovements||[]).some(x=>x.id===id||(x.sourceIds||[]).includes(id)));}
-function appBankMovements(s,account,nature,options={}){const rows=[],n=normalizedNature(nature),shared=isSharedBankReconciliationAccount(account),inScope=value=>shared?['SAMAST','PERSONAL'].includes(normalizedNature(value)):normalizedNature(value)===n,vendorInScope=value=>inScope(value)||shared&&normalizedNature(value)==='SANKI',grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&x.account===account&&vendorInScope(x.nature)&&x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
+function appBankMovements(s,account,nature,options={}){const rows=[],n=normalizedNature(nature),shared=isSharedBankReconciliationAccount(account),inScope=value=>shared?['SAMAST','PERSONAL'].includes(normalizedNature(value)):normalizedNature(value)===n,vendorInScope=value=>inScope(value)||accountVendorPaymentInScope(value,n,account),grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&x.account===account&&vendorInScope(x.nature)&&x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
   if(n==='SANKI')velocitySettlementBatches(s).forEach(x=>{if(account===DEFAULT_SALES_BANK&&!x.manualTransferId)rows.push({id:x.id,date:x.date,description:'Velocity COD payout · '+x.orderIds.length+' Shopify order(s)',reference:x.reference,credit:x.netAmount,debit:0});if(account===VELOCITY_CLEARING_ACCOUNT){if(!x.manualTransferId)rows.push({id:x.id,date:x.date,description:'Velocity COD payout to Axis Bank 3448',reference:x.reference,credit:0,debit:x.netAmount});if(x.chargeAmount>0)rows.push({id:x.id+'/CHARGES',date:x.date,description:'Velocity COD/remittance charges',reference:x.reference,credit:0,debit:x.chargeAmount,category:'COD COURIER CHARGES'});}});
   if(n==='SANKI'&&(account===VELOCITY_CLEARING_ACCOUNT||account==='Velocity Shipping Wallet'))velocitySettlementBatches(s).filter(x=>x.walletOffset>0).forEach(x=>rows.push({id:x.id+'/WALLET',date:x.date,description:'Velocity wallet recovery · '+x.batchId,reference:x.reference,credit:account==='Velocity Shipping Wallet'?x.walletOffset:0,debit:account===VELOCITY_CLEARING_ACCOUNT?x.walletOffset:0}));
   if(n==='SANKI'&&account===DEFAULT_SALES_BANK)(s.paytmPayoutPostings||[]).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.postedAt,description:'Paytm payout '+x.payoutId,reference:x.utr,credit:num(x.net),debit:0}));
@@ -7201,7 +7213,7 @@ function bankAuthorityBalanceDelta(s,nature,account,asOf){
   if(!Object.keys(s.bankMovementAuthority||{}).length)return 0;
   const advanceReferences=new Set((s.vendorAdvances||[]).map(row=>row.paymentReference).filter(Boolean));
   const raw=appBankMovements(s,account,nature,{raw:true}),excluded=new Set(raw.filter(row=>row.bankTruth&&usesCompanyAdjustedBankTruth(nature,account)).map(row=>row.id));
-  const rows=raw.filter(row=>!excluded.has(row.id)&&(bankAuthorityExpenseMovement(s,row.id)||!row.entity||normalizedNature(row.entity)===normalizedNature(nature))).map(row=>({...row,date:!advanceReferences.has(row.id)&&(/^EX-[^/]+\/(?:PAY|REIM)-|^RB-/.test(row.id))?row.date:row.originalDate||row.date}));
+  const rows=raw.filter(row=>!excluded.has(row.id)&&(bankAuthorityExpenseMovement(s,row.id)||!row.entity||normalizedNature(row.entity)===normalizedNature(nature)||advanceReferences.has(row.id)&&accountVendorPaymentInScope(row.entity,nature,account))).map(row=>({...row,date:!advanceReferences.has(row.id)&&(/^EX-[^/]+\/(?:PAY|REIM)-|^RB-/.test(row.id))?row.date:row.originalDate||row.date}));
   const selected=bankAuthorityScopedStore(s,nature,account,rows),scoped={...selected,bankMovementAuthority:Object.fromEntries(Object.entries(selected.bankMovementAuthority).filter(([,record])=>!excluded.has(record.movementId)))};
   if(!Object.keys(scoped.bankMovementAuthority).length)return 0;
   return bankMovementAuthority.delta(scoped,account,nature,{to:asOf,sourceRows:rows});
