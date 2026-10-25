@@ -35,6 +35,8 @@ function creditBalance(r,c){return c.reversedAt?0:money(c.amount-sum(active(r.al
 function receiptUsage(r,rid){return money(sum(active(r.allocations).filter(x=>x.kind==='receipt'&&x.receiptId===rid))+sum(active(r.credits).filter(x=>x.receiptId===rid))+sum(active(r.deposits).filter(x=>x.receiptId===rid)));}
 function rentalReceipt(r,receipt){
   if(!receipt||receipt.accountingExcluded||receipt.receiptType==='loan_received')return false;
+  // Tenant fees are separate from rent, security and advances.
+  if(['rental_dealer_commission','rental_documentation_fee'].includes(receipt.receiptType)||['dealer_commission','documentation_fee'].includes(receipt.rentalKind)||receipt.rentalFeeId||(Array.isArray(r.fees)?r.fees:[]).some(f=>f.receiptId===receipt.id))return false;
   if(receipt.tenancyId&&!r.tenancies.some(t=>t.id===receipt.tenancyId))return false;
   return receipt.nature==='PERSONAL'||receipt.nature==='SAMAST'&&['rental_income','rental_security'].includes(receipt.receiptType)&&!!receipt.tenancyId;
 }
@@ -85,7 +87,8 @@ function generate(r,today,now){
   }return count;
 }
 function snapshot(s,today=indiaDate()){
-  const r=state(s),month=today.slice(0,7),alerts=[],followups=[];
+  // Fee history is a read-only projection, not a migration or rent allocation.
+  const stored=state(s),r={...stored,fees:(Array.isArray(stored.fees)?stored.fees:[]).map(f=>({...f}))},month=today.slice(0,7),alerts=[],followups=[];
   const invoices=active(r.invoices).map(i=>{
     const left=outstanding(r,i),cash=sum(active(r.allocations).filter(a=>a.invoiceId===i.id&&['receipt','credit'].includes(a.kind))),security=sum(active(r.allocations).filter(a=>a.invoiceId===i.id&&a.kind==='security'));
     const status=left<=0?'Paid':!i.dueDate?'Due date not set':i.dueDate<today?(cash+security>0?'Part-paid · overdue':'Overdue'):cash+security>0?'Part-paid':'Due';
