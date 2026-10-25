@@ -1,5 +1,5 @@
 const test = require('node:test'), assert = require('node:assert/strict'), Jimp = require('jimp');
-const { vision, search, imageHeader } = require('../modules/inventory-visual-search');
+const { vision, search, imageHeader, diagnostics } = require('../modules/inventory-visual-search');
 function response(status, body) { return { status, ok: status >= 200 && status < 300, json: async () => body }; }
 const compatibility = () => response(400, { error: { status: 'INVALID_ARGUMENT', message: 'This model only supports Interactions API.' } });
 const legacy = value => response(200, { candidates: [{ content: { parts: [{ text: JSON.stringify(value) }] } }] });
@@ -8,7 +8,7 @@ let sequence = 0;
 function config(extras = {}) { return { GEMINI_API_KEY: 'test-interactions-key-' + ++sequence, INVENTORY_GEMINI_MODEL: 'gemini-2.5-flash', ...extras }; }
 function body(options) { return JSON.parse(options.body); }
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
-const isInteractions = url => url === 'https://generativelanguage.googleapis.com/v1/interactions';
+const isInteractions = url => url === 'https://generativelanguage.googleapis.com/v1beta/interactions';
 
 test('working generateContent models remain on their valid endpoint without a compatibility retry', async () => {
   let calls = 0;
@@ -209,4 +209,87 @@ test('inventory search uses Interactions across all stages while SKU IDs and ref
   assert.equal(job.status, 'complete'); assert.equal(calls, 4); assert.equal(reads, 2);
   assert.equal(job.matches.length, 1); assert.equal(job.matches[0].product.handle, 'article-39'); assert.equal(job.matches[0].product.variants[0].sku, 'SKU-39');
   assert.equal(job.matches[0].product.warehouseQty, 7); assert.equal(job.matches[0].product.totalQty, 7); assert.equal(job.coverage.unsearched, 38);
+});
+
+test('bare gemini-2.5-flash compatibility uses its documented v1beta endpoint rather than stable-v1 naming', async () => {
+  const urls = [];
+  const result = await vision(['photo'], 'compare', config(), async (url, options) => {
+    urls.push(url);
+    assert.notEqual(url, 'https://generativelanguage.googleapis.com/v1/interactions');
+    if (!isInteractions(url)) return compatibility();
+    assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/interactions');
+    assert.equal(body(options).model, 'gemini-2.5-flash');
+    assert.equal(body(options).store, false); assert.equal(body(options).background, false);
+    return interaction({ matches: [] });
+  });
+  assert.deepEqual(result, { matches: [] }); assert.equal(urls.length, 2);
+});
+
+test('resource-style model config normalizes once for legacy URLs, Interactions input and protocol cache', async () => {
+  const settings = config({ INVENTORY_GEMINI_MODEL: ' models/gemini-2.5-flash ' }), urls = [];
+  const request = async (url, options) => {
+    urls.push(url);
+    if (!isInteractions(url)) {
+      assert.match(url, /\/models\/gemini-2\.5-flash:generateContent$/);
+      assert.doesNotMatch(url, /models%2F|models\/models\//); return compatibility();
+    }
+    assert.equal(body(options).model, 'gemini-2.5-flash');
+    return interaction({ candidates: [] });
+  };
+  assert.deepEqual(await vision(['photo'], 'compare', settings, request), { candidates: [] });
+  assert.deepEqual(await vision(['new-photo'], 'again', { ...settings, INVENTORY_GEMINI_MODEL: 'gemini-2.5-flash' }, request), { candidates: [] });
+  assert.equal(urls.length, 3); assert.equal(isInteractions(urls[2]), true);
+});
+
+test('shared resource-style explicit model is preserved rather than silently replaced after a 404', async () => {
+  const settings = config({ INVENTORY_VISION_MODEL: ' models/gemini-2.5-flash ' }); delete settings.INVENTORY_GEMINI_MODEL;
+  let calls = 0;
+  await assert.rejects(vision(['photo'], 'compare', settings, async (url, options) => {
+    calls++; assert.notEqual(url.endsWith('/models'), true, 'An explicitly selected model must not trigger model discovery');
+    if (!isInteractions(url)) { assert.match(url, /gemini-2\.5-flash:generateContent$/); return compatibility(); }
+    assert.equal(body(options).model, 'gemini-2.5-flash');
+    return response(404, { error: { code: 404, status: 'NOT_FOUND', message: 'Requested model is not exposed on this API version.' } });
+  }), error => {
+    assert.match(error.message, /HTTP 404/); assert.match(error.message, /Request: \/v1beta\/interactions; model gemini-2\.5-flash/);
+    assert.match(error.message, /NOT_FOUND/); assert.match(error.message, /not exposed on this API version/);
+    assert.doesNotMatch(error.message, /unavailable for this key|API key is invalid/); return true;
+  });
+  assert.equal(calls, 2);
+});
+
+test('404 Interactions detail includes safe API/model context and redacts keys/URLs while retaining billing fallback', async () => {
+  const settings = config({ ANTHROPIC_API_KEY: 'private-anthropic-key' }), urls = [];
+  await assert.rejects(vision(['photo'], 'compare', settings, async url => {
+    urls.push(url);
+    if (url.includes('anthropic.com')) return response(400, { error: { message: 'Your credit balance is too low.' } });
+    if (!isInteractions(url)) return compatibility();
+    return response(404, { error: { status: 'NOT_FOUND', message: 'Not found for ' + settings.GEMINI_API_KEY + ' at https://provider.example/trace?key=' + settings.ANTHROPIC_API_KEY + ' Bearer hidden-secret' } });
+  }), error => {
+    assert.match(error.message, /requested model or API endpoint/);
+    assert.match(error.message, /\/v1beta\/interactions; model gemini-2\.5-flash/); assert.match(error.message, /Provider detail: NOT_FOUND: Not found for \[redacted\]/);
+    assert.match(error.message, /Anthropic: quota or billing limit reached/);
+    assert.doesNotMatch(error.message, new RegExp(settings.GEMINI_API_KEY + '|private-anthropic-key|https?:|hidden-secret')); return true;
+  });
+  assert.equal(urls.length, 3);
+});
+
+test('legacy 404 diagnostics identify the actual failed API without claiming a credential failure', async () => {
+  let calls = 0;
+  await assert.rejects(vision(['photo'], 'compare', config(), async () => {
+    calls++; return response(404, { error: { code: 'model_not_found', message: 'Unknown model on generateContent.' } });
+  }), error => {
+    assert.match(error.message, /Request: \/v1beta\/models\/:generateContent; model gemini-2\.5-flash/);
+    assert.match(error.message, /model_not_found: Unknown model/);
+    assert.doesNotMatch(error.message, /Request: \/v1beta\/interactions|for this key/); return true;
+  });
+  assert.equal(calls, 1);
+});
+
+test('model-list diagnostics recognize normalized resource-style config without claiming image inference was verified', async () => {
+  const settings = config({ INVENTORY_GEMINI_MODEL: 'models/gemini-2.5-flash' }), urls = [];
+  const result = await diagnostics(settings, async url => {
+    urls.push(url); return response(200, { models: [{ name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] }] });
+  });
+  assert.equal(result.gemini.model, 'gemini-2.5-flash'); assert.equal(result.gemini.modelListed, true); assert.equal(result.recognitionTested, false);
+  assert.deepEqual(urls, ['https://generativelanguage.googleapis.com/v1beta/models']);
 });
