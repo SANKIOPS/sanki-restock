@@ -87,6 +87,27 @@ test('bank vendor suggestions use the selected expense entity, not the bank or l
   assert.equal(context.vendorPickerNature('beVendor'), 'SAMAST');
 });
 
+test('authorized direct SANKI expenses from 7883 use SANKI vendors without exposing other entity lists', async () => {
+  const { context, nodes, calls } = ui();
+  context.cfg.vendorPaymentAccountsByNature = { SANKI: ['IndusInd Bank 7883'] };
+  context.openBankExpense('bank-1');
+  assert.match(nodes.beNature.innerHTML, /value="SANKI"/);
+  nodes.beNature.value = 'SANKI'; nodes.beNature.fire('change');
+  nodes.beVendorDropdown.fire('click');
+  assert.equal(context.vendorPickerNature('beVendor'), 'SANKI');
+  assert.deepEqual(nodes.beVendorSuggestions.options.map(option => option.dataset.vendor), ['Sanki Supplier']);
+  assert.doesNotMatch(nodes.beVendorSuggestions.innerHTML, /Private Supplier|Samast Supplier|Sanki Legacy Vendor/);
+  nodes.beVendorSuggestions.options[0].fire('click');
+  nodes.beLedger.value = 'SANKI Category'; nodes.beBillPhoto.files = [{}];
+  nodes.beSave.fire('click'); await flush();
+  assert.equal(calls.length, 1); assert.equal(calls[0].body.nature, 'SANKI');
+  assert.equal(calls[0].body.vendor, 'Sanki Supplier'); assert.equal(calls[0].body.ledger, 'SANKI Category');
+  context.cfg.vendorPaymentAccountsByNature.SANKI = [];
+  nodes.beVendorDropdown.fire('click');
+  assert.equal(nodes.beVendorSuggestions.options.length, 0);
+  assert.match(nodes.beVendorSuggestions.innerHTML, /Choose an allowed expense entity/);
+});
+
 test('blank or unauthorized expense entity cannot leak another entity vendor list', () => {
   const { context, nodes } = ui();
   for (const nature of ['', 'SANKI']) {

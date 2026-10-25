@@ -3,12 +3,17 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-bank-expense-entity-'));
+const tempDir = fs.mkdtempSync(path.join(__dirname, '.tmp-bank-expense-entity-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
+process.env.PROCUREMENT_PATH = path.join(tempDir, 'procurement.json');
+process.env.ORDERS_PATH = path.join(tempDir, 'orders.json');
+process.env.SALES_PATH = path.join(tempDir, 'sales.json');
+process.env.TELEGRAM_BOT_TOKEN = '';
 const file = path.join(tempDir, 'expenses.json');
 fs.writeFileSync(file, '{}');
+const rentalSource = require.resolve('../modules/rental-source.json');
+require.cache[rentalSource] = { id: rentalSource, filename: rentalSource, loaded: true, exports: { id: 'SYNTHETIC-BANK-EXPENSE-ENTITY', asOf: '2098-01-01', rows: [] } };
 const { router, appBankMovements } = require('../modules/expenses');
 const draftId = 'BRD-EXPENSE-ENTITY', bankDate = '2098-06-02', amount = 995.27;
 const read = () => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -43,7 +48,9 @@ function seed({ account = 'Axis Bank 3448', nature = 'SANKI', tag } = {}) {
     bankTruthMovements: [], paytmSettlements: [], paytmPayoutPostings: [], reconciliationExpenses: [], salesRefunds: [], expenseRefunds: [],
     receivables: {}, loanRepayments: [], bankStatements: {}, bankDateOverrides: {}, bankReconciliationLinks: {}, bankReconciliationApprovals: {},
     bankAmountAuthorityApplications: {}, bankAmountAuthorityProposals: {}, bankMovementAuthority: {},
-    procurementAccounting: { paymentsByPo: {} }, openingBalances: { [account]: 10000 }, openingBalancesByNature: {}, physicalBankOpeningBalances: {},
+    procurementAccounting: { paymentsByPo: {} }, openingBalances: account === 'IndusInd Bank 7883' ? {} : { [account]: 10000 },
+    openingBalancesByNature: account === 'IndusInd Bank 7883' ? { SAMAST: { [account]: 10000 }, PERSONAL: {} } : {},
+    physicalBankOpeningBalances: account === 'IndusInd Bank 7883' ? { [account]: 10000 } : {},
     openingBalanceDates: { [account]: '2098-01-01' }, auditLog: [], auditSeq: 0 });
   store.bankReconciliationDrafts = { [draftId]: { id: draftId, account, nature,
     transactions: [{ date: bankDate, description: 'UPI new vendor verified expense', reference: 'ENTITY-EXPENSE-TEST', debit: amount, credit: 0, balance: 9004.73 }],
@@ -118,8 +125,7 @@ test('shared 7883 entity choice and new expense save atomically after every cate
   const snapshot = fs.readFileSync(file, 'utf8'); const repeat = await create({ nature: 'PERSONAL' }); assert.notEqual(repeat.status, 200); assert.equal(fs.readFileSync(file, 'utf8'), snapshot);
 });
 
-test('shared 7883 cannot accept SANKI or let an unauthorized Admin override an existing PERSONAL transaction tag', async () => {
-  seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST' }); await denied({ nature: 'SANKI' }, 400);
+test('shared 7883 still prevents an unauthorized Admin overriding an existing PERSONAL transaction tag', async () => {
   seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST', tag: 'PERSONAL' }); await denied({ nature: 'SAMAST' }, 403, { role: 'admin' });
   seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST', tag: 'PERSONAL' }); await denied({}, 403, { role: 'admin' });
   seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST' }); await denied({ nature: 'PERSONAL' }, 403, { role: 'admin' });
@@ -128,6 +134,161 @@ test('shared 7883 cannot accept SANKI or let an unauthorized Admin override an e
   seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST' });
   const authorized = await create({ nature: 'PERSONAL' }, { role: 'admin', permissions: { personalAccounting: true } });
   assert.equal(authorized.status, 200, JSON.stringify(authorized.body)); assert.equal(authorized.body.expense.nature, 'PERSONAL');
+});
+
+test('authorized Owner and assigned Admin create SANKI expenses from shared 7883 with one physical debit and no automatic finalization', async () => {
+  for (const actor of [{ role: 'owner' }, { role: 'admin', username: 'prashant' }]) {
+    const before = seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST', tag: 'SAMAST' });
+    const made = await create({ nature: ' sanki ', amount: 1, date: '2000-01-01', account: 'Counter Cash' }, actor);
+    assert.equal(made.status, 200, JSON.stringify(made.body));
+    const expense = made.body.expense, store = read(), draft = store.bankReconciliationDrafts[draftId];
+    assert.equal(expense.nature, 'SANKI'); assert.equal(expense.date, bankDate);
+    assert.equal(expense.amount, amount); assert.equal(expense.paidAmount, amount);
+    assert.equal(expense.account, 'IndusInd Bank 7883'); assert.equal(expense.payments.length, 1);
+    assert.equal(expense.payments[0].personalFunds, false); assert.equal(expense.reimbursementStatus, 'not_applicable');
+    assert.equal(expense.payments[0].date, bankDate); assert.equal(expense.payments[0].amount, amount);
+    assert.equal(expense.reconciliationSource.bankReference, 'ENTITY-EXPENSE-TEST');
+    assert.deepEqual(draft.transactions, before.bankReconciliationDrafts[draftId].transactions);
+    assert.equal(draft.nature, 'SAMAST', 'the canonical physical reconciliation book is unchanged');
+    assert.equal(draft.resolutions['bank-0'].postingNature, 'SANKI');
+    const row = made.body.rows.find(row => row.id === 'bank-0');
+    assert.equal(row.entityTag.nature, 'SANKI'); assert.equal(row.entityTag.source, 'linked_ledger');
+    assert.equal(row.entityTag.sourceConflict, false); assert.equal(made.body.ownershipUnresolved, 0);
+    assert.equal(made.body.balanceDifference, 0); assert.equal(made.body.pendingPostingNet, 0);
+    const movements = appBankMovements(store, 'IndusInd Bank 7883', 'SAMAST');
+    assert.equal(movements.length, 1); assert.equal(movements[0].id, expense.id + '/PAY-001');
+    assert.equal(movements[0].entity, 'SANKI'); assert.equal(movements[0].debit, amount);
+    assert.equal(Object.keys(store.bankStatements).length, 0); assert.equal(store.transfers.length, 0);
+    assert.equal(store.adjustments.length, 0); assert.equal(store.receipts.length, 0);
+    const snapshot = fs.readFileSync(file, 'utf8'), retry = await create({ nature: 'SANKI' }, actor);
+    assert.equal(retry.status, 400); assert.equal(fs.readFileSync(file, 'utf8'), snapshot);
+  }
+});
+
+test('shared SANKI create-expense permission cannot be inherited by an unassigned Admin, claimant, bookkeeper or private accountant', async () => {
+  for (const actor of [
+    { role: 'admin', username: 'unassigned-admin' },
+    { role: 'admin', username: 'unassigned-admin', permissions: { personalAccounting: true } },
+    { role: 'claimant', username: 'prashant' },
+    { role: 'accounting', username: 'bookkeeper' },
+    { role: 'accounting', username: 'bookkeeper', permissions: { personalAccounting: true } },
+    { role: 'samast_accounting', username: 'samast-bookkeeper', permissions: { personalAccounting: true } }
+  ]) {
+    seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST' });
+    await denied({ nature: 'SANKI' }, 403, actor);
+  }
+});
+
+test('SANKI shared-bank expense preserves required categories, vendor, bill and explanation before any mutation', async () => {
+  for (const invalid of [{ ledger: 'FORGED CATEGORY' }, { ledger: '' }, { billPhoto: '' }, { vendor: '' }, { particulars: '' }, { remark: '' }]) {
+    seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST', tag: 'SAMAST' });
+    await denied({ nature: 'SANKI', ...invalid }, 400, { role: 'admin' });
+  }
+});
+
+test('shared SANKI choice does not permit Admin to reclassify PERSONAL evidence or conflict with linked sources', async () => {
+  seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST', tag: 'PERSONAL' });
+  await denied({ nature: 'SANKI' }, 403, { role: 'admin' });
+  const store = seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST', tag: 'SAMAST' });
+  store.expenses['EX-SOURCE-CONFLICT'] = { id: 'EX-SOURCE-CONFLICT', date: bankDate, nature: 'PERSONAL', vendor: 'Entity test vendor',
+    particulars: 'Existing private payment', ledger: 'FOOD EXPENSE', amount, paidAmount: amount, status: 'paid',
+    payments: [{ id: 'PAY-001', account: 'IndusInd Bank 7883', date: bankDate, amount, bankReference: 'ENTITY-EXPENSE-TEST' }] };
+  write(store); await denied({ nature: 'SANKI' }, 409);
+});
+
+test('pending approval, restored/finalized sources and changed entity-assignment evidence stay locked for SANKI creation', async () => {
+  for (const protect of [
+    store => { store.bankReconciliationApprovals['BRA-LOCK'] = { id: 'BRA-LOCK', draftId, status: 'pending' }; },
+    store => { store.bankReconciliationDrafts[draftId].originalStatementPeriod = { from: bankDate, to: bankDate }; },
+    store => { store.bankReconciliationDrafts[draftId].reconstructedFromFinalized = true; },
+    store => { store.bankStatements['IndusInd Bank 7883'] = { transactions: { final: { ...store.bankReconciliationDrafts[draftId].transactions[0], id: 'BTX-SHARED-FINALIZED', transactionNature: 'SAMAST', entityTag: { nature: 'SAMAST', status: 'finalized', source: 'finalized_bank_record', confidence: 'exact', linkedRecordIds: [] } } }, imports: [] }; },
+    store => { store.bankReconciliationDrafts[draftId].entityAssignments = { 'bank-0': { nature: 'SAMAST', bankSignature: 'outdated-bank-evidence' } }; }
+  ]) {
+    const store = seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST' }); protect(store); write(store);
+    const before = fs.readFileSync(file, 'utf8'), made = await create({ nature: 'SANKI' });
+    assert.ok([400, 409].includes(made.status), JSON.stringify(made.body)); assert.equal(fs.readFileSync(file, 'utf8'), before);
+  }
+});
+
+test('SANKI expense remains source-derived after reload and Owner-approved finalization without a duplicate debit', async () => {
+  seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST' });
+  const made = await create({ nature: 'SANKI' }, { role: 'admin' });
+  assert.equal(made.status, 200, JSON.stringify(made.body));
+  const preview = await invoke('POST', '/api/expenses/bank-statements/reconcile', { role: 'admin', body: { draftId, account: 'IndusInd Bank 7883', nature: 'SAMAST' } });
+  assert.equal(preview.status, 200, JSON.stringify(preview.body));
+  assert.equal(preview.body.rows.find(row => row.id === 'bank-0').entityTag.nature, 'SANKI');
+  assert.equal(preview.body.ownershipUnresolved, 0); assert.equal(preview.body.canFinalize, true);
+  const submitted = await invoke('POST', '/api/expenses/bank-statements/finalize', { role: 'admin', body: { draftId } });
+  assert.equal(submitted.status, 202, JSON.stringify(submitted.body)); assert.equal(submitted.body.approval.status, 'pending');
+  assert.equal(Object.keys(read().bankStatements).length, 0);
+  const locked = fs.readFileSync(file, 'utf8');
+  const withoutApproval = await invoke('POST', '/api/expenses/bank-statements/finalize', { body: { draftId } });
+  assert.equal(withoutApproval.status, 409); assert.equal(fs.readFileSync(file, 'utf8'), locked);
+  const finalized = await invoke('POST', '/api/expenses/bank-statements/finalize', { body: { draftId, approveRequestId: submitted.body.approval.id } });
+  assert.equal(finalized.status, 200, JSON.stringify(finalized.body)); assert.equal(finalized.body.success, true);
+  const after = read(), bankRows = Object.values(after.bankStatements['IndusInd Bank 7883'].transactions);
+  assert.equal(bankRows.length, 1); assert.equal(bankRows[0].entityTag.nature, 'SANKI'); assert.equal(bankRows[0].debit, amount);
+  assert.equal(Object.keys(after.expenses).length, 1); assert.equal(after.expenses[made.body.expense.id].nature, 'SANKI');
+  assert.equal(appBankMovements(after, 'IndusInd Bank 7883', 'SAMAST').filter(row => row.debit > 0).length, 1);
+  assert.deepEqual(Object.keys(after.bankStatements), ['IndusInd Bank 7883']);
+});
+
+test('new direct SANKI expense support does not permit general SANKI transaction tags or synthetic adjustments', async () => {
+  seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST' });
+  const before = fs.readFileSync(file, 'utf8');
+  const tagged = await invoke('POST', '/api/expenses/bank-statements/retag', { body: { draftId, rowId: 'bank-0', nature: 'SANKI', reason: 'Not a direct expense workflow' } });
+  assert.equal(tagged.status, 400); assert.equal(fs.readFileSync(file, 'utf8'), before);
+  const synthetic = await invoke('POST', '/api/expenses/bank-statements/resolve', { body: { draftId, rowId: 'bank-0', action: 'create_adjustment', nature: 'SANKI', category: 'FOOD EXPENSE', reason: 'Do not expand generic shared bank SANKI postings' } });
+  assert.notEqual(synthetic.status, 200); assert.equal(fs.readFileSync(file, 'utf8'), before);
+});
+
+test('the same physical expense cannot be created again through a second saved preview', async () => {
+  const original = seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST' });
+  const made = await create({ nature: 'SANKI' }); assert.equal(made.status, 200, JSON.stringify(made.body));
+  const store = read(), secondId = 'BRD-SAME-PHYSICAL-EXPENSE';
+  store.bankReconciliationDrafts[secondId] = { ...clone(original.bankReconciliationDrafts[draftId]), id: secondId };
+  write(store); const result = await denied({ draftId: secondId, nature: 'SANKI' }, 409);
+  assert.match(result.body.error, /saved decision|existing.*source/i);
+  assert.equal(Object.keys(read().expenses).length, 1);
+});
+
+test('a duplicate physical row inside one draft cannot create a second expense', async () => {
+  const store = seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST' });
+  store.bankReconciliationDrafts[draftId].transactions.push(clone(store.bankReconciliationDrafts[draftId].transactions[0]));
+  write(store); const made = await create({ nature: 'SANKI' }); assert.equal(made.status, 200, JSON.stringify(made.body));
+  const duplicate = await denied({ rowId: 'bank-1', nature: 'SANKI' }, 409);
+  assert.match(duplicate.body.error, /saved decision|existing.*source/i);
+  assert.equal(Object.keys(read().expenses).length, 1);
+});
+
+test('an unclaimed open preview alone never blocks the first valid SANKI expense', async () => {
+  const store = seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST' }), secondId = 'BRD-UNCLAIMED-EXPENSE';
+  store.bankReconciliationDrafts[secondId] = { ...clone(store.bankReconciliationDrafts[draftId]), id: secondId };
+  write(store); const made = await create({ nature: 'SANKI' });
+  assert.equal(made.status, 200, JSON.stringify(made.body)); assert.equal(Object.keys(read().expenses).length, 1);
+  assert.deepEqual(read().bankReconciliationDrafts[secondId].resolutions, {});
+});
+
+test('matching exclusions cannot conceal an already recorded PERSONAL payment with the exact bank reference', async () => {
+  const store = seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST' });
+  store.bankReconciliationDrafts[draftId].matchingExclusions = { 'bank-0': { reason: 'Previously unmatched suggestion' } };
+  store.expenses['EX-PRIVATE-ALREADY-PAID'] = { id: 'EX-PRIVATE-ALREADY-PAID', date: bankDate, nature: 'PERSONAL',
+    vendor: 'Unrelated displayed vendor', particulars: 'Private source must stay private', ledger: 'FOOD EXPENSE', amount,
+    paidAmount: amount, status: 'paid', payments: [{ id: 'PAY-001', account: 'IndusInd Bank 7883', date: bankDate, amount, bankReference: 'ENTITY-EXPENSE-TEST' }] };
+  write(store); const duplicate = await denied({ nature: 'SANKI' }, 409);
+  assert.match(duplicate.body.error, /existing ledger movement.*confirmed reference/i);
+});
+
+test('two genuinely distinct same-date same-amount bank payments remain separately creatable', async () => {
+  const store = seed({ account: 'IndusInd Bank 7883', nature: 'SAMAST' }), draft = store.bankReconciliationDrafts[draftId];
+  draft.transactions.push({ ...clone(draft.transactions[0]), reference: 'ENTITY-EXPENSE-DISTINCT', balance: 8009.46 });
+  Object.assign(draft.summary, { totalDebits: 1990.54, closingBalance: 8009.46 });
+  write(store);
+  const first = await create({ nature: 'SANKI' }); assert.equal(first.status, 200, JSON.stringify(first.body));
+  const second = await create({ rowId: 'bank-1', nature: 'SANKI' }); assert.equal(second.status, 200, JSON.stringify(second.body));
+  assert.notEqual(first.body.expense.id, second.body.expense.id); assert.equal(second.body.balanceDifference, 0);
+  const after = read(); assert.equal(Object.keys(after.expenses).length, 2);
+  assert.equal(appBankMovements(after, 'IndusInd Bank 7883', 'SAMAST').filter(row => row.debit > 0).length, 2);
 });
 
 test('authorized private bookkeeper retains an existing matching shared entity tag without a retag audit', async () => {

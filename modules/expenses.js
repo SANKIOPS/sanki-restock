@@ -5373,7 +5373,7 @@ function reconciliationTransactionOwnership(draft,row,movements){
 function reconciliationPostingNature(draft,rowId,row){
   const resolution=draft&&draft.resolutions&&draft.resolutions[rowId],manual=draft&&draft.transactionOwnership&&draft.transactionOwnership[rowId],nature=reconciliationOwnershipNature(manual&&manual.nature)||reconciliationOwnershipNature(resolution&&resolution.postingNature)||reconciliationOwnershipNature(row&&row.entityTag&&row.entityTag.nature);
   if(nature)return nature;
-  const tag=row&&row.entityTag,linkedActions=['accept_match','link_existing','link_multiple_existing','link_multiple_bank_entries','link_with_rounding','vendor_advance_split','split_allocation','opening_vendor_payable_split','exclude'];
+  const tag=row&&row.entityTag,linkedActions=['accept_match','link_existing','link_multiple_existing','link_multiple_bank_entries','link_with_rounding','vendor_advance_split','split_allocation','opening_vendor_payable_split','create_expense','exclude'];
   const linkedSanki=tag&&tag.nature==='SANKI'&&tag.source==='linked_ledger'&&!tag.sourceConflict&&Array.isArray(tag.linkedRecordIds)&&tag.linkedRecordIds.length;
   const savedSanki=resolution&&resolution.postingNature==='SANKI'&&linkedActions.includes(resolution.action)&&(resolution.appId||Array.isArray(resolution.appIds)&&resolution.appIds.length);
   return isSharedBankReconciliationAccount(draft&&draft.account)?(linkedSanki||savedSanki?'SANKI':''):normalizedNature(draft&&draft.nature);
@@ -6773,18 +6773,49 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   if(b.action==='create_internal_transfer')Object.assign(draft.resolutions[b.rowId],{otherNature:b.otherNature,classification:b.classification,...(ownAccountSelection?{ownAccountSelection}:{}),...(ownAccountTransfer?{ownAccountTransfer}:{}),...(claimantTransferSelection?{claimantTransferSelection}:{})});
   applyReviewedBankDates(s,draft);saveStore(s);res.json(draftReconciliation(s,draft));
 });
+function bankExpenseCreationConflict(s,draft,row){
+  if(!row||!row.bank)return '';
+  const bank=row.bank,sameBank=other=>!!other&&(reconciliationBankStrongSignature(other)===reconciliationBankStrongSignature(bank)||reconciliationReference(bank.reference).length>=5&&reconciliationReference(other.reference)===reconciliationReference(bank.reference)&&String(other.date||'')===String(bank.date||'')&&Math.round(num(other.debit)*100)===Math.round(num(bank.debit)*100)&&Math.round(num(other.credit)*100)===Math.round(num(bank.credit)*100));
+  // A second open preview is harmless; a saved decision for the same physical
+  // bank evidence is not. Include same-draft duplicate rows, not only other
+  // drafts, and do not infer identity from equal date/amount alone.
+  for(const other of Object.values(s.bankReconciliationDrafts||{})){
+    if(canonicalAccountName(other.account)!==canonicalAccountName(draft.account)||bankStatementBookKey(other.nature,other.account)!==bankStatementBookKey(draft.nature,draft.account))continue;
+    for(const [rowId,resolution]of Object.entries(other.resolutions||{})){
+      if(!resolution||other.id===draft.id&&rowId===row.id)continue;
+      const index=String(rowId).match(/^bank-(\d+)$/),claimed=index&&(other.transactions||[])[Number(index[1])];
+      if(sameBank(claimed))return 'This bank transaction already has a saved decision in '+other.id+' ('+rowId+'). Review or link its existing source instead of creating another expense.';
+    }
+  }
+  // An unmatched/excluded suggestion is not permission to duplicate a payment
+  // with the same confirmed bank reference, including a different entity.
+  const reference=reconciliationReference(bank.reference);
+  if(reference.length>=5&&appBankMovements(s,draft.account,draft.nature).some(movement=>String(movement.date||'')===String(bank.date||'')&&reconciliationReference(movement.reference)===reference&&Math.round(num(movement.debit)*100)===Math.round(num(bank.debit)*100)&&Math.round(num(movement.credit)*100)===Math.round(num(bank.credit)*100)))return 'An existing ledger movement has this bank date, amount and confirmed reference. Review or link that source instead of creating another expense.';
+  return '';
+}
 router.post('/api/expenses/bank-statements/create-expense',(req,res)=>{
   const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];
   if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});
   if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot create an expense for this reconciliation.'});
+  if(draft.originalStatementPeriod||draft.reconstructedFromFinalized||Object.values(s.bankReconciliationApprovals||{}).some(value=>value&&value.draftId===draft.id&&value.status==='pending'))return res.status(409).json({success:false,error:'This reconciliation is locked or awaiting Owner approval. Review or withdraw that request before creating an expense.'});
   const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId),bank=row&&row.bank,ledger=String(b.ledger||'').trim(),vendor=String(b.vendor||'').trim(),particulars=String(b.particulars||'').trim(),billPhoto=String(b.billPhoto||'').trim(),remark=String(b.remark||'').trim(),hasRequestedNature=Object.prototype.hasOwnProperty.call(b,'nature'),requestedNature=hasRequestedNature?String(b.nature==null?'':b.nature).trim().toUpperCase():'',assignedExpense=reconciliationEntityAssignment.assignment(draft,b.rowId),postingNature=hasRequestedNature?requestedNature:assignedExpense?assignedExpense.nature:reconciliationPostingNature(draft,b.rowId,row),shared=isSharedBankReconciliationAccount(draft.account);
   if(row&&row.reversalReviewRequired)return res.status(409).json({success:false,error:'This debit belongs to bank reversal evidence. Review its exact reversal pair instead of creating an expense.'});
   if(reconciliationEntityAssignment.stale(draft,b.rowId))return res.status(409).json({success:false,error:'This transaction changed after its bulk entity assignment. Review the original bank evidence before creating an expense.'});
+  if(row&&row.ownershipCandidateSuppressed)return res.status(409).json({success:false,error:'An existing ledger payment has different entity evidence for this bank transaction. Review or link that payment before creating another expense.'});
   if(!row||row.status!=='missing_in_app'||!bank||!(num(bank.debit)>0))return res.status(400).json({success:false,error:'Choose an outgoing bank transaction that is missing in the app.'});
   if((draft.resolutions||{})[b.rowId]||Object.values(s.expenses||{}).some(e=>e.reconciliationSource&&e.reconciliationSource.draftId===draft.id&&e.reconciliationSource.rowId===b.rowId))return res.status(409).json({success:false,error:'This bank transaction has already been used to create an expense.'});
-  if(hasRequestedNature&&(typeof b.nature!=='string'||!NATURES.includes(requestedNature)||shared&&!['SAMAST','PERSONAL'].includes(requestedNature)))return res.status(400).json({success:false,error:shared?'Choose SAMAST or PERSONAL for this shared bank expense.':'Choose a valid expense entity.'});
-  if(!postingNature)return res.status(409).json({success:false,error:'Tag this 7883 bank transaction as SAMAST or PERSONAL before creating the expense.'});
+  if(row.ledgerClaimedElsewhere||(row.reconciliationConflicts||[]).length)return res.status(409).json({success:false,error:'This bank transaction has an existing ledger claim or reconciliation conflict. Review its source before creating an expense.'});
+  const creationConflict=bankExpenseCreationConflict(s,draft,row);if(creationConflict)return res.status(409).json({success:false,error:creationConflict});
+  if(hasRequestedNature&&(typeof b.nature!=='string'||!NATURES.includes(requestedNature)))return res.status(400).json({success:false,error:'Choose a valid expense entity.'});
+  if(!postingNature)return res.status(409).json({success:false,error:'Choose the expense entity before creating this shared-bank expense.'});
   if(!approvalNatures(req).includes(postingNature)||postingNature==='PERSONAL'&&!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'You cannot create expenses for the selected accounting entity.'});
+  // This is the same scoped permission as paying a SANKI vendor bill from
+  // shared 7883. It does not make 7883 a SANKI-owned account or authorize
+  // generic SANKI ownership tags, transfers, receipts or balance adjustments.
+  if(shared&&postingNature==='SANKI'){
+    const paying=allowedVendorPaymentAccount(req,'SANKI',draft.account);
+    if(!isAdmin(req)||!accountVisibleToReq(req,draft.account)||!paying||paying.claimant||paying.name!==canonicalAccountName(draft.account)||!isSharedBankReconciliationAccount(paying.name))return res.status(403).json({success:false,error:'You cannot fund a SANKI expense from this shared bank account.'});
+  }
   if(hasRequestedNature&&!canManagePersonalAccounting(req)&&(assignedExpense&&assignedExpense.nature==='PERSONAL'||reconciliationPostingNature(draft,b.rowId,row)==='PERSONAL'||row.entityTag&&(row.entityTag.nature==='PERSONAL'||row.entityTag.sourceNature==='PERSONAL')))return res.status(403).json({success:false,error:'The Owner must review this PERSONAL transaction before its expense entity can be changed.'});
   const retainedSharedTag=shared&&row.entityTag&&row.entityTag.nature===postingNature&&!row.entityTag.sourceConflict&&reconciliationPostingNature(draft,b.rowId,row)===postingNature,changeSharedTag=shared&&hasRequestedNature&&!retainedSharedTag;
   if(changeSharedTag&&!isAdmin(req))return res.status(403).json({success:false,error:'Only the Owner or an Admin can choose the transaction entity for this shared-bank expense.'});
