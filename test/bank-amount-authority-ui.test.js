@@ -126,6 +126,115 @@ test('a different manually selected candidate cannot inherit a known Axis fee by
   assert.equal(ui.confirms.length, 0);
 });
 
+function separateAxisRows(fee, side, options = {}) {
+  const principal = 10490, gross = Number((principal + fee).toFixed(2));
+  const bank = { id: 'bank-6', status: 'missing_in_app', bank: { date: '2099-10-21', debit: gross, description: 'Axis IMPS transfer' } };
+  const app = { id: 'app-6', status: 'missing_in_bank', app: { id: 'TR-00186', date: '2099-10-21', debit: principal, description: 'Transfer to IndusInd Bank 8181' } };
+  const split = { bankRowId: bank.id, appId: app.app.id, principalAmount: principal, chargeAmount: fee, chargeCategory: 'BANK CHARGES', grossAmount: gross };
+  const ui = harness(bank, { ...options, preview: { success: true, bankAmountAuthority: null, axisTransferChargeSplit: options.split || split } });
+  ui.context.bankReconView.rows.push(app);
+  ui.context.bankReconForm = { draftId: 'TEST-DRAFT', rowId: side === 'ledger' ? app.id : bank.id, mode: 'link', side };
+  ui.context.el('brAppId').value = app.app.id;
+  ui.context.el('brBankRow').value = bank.id;
+  ui.context.el('brRemark').value = 'Confirmed existing transfer and the separate Axis IMPS fee';
+  ui.run(line('function submitBankReconForm()'));
+  return { ...ui, bank, app, split };
+}
+
+test('separate bank and ledger rows offer recognized ₹5.90 and ₹2.95 fee splits without rewriting the principal', async () => {
+  for (const fee of [5.90, 2.95]) for (const side of ['bank', 'ledger']) {
+    const ui = separateAxisRows(fee, side);
+    ui.context.submitBankReconForm(); await flush();
+    assert.equal(ui.calls.length, 2, 'only a preview and a staged split decision');
+    assert.equal(ui.calls[0].url, '/api/expenses/bank-statements/amount-authority-preview');
+    assert.equal(ui.calls[0].body.rowId, side === 'ledger' ? 'app-6' : 'bank-6');
+    assert.equal(ui.calls[0].body.bankRowId, 'bank-6');
+    assert.equal(ui.calls[0].body.appId, 'TR-00186');
+    assert.match(ui.confirms[0], /TR-00186: principal ₹10490.00 stays unchanged/);
+    assert.ok(ui.confirms[0].includes('Bank Charges ' + money(fee)));
+    assert.match(ui.confirms[0], /posting still requires Owner finalization/);
+    const posted = ui.calls[1].body;
+    assert.equal(posted.action, 'split_allocation');
+    assert.equal(posted.rowId, 'bank-6');
+    assert.equal(posted.appId, 'TR-00186');
+    assert.equal(posted.principalAmount, 10490);
+    assert.equal(posted.chargeAmount, fee);
+    assert.equal(posted.chargeCategory, 'BANK CHARGES');
+    assert.equal(posted.confirmBankAmount, undefined);
+    assert.equal(posted.bankAmountAuthorityFingerprint, undefined);
+    assert.equal(ui.app.app.debit, 10490);
+    assert.equal(ui.bank.bank.debit, Number((10490 + fee).toFixed(2)));
+    assert.ok(ui.calls.every(call => !/finalize|payments|transfers/.test(call.url)));
+  }
+});
+
+test('cancelling a recognized fee split does not save any reconciliation decision', async () => {
+  for (const side of ['bank', 'ledger']) {
+    const ui = separateAxisRows(5.9, side, { confirm: false });
+    ui.context.submitBankReconForm(); await flush();
+    assert.equal(ui.calls.length, 1);
+    assert.equal(ui.rendered.length, 0);
+    assert.equal(ui.nodes.brSave.disabled, false);
+  }
+});
+
+test('malformed or stale recognized fee previews fail closed before confirmation or save', async () => {
+  const changes = [
+    { bankRowId: 'bank-other' }, { appId: 'TR-other' }, { principalAmount: 10495.9 },
+    { grossAmount: 10490 }, { chargeAmount: 2.95 }, { chargeAmount: -5.9 },
+    { principalAmount: '10490' }, { chargeCategory: 'PAYTM CHARGES' },
+    { chargeAmount: 5.901 }, { grossAmount: null }
+  ];
+  for (const change of changes) {
+    const baseline = separateAxisRows(5.9, 'ledger');
+    const ui = separateAxisRows(5.9, 'ledger', { split: { ...baseline.split, ...change } });
+    ui.context.submitBankReconForm(); await flush();
+    assert.equal(ui.calls.length, 1);
+    assert.equal(ui.confirms.length, 0);
+    assert.equal(ui.rendered.length, 0);
+    assert.match(ui.nodes.brMsg.textContent, /preview no longer matches/);
+    assert.equal(ui.nodes.brSave.disabled, false);
+  }
+  for (const change of [value => { value.bank.resolution = { action: 'exclude' }; }, value => { value.bank.bankClaimedElsewhere = true; }, value => { value.bank.status = 'already_reconciled'; }, value => { value.bank.bank.credit = value.bank.bank.debit; }, value => { value.app.app.debit = 10491; }, value => { value.app.app.credit = 10490; }, value => { value.app.ledgerClaimedElsewhere = true; }, value => { value.app.resolution = { action: 'linked_split' }; }, value => { value.app.status = 'matched'; }]) {
+    const ui = separateAxisRows(5.9, 'bank'); change(ui);
+    ui.context.submitBankReconForm(); await flush();
+    assert.equal(ui.calls.length, 1);
+    assert.equal(ui.confirms.length, 0);
+    assert.equal(ui.rendered.length, 0);
+    assert.match(ui.nodes.brMsg.textContent, /preview no longer matches/);
+  }
+});
+
+test('unreviewed debit rows expose the manual bank-charge split directly without changing any records', () => {
+  for (const values of [{ debit: 10495.9 }, { credit: 10495.9 }, { debit: 10495.9, resolved: true }, { debit: 10495.9, claimed: true }]) {
+    const data = row(10495.9, 10490); data.status = 'missing_in_app'; delete data.app;
+    data.bank = { date: '2099-10-21', debit: values.debit, credit: values.credit };
+    if (values.resolved) data.resolution = { action: 'exclude' };
+    if (values.claimed) data.bankClaimedElsewhere = true;
+    const ui = harness(data, { preview: {} }); ui.context.openBankReview = () => {};
+    ui.run(section('    var openBankReviewWithMatches=', '    window.uploadVelocityRemittanceForBank='));
+    ui.context.openBankReview('bank-1');
+    assert.equal(/Link existing entry \+ bank charge/.test(ui.nodes.bankReviewActions.innerHTML), !!values.debit && !values.resolved && !values.claimed);
+    assert.equal(ui.calls.length, 0);
+  }
+});
+
+test('manual split selection fills the existing principal and remainder for explicit review without assuming a fee', () => {
+  const ui = separateAxisRows(5.9, 'bank');
+  ui.context.bankReconForm.mode = 'assign'; ui.context.el('brKind').value = 'split';
+  ui.context.bankAppCandidates = () => [{ id: 'TR-00186', amount: 10490 }, { id: 'TR-OTHER', amount: 10000 }, { id: 'TR-TOO-LARGE', amount: 11000 }];
+  ui.context.renderBankAppCandidates = () => {};
+  ui.run(line('window.toggleBankAppCandidate=function'));
+  for (const [id, principal, charge] of [['TR-00186', 10490, 5.9], ['TR-OTHER', 10000, 495.9], ['TR-TOO-LARGE', 11000, ''], ['UNKNOWN', '', '']]) {
+    ui.context.toggleBankAppCandidate(id);
+    assert.equal(ui.nodes.brPrincipal.value, principal);
+    assert.equal(ui.nodes.brCharge.value, charge);
+    assert.match(ui.nodes.brMsg.textContent, /confirm the difference is a real bank charge before saving/);
+    assert.equal(ui.calls.length, 0);
+    assert.equal(ui.confirms.length, 0);
+  }
+});
+
 test('bank-side one-to-one link supports any selected amount only after reason and explicit server-verified confirmation', async () => {
   const ui = harness(row(800, 500));
   ui.context.bankReconForm = { draftId: 'TEST-DRAFT', rowId: 'bank-1', mode: 'link', side: 'bank' };
