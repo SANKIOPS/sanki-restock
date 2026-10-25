@@ -57,3 +57,16 @@ test('recorded incentive payments debit the chosen account and appear for reconc
   assert.equal(entry.debit, 240);
   assert.match(entry.description, /Shivam/);
 });
+
+test('manual exclusion adjustments never debit, credit or unmatch actual bank payments', () => {
+  const account='Counter Cash',before=invoke('GET','/api/expenses/balances',{nature:'SANKI'}),ledgerBefore=invoke('GET','/api/expenses/account-ledger',{nature:'SANKI',account});
+  const file=path.join(tempDir,'incentives.json'),state=JSON.parse(fs.readFileSync(file,'utf8'));
+  state.exclusions={'123':{excluded:true,reason:'Owner reviewed',by:'owner',at:'2026-10-25T10:00:00Z'}};
+  state.exclusionAdjustments=[{id:'INCX-000001',approvalKey:'2026-10-01|Shivam',salesperson:'Shivam',date:'2026-10-25',qualifyingDate:'2026-10-01',amount:-240,orderId:'123',orderNumber:'#123',excluded:true,reason:'Owner reviewed',by:'owner'}];
+  fs.writeFileSync(file,JSON.stringify(state));
+  const after=invoke('GET','/api/expenses/balances',{nature:'SANKI'}),ledgerAfter=invoke('GET','/api/expenses/account-ledger',{nature:'SANKI',account});
+  assert.deepEqual(after.body.accounts,before.body.accounts);
+  assert.deepEqual(ledgerAfter.body.entries,ledgerBefore.body.entries);
+  assert.equal(ledgerAfter.body.entries.filter(entry=>entry.id==='INCP-00001').length,1);
+  assert.ok(!ledgerAfter.body.entries.some(entry=>entry.id==='INCX-000001'));
+});
