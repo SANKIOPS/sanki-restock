@@ -160,7 +160,10 @@ for (const excluded of [false, true]) test('same verified source-bank UTR blocks
   const result = stage(h.current); assert.equal(result.status, 409, JSON.stringify(result.body));
   assert.match(result.body.error, excluded ? /excluded|restore|review/i : /already exists|existing/i);
   assert.match(result.body.error, new RegExp(excluded ? 'TR-00049' : 'TR-00046'));
-  if (excluded) assert.match(result.body.error, /Previously excluded after Owner review/);
+  if (excluded) {
+    assert.match(result.body.error, /Previously excluded after Owner review/);
+    assert.deepEqual(result.body.excludedTransferClaim, { type: 'excluded_internal_transfer', transferId: 'TR-00049' });
+  } else assert.equal(result.body.excludedTransferClaim, undefined);
   assert.deepEqual(read(), h.before, 'a blocked duplicate must not write any transfer, decision, flag or history');
 });
 

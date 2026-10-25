@@ -10,6 +10,8 @@ const start = html.indexOf('    // Restoring an excluded transfer');
 const end = html.indexOf('    var openGoKwikBankReview=', start);
 assert.ok(start >= 0 && end > start, 'the actual protected restoration UI is present');
 const source = html.slice(start, end);
+assert.match(html, /Restore excluded ['"]\+excluded\.transferId/);
+assert.match(html, /openExcludedTransferRestore\(rowId,excluded\.transferId\)/);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const copy = value => JSON.parse(JSON.stringify(value));
 const selectors = { id: '#excludedRestoreId', reason: '#excludedRestoreReason', confirm: '[data-restore-confirm]', preview: '[data-restore-preview]', save: '[data-restore-save]', close: '[data-restore-close]', summary: '[data-restore-summary]', message: '[data-restore-message]', bank: '[data-restore-bank]' };
