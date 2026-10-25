@@ -264,3 +264,17 @@ test('a lock left by an earlier process instance can recover without replacing r
   assert.equal(store.load().adSets[0].budgetDaily, 250);
   assert.equal(fs.existsSync(`${file}.lock`), false);
 });
+
+test('copy settings stays within campaign, preserves identity and metrics, and records history atomically',async t=>{
+  const {store,write}=await fixture(t);
+  await write('POST','/adsets',{id:'S2',campaignId:'C1',name:'Second',status:'paused',budgetDaily:100});
+  await write('POST','/ads',{id:'A2',adSetId:'S2',name:'Second creative',mediaUrls:['https://example.com/own']});
+  await write('PATCH','/adsets/S1',{destination:'Instagram profile',locations:[{name:'India',radiusKm:null}]});
+  await write('PATCH','/ads/A1',{collection:'Femme',model:'Julia'});
+  const before=store.load();const result=store.copySettings({revision:before.revision,source:'S1',targets:['S2'],groups:['destination','locations','collection','model']},'tester');
+  const after=store.load(),set=after.adSets.find(s=>s.id==='S2'),ad=after.ads.find(a=>a.id==='A2');
+  assert.equal(set.destination,'Instagram profile');assert.equal(set.name,'Second');assert.equal(set.status,'paused');assert.equal(set.budgetDaily,100);assert.equal(ad.model,'Julia');assert.equal(ad.collection,'Femme');assert.deepEqual(ad.mediaUrls,['https://example.com/own']);assert.equal(result.changedRecords,2);assert.ok(after.changes.some(c=>c.reason.startsWith('Copy settings from ad set')));
+  assert.throws(()=>store.copySettings({revision:before.revision,source:'S1',targets:['S2'],groups:['age']},'tester'),/Records changed/);
+  assert.throws(()=>store.copySettings({revision:after.revision,source:'S1',targets:['S1'],groups:['age']},'tester'),/same campaign/);
+  assert.throws(()=>store.copySettings({revision:after.revision,source:'S1',targets:['S2'],groups:['status']},'tester'),/Choose target/);
+});
