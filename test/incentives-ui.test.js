@@ -108,6 +108,7 @@ test('salesperson filters and manual review list all former names with explicit 
   }
   assert.match(html,/<option value="record_only">Former employee — record only<\/option>/);
   assert.match(html,/<script src="\/incentives\.js\?v=20261025-manual-exclusions"><\/script>/,'exclusion UI must load a versioned script instead of a previously cached renderer');
+  assert.match(html,/<link rel="stylesheet" href="\/incentives\.css\?v=20261025-manual-exclusions">/,'exclusion preview must also refresh cached stylesheets');
   assert.match(html,/same order earn 2% without meeting the threshold again, on the date received/);
 });
 
