@@ -17,17 +17,23 @@ function cleanMatches(value, allowed) {
 function cleanCandidates(value, allowed, limit = 36) { return [...new Set((Array.isArray(value) ? value : []).filter(id => Number.isInteger(id) && allowed.has(id)))].slice(0, limit); }
 function providerError(provider, status, body) {
   const message = String(body?.error?.message || '').toLowerCase(), prefix = provider === 'google' ? 'Gemini' : 'Anthropic';
-  if (status === 429 || /quota|credit balance|billing/.test(message)) return prefix + ': quota or billing limit reached. Check the AI account.';
-  if (status === 401 || /api.key.*(invalid|expired|not valid)|invalid.*api.key/.test(message)) return prefix + ': API key is invalid or expired. Update its Railway variable.';
+  const code = String(body?.error?.status || body?.error?.code || '').toLowerCase();
+  const reasons = (Array.isArray(body?.error?.details) ? body.error.details : []).map(detail => String(detail?.reason || '')).join(' ').toLowerCase();
+  if (status === 402 || status === 429 || /quota|credit balance|billing/.test(message)) return prefix + ': quota or billing limit reached. Check the AI account.';
+  if (status === 401 || /api.key.*(invalid|expired|not valid)|invalid.*api.key/.test(message) || /api_key_(invalid|expired)/.test(reasons)) return prefix + ': API key is invalid or expired. Update its Railway variable.';
   if (status === 403) return prefix + ': API key lacks permission or has incompatible restrictions.';
   if (status === 404) return prefix + ': the configured vision model is unavailable for this key.';
-  if (status === 400 || status === 413) return prefix + ': image request was rejected (HTTP ' + status + '). Try a smaller JPEG photo.';
+  if (status === 400 && /(?:location|country|region).*(?:not supported|unavailable|not available)|not supported.*(?:location|country|region)/.test(message)) return prefix + ': the account or server region is not eligible for this API. Check service availability and account setup.';
+  if (status === 400 && /failed_precondition/.test(code)) return prefix + ': an account or project prerequisite is missing (HTTP 400). Check project access, billing and regional availability.';
+  if (status === 413 || status === 400 && /(?:payload|request|image).*(?:too large|size.*exceed|size.*limit|dimensions.*limit)|exceed.*(?:byte|token|size|length)|too many (?:images|tokens)/.test(message)) return prefix + ': the request exceeds an image, payload or token limit (HTTP ' + status + '). Use a smaller photo or check the configured model input limits.';
+  if (status === 400 && !/unknown (?:name|field)|invalid json|generation.?config|response.?mime.?type|response.?format|response.?schema|temperature|max.?output.?tokens/.test(message) && /(?:unsupported|invalid).*(?:image|mime)|(?:unable|could not|cannot|failed) to decode|image.*(?:corrupt|decode)/.test(message)) return prefix + ': the photo format or image data was rejected (HTTP 400). Try a JPEG or PNG photo.';
+  if (status === 400) return prefix + ': request or model configuration was rejected (HTTP 400). Check the configured model and its supported image/JSON parameters.';
   return prefix + ': service request failed (HTTP ' + status + '). Try again shortly.';
 }
 function safeProviderMessage(body, secrets = []) {
   let message = String(body?.error?.message || '');
   for (const secret of secrets.filter(Boolean)) message = message.split(secret).join('[redacted]');
-  return message.replace(/AIza[\w-]+|sk-[\w-]+|Bearer\s+\S+|https?:\/\/\S+/gi, '[redacted]').slice(0, 500);
+  return message.replace(/AIza[\w-]+|sk-[\w-]+|Bearer\s+\S+|https?:\/\/\S+/gi, '[redacted]').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 500);
 }
 function providerModels(config) {
   const shared = config.INVENTORY_VISION_MODEL || '';
@@ -46,8 +52,10 @@ async function vision(parts, prompt, config = process.env, request = fetch, opti
       let response;
       if (useGoogle) {
         const cacheKey = crypto.createHash('sha256').update(google + ':' + models.google).digest('hex'), model = discoveredModels.get(cacheKey) || models.google;
+        // Newer Gemini Flash models do not support custom sampling parameters.
+        // Keep the JSON request compatible with configured or discovered models.
         const requestOptions = { method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json', 'x-goog-api-key': google },
-          body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }].concat(parts.map(data => ({ inlineData: { mimeType: 'image/jpeg', data } }))) }], generationConfig: { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: 4096 } }) };
+          body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }].concat(parts.map(data => ({ inlineData: { mimeType: 'image/jpeg', data } }))) }], generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 } }) };
         response = await request('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', requestOptions);
         if (response.status === 404 && !config.INVENTORY_GEMINI_MODEL && !(config.INVENTORY_VISION_MODEL || '').startsWith('gemini-')) {
           const available = await request('https://generativelanguage.googleapis.com/v1beta/models', { signal: controller.signal, headers: { 'x-goog-api-key': google } });
@@ -68,7 +76,10 @@ async function vision(parts, prompt, config = process.env, request = fetch, opti
       }
       check(options.signal);
       const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(providerError(provider, response.status, body));
+      if (!response.ok) {
+        const detail = response.status === 400 || response.status === 413 ? safeProviderMessage(body, [config.GEMINI_API_KEY, config.GOOGLE_API_KEY, config.ANTHROPIC_API_KEY]).slice(0, 200) : '';
+        throw new Error(providerError(provider, response.status, body) + (detail ? ' Provider detail: ' + detail : ''));
+      }
       const text = useGoogle ? (body.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('') : (body.content || []).map(p => p.text || '').join('');
       const start = text.indexOf('{'), end = text.lastIndexOf('}');
       if (start < 0 || end < start) throw new Error('Vision service returned no readable matches.');
