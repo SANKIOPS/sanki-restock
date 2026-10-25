@@ -4549,6 +4549,14 @@ function privateBankAuthorityLedgerEntry(req,s,account,entry,sourceIds){
   if(!synthesized&&!privateSource)return entry;
   return{id:entry.id,date:entry.date,kind:privateSource?'personal_bank_cash_redacted':'verified_bank_cash',entity:entry.entity||'',description:privateSource?'Owner personal bank movement · private details restricted [PERSONAL]':'Verified bank cash movement · source details restricted',reference:entry.reference||'',debit:num(entry.debit),credit:num(entry.credit),proof:'',proofs:[],note:'',by:'',editable:false,deletable:false,privacyRedacted:true,bankMovementAuthority:marker,...(entry.sourceIds?{sourceIds:entry.sourceIds.slice()}:{}),...(entry.linkedEntryIds?{linkedEntryIds:entry.linkedEntryIds.slice()}:{}),...(entry.originalDate?{originalDate:entry.originalDate}:{}),...(entry.bankSourceMissing?{bankSourceMissing:true}:{})};
 }
+router.get('/api/expenses/bank-reconciliation-evidence', (req, res) => {
+  const nature=normalizedNature(req.query.nature),account=String(req.query.account||'');
+  if(nature!=='PERSONAL'||!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation evidence.'});
+  let s;try{s=readLedgerEditSnapshot().store;}catch(error){return res.status(409).json({success:false,error:'The accounting evidence cannot be read safely. Complete its protected recovery workflow first; no records were changed.'});}
+  if(!canAccessBankReconciliation(req,s,nature,account))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation evidence.'});
+  const out=require('./bank-reconciliation-evidence').snapshot(s,{nature,account,bookKey:bankStatementBookKey(nature,account),movementId:String(req.query.movementId||''),draftId:String(req.query.draftId||''),rowId:String(req.query.rowId||'')});
+  return res.status(out.error?out.status||400:200).json(out.error?{success:false,error:out.error}:out);
+});
 router.get('/api/expenses/account-ledger', (req, res) => {
   const nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim(),prashantSpecial=isPrashant(req)&&nature==='SANKI'&&(account===DEFAULT_COUNTER_CASH||account==='Services');
   if (!isAdmin(req)&&!prashantSpecial) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
@@ -5396,11 +5404,17 @@ function managedPersonalTransferDuplicateConflict(s,candidate,options={}){
   }
   const collisions=(s.transfers||[]).map(transfer=>({transfer,candidate:bankConfirmedPersonalTransferCandidateFromTransfer(s,transfer,candidate.key)})).filter(item=>item.candidate&&item.candidate.key===candidate.key&&!samePersonalTransferProvenance(item.candidate,candidate)),existing=collisions.filter(item=>personalTransferBankEvidenceRelation(candidate,item.candidate)!=='distinct'&&!(item.transfer.accountingExcluded&&personalTransferExcludedDuplicateHasDistinctRepresentative(candidate,item,collisions)));
   if(existing.length)return{type:'existing',existing,candidate};
-  const pending=[];Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>Object.entries(draft.resolutions||{}).forEach(([rowId,resolution])=>{const value=bankConfirmedPersonalTransferCandidateFromResolution(draft,rowId,resolution);if(value&&value.key===candidate.key&&!samePersonalTransferProvenance(value,candidate)&&personalTransferBankEvidenceRelation(candidate,value)!=='distinct')pending.push(value);}));
+  const pending=[];Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>Object.entries(draft.resolutions||{}).forEach(([rowId,resolution])=>{const value=bankConfirmedPersonalTransferCandidateFromResolution(draft,rowId,resolution);if(value&&value.key===candidate.key&&!samePersonalTransferProvenance(value,candidate)&&personalTransferBankEvidenceRelation(candidate,value)!=='distinct')pending.push(Object.assign({},value,{claimAccount:canonicalAccountName(draft.account),claimNature:normalizedNature(draft.nature)}));}));
   if(!pending.length)return null;
   const contenders=[candidate].concat(pending).filter((value,index,all)=>all.findIndex(other=>samePersonalTransferProvenance(value,other))===index).sort(comparePersonalTransferCandidates),winner=contenders[0];
   if(options.allowDeterministicWinner&&samePersonalTransferProvenance(candidate,winner))return null;
   return{type:'pending',pending,winner};
+}
+function managedPersonalTransferPendingClaim(conflict){
+  if(!conflict||conflict.type!=='pending'||!Array.isArray(conflict.pending)||!conflict.pending.length)return null;
+  // The deterministic finalization winner may be the current candidate. A
+  // rejection must identify an actual OTHER saved decision, never that new form.
+  return conflict.pending.find(value=>samePersonalTransferProvenance(value,conflict.winner))||conflict.pending.slice().sort(comparePersonalTransferCandidates)[0];
 }
 function managedPersonalTransferConflictMessage(conflict){
   if(!conflict)return'';
@@ -5411,8 +5425,18 @@ function managedPersonalTransferConflictMessage(conflict){
     if(ids.length===1)return'This PERSONAL bank transfer already exists as '+ids[0]+'. Link existing '+ids[0]+' instead of creating another transfer.';
     return'This PERSONAL bank transfer matches multiple existing bank-confirmed transfers ('+ids.join(', ')+'). Review and link the correct existing transfer; no new transfer was created.';
   }
-  const winner=conflict.winner||conflict.pending[0];
-  return'This PERSONAL bank transfer is already pending in reconciliation '+winner.draftId+' ('+winner.rowId+'). Finish or undo that decision before creating another transfer.';
+  const pending=managedPersonalTransferPendingClaim(conflict);if(!pending)return'This PERSONAL transfer has conflicting saved reconciliation evidence. Review its existing decision before creating another transfer.';
+  const evidence=pending.bankEvidence||{},reference=evidence.reference||'not reliably verified';
+  return'This PERSONAL bank transfer is already pending in reconciliation '+pending.draftId+' ('+pending.rowId+'). A specific saved transfer decision, not merely an open account reconciliation, claims '+(pending.claimAccount||evidence.account||'the bank account')+' · '+pending.date+' · principal ₹'+pending.amount.toFixed(2)+' · bank reference '+reference+'. Review it first; if it is this transfer, finish or undo that saved decision before creating another transfer. Nothing was posted and your current form is unchanged.';
+}
+function managedPersonalTransferConflictResponse(s,req,conflict){
+  const response={success:false,error:managedPersonalTransferConflictMessage(conflict)},pending=managedPersonalTransferPendingClaim(conflict);
+  if(!pending)return response;
+  const draft=(s.bankReconciliationDrafts||{})[pending.draftId];
+  if(!draft||!canAccessBankDraft(req,s,draft)){response.error='A specific saved transfer decision already claims or may represent this PERSONAL bank transaction; an open account alone is not a claim. Ask an authorized reviewer to inspect that decision before creating another transfer. Nothing was posted and your current form is unchanged.';return response;}
+  const evidence=pending.bankEvidence||{},nature=normalizedNature(draft.nature),account=canonicalAccountName(draft.account);
+  response.transferClaim={type:'pending_internal_transfer',draftId:pending.draftId,rowId:pending.rowId,nature,account,date:pending.date,principalAmount:pending.amount,bankReference:evidence.reference||'',bankReferenceVerified:!!evidence.reference,reviewUrl:'/expenses.html?tab=cash&nature='+encodeURIComponent(nature)+'&account='+encodeURIComponent(account)+'&draft='+encodeURIComponent(pending.draftId)};
+  return response;
 }
 function stagedManagedPersonalTransferDuplicateError(s,draft){
   for(const [rowId,resolution] of Object.entries(draft&&draft.resolutions||{})){
@@ -6304,7 +6328,7 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
       if(String(salaryAdvance.account||'').trim().toLowerCase()!==fromAccount.toLowerCase())return res.status(400).json({success:false,error:'The selected salary advance was paid from a different source account.'});
     }
     const personalCandidate=bankConfirmedPersonalTransferCandidate({fromNature,toNature,fromAccount,toAccount,classification,date:bank.date,amount,draftId:draft.id,rowId:b.rowId,stagedAt:now,draftCreatedAt:draft.createdAt,bankAccount:draft.account,bank}),duplicate=managedPersonalTransferDuplicateConflict(s,personalCandidate);
-    if(duplicate)return res.status(409).json({success:false,error:managedPersonalTransferConflictMessage(duplicate)});
+    if(duplicate)return res.status(409).json(managedPersonalTransferConflictResponse(s,req,duplicate));
     const transferConflicts=findTransferCreationConflicts({store:s,draft,rowId:b.rowId,bank,fromAccount,toAccount,fromNature,toNature,principalAmount:amount});
     if(transferConflicts.length)return res.status(409).json({success:false,error:transferCreationConflictMessage(transferConflicts),transferConflicts});
     if(row.status!=='missing_in_app')return res.status(400).json({success:false,error:'Choose an incoming bank transaction that is missing in the app.'});
@@ -6523,7 +6547,7 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
     if(!split)return res.status(400).json({success:false,error:'Amount received plus bank charge must exactly equal the bank transaction. A bank credit cannot include a sender-side charge.'});
     if(otherNature!==reconciledNature&&split.charge>0&&(reconciledNature!=='SANKI'||!isBankLedgerName(draft.account)))return res.status(400).json({success:false,error:'A confirmed bank charge can be recorded only against the reconciled business bank account.'});
     const personalCandidate=bankConfirmedPersonalTransferCandidate({fromNature,toNature,fromAccount,toAccount,classification,date:row.bank.date,amount:split.principal,draftId:draft.id,rowId:b.rowId,stagedAt:new Date().toISOString(),draftCreatedAt:draft.createdAt,bankAccount:draft.account,bank:row.bank}),duplicate=managedPersonalTransferDuplicateConflict(s,personalCandidate);
-    if(duplicate)return res.status(409).json({success:false,error:managedPersonalTransferConflictMessage(duplicate)});
+    if(duplicate)return res.status(409).json(managedPersonalTransferConflictResponse(s,req,duplicate));
     const transferConflicts=findTransferCreationConflicts({store:s,draft,rowId:b.rowId,bank:row.bank,fromAccount,toAccount,fromNature,toNature,principalAmount:split.principal});
     if(transferConflicts.length)return res.status(409).json({success:false,error:transferCreationConflictMessage(transferConflicts),transferConflicts});
     b.principalAmount=split.principal;b.chargeAmount=split.charge;b.otherAccount=otherAccount;b.otherNature=otherNature;b.classification=classification;
