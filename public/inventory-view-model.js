@@ -4,9 +4,14 @@
 })(typeof window === 'undefined' ? this : window, function () {
   'use strict';
   var balanceKeys = ['displayQty','warehouseQty','otherQty','availableQty','cleaningQty','notForSaleQty','otherUnavailableQty','committedQty','totalQty'];
+  // A misnamed Shopify colour option can contain a clothing size. Only reject
+  // complete size labels; custom shades such as "Blue 2" remain valid colours.
+  var sizeToken = '(?:x{0,4}[sl]|m|[2-9]x[sl]|fs|os|o/s|small|medium|large|extra[ -]?(?:small|large)|\\d{1,3}(?:\\.\\d)?)';
+  var sizeRange = sizeToken + '(?:\\s*(?:[-\\u2013\\u2014/]|to)\\s*' + sizeToken + ')*';
+  var sizeOnly = new RegExp('^(?:size\\s*:?\\s*)?(?:' + sizeRange + '|(?:one|free|universal)\\s*size(?:\\s+fits?\\s+all|\\s*\\(\\s*(?:fits?\\s+)?' + sizeRange + '\\s*\\))?)$', 'i');
   function colourLabel(value) {
     var label = String(value == null ? '' : value).trim().replace(/\s+/g, ' ');
-    if (!label || /^(see product|see variant|default title|default|n\/?a|none|unknown|not specified)$/i.test(label)) return '';
+    if (!label || /^(see product|see variant|default title|default|n\/?a|none|unknown|not specified)$/i.test(label) || sizeOnly.test(label)) return '';
     label = label.toLowerCase().replace(/\bgray\b/g, 'grey').replace(/\s*([/&])\s*/g, ' $1 ');
     if (/^(multi[ -]?colou?r(?:ed)?|multicolou?r)$/.test(label)) return 'Multicolour';
     if (/^off[ -]?white$/.test(label)) return 'Off White';
