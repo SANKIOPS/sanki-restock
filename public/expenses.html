@@ -785,7 +785,7 @@
     }
     function vendorPaymentAccountOptions(nature){
       var owners=cfg.claimantAccountOwners||{};
-      return vendorPaymentAccountsForNature(nature).map(function(account){var owner=owners[account],person=owner?owner.charAt(0).toUpperCase()+owner.slice(1):'';return '<option value="'+esc(account)+'">'+esc(account)+(person?' — paid personally by '+esc(person):'')+'</option>';}).join('');
+      return vendorPaymentAccountsForNature(nature).map(function(account){var owner=owners[account],person=owner?owner.charAt(0).toUpperCase()+owner.slice(1):'',sharedSanki=String(nature||'SANKI').trim().toUpperCase()==='SANKI'&&account==='IndusInd Bank 7883';return '<option value="'+esc(account)+'">'+esc(account)+(person?' — paid personally by '+esc(person):sharedSanki?' — shared bank; SANKI expense':'')+'</option>';}).join('');
     }
     function populateVendorPayAccounts(nature,refreshIfEmpty){
       var accounts=vendorPaymentAccountsForNature(nature),select=el('payAcct');
@@ -2456,7 +2456,7 @@
     }
     var bankDraftId='',bankReconView=null,bankDraftOptions=[],bankStatementLoadGeneration=0,bankEntityTagRowId='';
     function bankEntityTaggingActive(){return String(bankReconView&&bankReconView.account||'').replace(/\D/g,'').slice(-4)==='7883';}
-    function bankEntityTagLabel(tag){if(tag&&tag.sourceConflict)return'Conflict — review';var nature=String(tag&&tag.nature||'').toUpperCase();return nature==='SAMAST'?'SAMAST':nature==='PERSONAL'?'PERSONAL':'Needs review';}
+    function bankEntityTagLabel(tag){if(tag&&tag.sourceConflict)return'Conflict — review';var nature=String(tag&&tag.nature||'').toUpperCase();return ['SANKI','SAMAST','PERSONAL'].includes(nature)?nature:'Needs review';}
     function bankEntityTagMeta(tag){
       tag=tag||{};var sourceNames={linked_record:'Linked ledger record',manual:'Manually reviewed',saved_decision:'Saved reconciliation decision',existing_resolution:'Existing reconciliation decision',system:'System suggestion'},parts=[];
       if(tag.source)parts.push('Source: '+(sourceNames[tag.source]||String(tag.source).replaceAll('_',' ')));
@@ -2467,7 +2467,7 @@
     function bankOwnTransferRow(row){var resolution=row&&row.resolution||{};return !!(resolution.ownAccountSelection||resolution.ownAccountTransfer||['create_internal_transfer','create_transfer'].includes(resolution.action)||row&&row.app&&row.app.kind==='transfer');}
     function bankEntityTagMarkup(row){
       if(!bankEntityTaggingActive())return'';
-      var tag=row&&row.entityTag||{},label=bankEntityTagLabel(tag),meta=bankEntityTagMeta(tag),known=label==='SAMAST'||label==='PERSONAL',conflict=!!tag.sourceConflict;
+      var tag=row&&row.entityTag||{},label=bankEntityTagLabel(tag),meta=bankEntityTagMeta(tag),known=['SANKI','SAMAST','PERSONAL'].includes(label),conflict=!!tag.sourceConflict;
       if(!conflict&&bankOwnTransferRow(row))return '<div class="muted" style="margin-top:7px">Account-based transfer · '+esc(bankTransferNature(row)||'Ownership review pending')+'. Expense / receipt entity selection is not required.</div>';
       if(!known&&!conflict)return '<div class="muted" style="margin-top:7px">Choose transaction action. Entity is required for expenses in Results, optional for transfers and incoming receipts. Account access and source checks still apply.</div>';
       return '<div style="margin-top:7px"><span class="tag" aria-label="Transaction belongs to '+esc(label)+'" style="background:'+(conflict?'#fee2e2':known?(label==='SAMAST'?'#dbeafe':'#ede9fe'):'#fef3c7')+';color:'+(conflict?'#991b1b':known?(label==='SAMAST'?'#1e40af':'#5b21b6'):'#92400e')+'">Belongs to: '+esc(label)+'</span>'+(meta?'<div class="muted" style="margin-top:3px;color:'+(conflict?'#b91c1c':'inherit')+'">'+esc(meta)+'</div>':'')+'</div>';
@@ -2842,7 +2842,7 @@
       el('brSave').disabled=true;api('/api/expenses/bank-statements/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({draftId:bankReconForm.draftId,rowId:bankReconForm.rowId,action:'bank_reversal_pair',bankRowIds:bankReconForm.bankRowIds,reason:reason,remark:reason})}).then(finishBankReconForm);
     },true);
     function bankReconRow(rowId){return(bankReconView&&bankReconView.rows||[]).find(function(x){return x.id===rowId;});}
-    function bankRowNature(row){var tagged=String(row&&row.entityTag&&row.entityTag.nature||'').toUpperCase();return ['SAMAST','PERSONAL'].includes(tagged)?tagged:bankNature;}
+    function bankRowNature(row){var tagged=String(row&&row.entityTag&&row.entityTag.nature||'').toUpperCase();return ['SANKI','SAMAST','PERSONAL'].includes(tagged)?tagged:bankNature;}
     function bankReconAmount(row){var b=row&&row.bank||{},a=row&&row.app||{};return Number(b.debit||b.credit||a.debit||a.credit||0);}
     function bankReconNet(row){var b=row&&row.bank||{},a=row&&row.app||{};return Number(b.credit||a.credit||0)-Number(b.debit||a.debit||0);}
     function saveBankReconForm(){if(!bankReconForm)return;['expenseNature','kind','otherAccount','ledger','appId','appSearch','bankRowId','principal','charge','chargeCategory','vendor','preSystemDates','advanceVendor','advanceAmount','advanceExpenses','gross','paytmCharge','hiddenCharge','customerReceiptDate','orders','transfers','receiptAmount','receiptLabel','remark'].forEach(function(k){var node=el({expenseNature:'brExpenseNature',kind:'brKind',otherAccount:'brOtherAccount',ledger:'brLedger',appId:'brAppId',appSearch:'brAppSearch',bankRowId:'brBankRow',principal:'brPrincipal',charge:'brCharge',chargeCategory:'brChargeCategory',vendor:'brVendor',preSystemDates:'brPreSystemDates',advanceVendor:'brAdvanceVendor',advanceAmount:'brAdvanceAmount',advanceExpenses:'brAdvanceExpenses',gross:'brGross',paytmCharge:'brPaytmCharge',hiddenCharge:'brHiddenCharge',customerReceiptDate:'brCustomerReceiptDate',orders:'brOrders',transfers:'brTransfers',receiptAmount:'brReceiptAmount',receiptLabel:'brReceiptLabel',remark:'brRemark'}[k]);if(node)bankReconForm[k]=node.value;});if(bankReconForm.mode==='multi_bank')bankReconForm.bankRowIds=Array.from(el('brBankRow').selectedOptions).map(function(x){return x.value;});sessionStorage.setItem('sankiBankReconForm',JSON.stringify(bankReconForm));}
