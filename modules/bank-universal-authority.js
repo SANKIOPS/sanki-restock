@@ -81,6 +81,10 @@ module.exports = function createUniversal(base) {
     const records = [];
     for (const collection of ['transfers', 'receipts', 'adjustments', 'vendorAdvances', 'salesRefunds', 'loanRepayments', 'bankTruthMovements', 'paytmSettlements', 'paytmPayoutPostings']) for (const record of list(store[collection])) if (ids.has(text(record.id)) || ids.has(text(record.paymentReference))) records.push(record);
     for (const expense of Object.values(store.expenses || {})) for (const payment of [...list(expense.payments), ...list(expense.reimbursementPayments)]) if (ids.has(expense.id + '/' + payment.id) || payment.batchId && ids.has(payment.batchId)) records.push(expense, payment);
+    // Fee records are an exact tenant-linked view of their retained bank row.
+    // The universal fallback must not detach cash from that fee or bypass its
+    // dedicated review/undo guard. Validation rebuilds this check as well.
+    if (movement.rentalFeeId || records.some(record => record.rentalFeeId) || Object.values(store.expenses || {}).some(expense => expense.rentalFeeId && ids.has(text(expense.id)))) fail('Tenant fee payments and receipts must be corrected through their original tenant fee reconciliation review.');
     for (const id of ids) base.assertUnclaimed(scoped, { type: 'bank_movement', record: {} }, id, text(draft.id));
     for (const record of records) base.assertUnclaimed(scoped, { type: 'bank_movement', record: clean(record) }, text(movement.id), text(draft.id));
     if ((store.bankMovementAuthority || {})[cashAuthority.key(draft.account, draft.nature, movement.id)]) fail('This bank movement already has authoritative finalized evidence. Review its existing reconciliation instead of correcting it again.');

@@ -426,7 +426,7 @@
   <dialog id="bankReconDlg" style="max-width:620px"><div class="dlg">
     <h3 id="bankReconDlgTitle">Resolve bank transaction</h3>
     <div id="bankReconDlgSummary" class="sub" style="margin-bottom:12px"></div>
-    <div class="fld" id="brKindWrap"><label>Assign transaction into</label><select id="brKind"><option value="category">Expense / category ledger</option><option value="internal_transfer">Create missing internal transfer</option><option value="multiple">Link multiple existing entries</option><option value="rounding">Link existing entry/entries + rounding</option><option value="vendor_advance">Split: existing payment(s) + vendor advance</option><option value="paytm">Paytm Settlement Clearing</option><option value="balance">Bank account balance entry only</option><option value="split">Split: existing entry + bank charges</option><option value="opening_payable">Split: current expense + pre-system vendor payable</option></select><div class="hint">Use the matching workflow; finalized decisions keep the bank row as evidence and create a full audit trail.</div></div>
+    <div class="fld" id="brKindWrap"><label>Assign transaction into</label><select id="brKind"><option value="category">Expense / category ledger</option><option value="tenant_dealer_commission" hidden disabled>Dealer commission — linked tenant</option><option value="tenant_documentation_fee" hidden disabled>Documentation / Agreement fee — linked tenant</option><option value="internal_transfer">Create missing internal transfer</option><option value="multiple">Link multiple existing entries</option><option value="rounding">Link existing entry/entries + rounding</option><option value="vendor_advance">Split: existing payment(s) + vendor advance</option><option value="paytm">Paytm Settlement Clearing</option><option value="balance">Bank account balance entry only</option><option value="split">Split: existing entry + bank charges</option><option value="opening_payable">Split: current expense + pre-system vendor payable</option></select><div class="hint">Use the matching workflow; finalized decisions keep the bank row as evidence and create a full audit trail.</div></div>
     <div class="fld" id="brExpenseNatureWrap" style="display:none"><label for="brExpenseNature">Expense entity</label><select id="brExpenseNature"></select><div class="hint">Choose the entity here when creating an expense/category entry. No separate row tag is required.</div></div>
     <div class="fld" id="brTransferWrap" style="display:none;margin-top:10px"><label>Other account in this transfer</label><select id="brOtherAccount"></select><div class="hint">For a bank credit this is the source account; for a bank debit this is the destination account. The official bank row is retained as evidence.</div></div>
     <div class="fld" id="brLedgerWrap" style="margin-top:10px"><label>Ledger / expense category</label><input id="brLedger" list="brLedgerList" placeholder="Choose the ledger"><datalist id="brLedgerList"></datalist></div>
@@ -519,13 +519,13 @@
   </div></dialog>
 
   <dialog id="bankRentalDlg"><div class="dlg">
-    <h3>Record rental receipt / security deposit</h3>
+    <h3 id="bankRentalTitle">Record tenant-linked transaction</h3>
     <div id="bankRentalSummary" class="sub" style="margin-bottom:12px"></div>
     <div id="bankRentalEntity" class="hint" style="margin-bottom:12px"></div>
     <div class="grid">
-      <div class="fld full"><label>Rental floor / unit</label><select id="rentalReconTenancy"></select><div class="hint">Pulled directly from the Rental Income register.</div></div>
+      <div class="fld full"><label>Tenant / rental floor — required</label><select id="rentalReconTenancy"></select><div class="hint">Pulled directly from the Rental Income register. This transaction is linked only to the selected tenant.</div></div>
       <div class="fld full"><label>Record this money as</label><select id="rentalReconKind"><option value="rent">Rent received</option><option value="security">Security deposit received</option></select></div>
-      <div class="fld full"><label>Reconciliation remark — required</label><textarea id="rentalReconNote" rows="3" placeholder="Reference or explanation for this rental receipt"></textarea></div>
+      <div class="fld full"><label>Reconciliation remark — required</label><textarea id="rentalReconNote" rows="3" placeholder="Reference or explanation for this tenant-linked transaction"></textarea></div>
     </div>
     <section id="bankRentalOpeningReview" class="card" style="display:none;padding:12px" aria-labelledby="bankRentalOpeningHeading">
       <h4 id="bankRentalOpeningHeading" style="margin:0 0 8px">Review opening security</h4>
@@ -534,7 +534,7 @@
       <div class="row-actions"><button type="button" class="btn ghost" id="bankRentalClearOpening">Remove reviewed opening security</button></div>
       <div id="bankRentalOpeningMsg" class="msg" role="status" aria-live="polite"></div>
     </section>
-    <div class="hint">Rent is applied to that floor's oldest outstanding rent first; any balance becomes tenant advance. Security is held separately and is not treated as rent income. Deposits already included in the rental opening security must not be entered again; earlier deposits need an opening-balance review first.</div>
+    <div class="hint" id="bankRentalTreatment">Rent is applied to that floor's oldest outstanding rent first; any balance becomes tenant advance. Security is held separately and is not treated as rent income. Deposits already included in the rental opening security must not be entered again; earlier deposits need an opening-balance review first.</div>
     <div class="msg" id="bankRentalMsg"></div>
     <div class="row-actions"><button class="btn primary" id="bankRentalSave">Record rental & resolve</button><button class="btn ghost" id="bankRentalCancel">Cancel</button></div>
   </div></dialog>
@@ -785,7 +785,7 @@
     }
     function vendorPaymentAccountOptions(nature){
       var owners=cfg.claimantAccountOwners||{};
-      return vendorPaymentAccountsForNature(nature).map(function(account){var owner=owners[account],person=owner?owner.charAt(0).toUpperCase()+owner.slice(1):'';return '<option value="'+esc(account)+'">'+esc(account)+(person?' — paid personally by '+esc(person):'')+'</option>';}).join('');
+      return vendorPaymentAccountsForNature(nature).map(function(account){var owner=owners[account],person=owner?owner.charAt(0).toUpperCase()+owner.slice(1):'',sharedSanki=String(nature||'SANKI').trim().toUpperCase()==='SANKI'&&account==='IndusInd Bank 7883';return '<option value="'+esc(account)+'">'+esc(account)+(person?' — paid personally by '+esc(person):sharedSanki?' — shared bank; SANKI expense':'')+'</option>';}).join('');
     }
     function populateVendorPayAccounts(nature,refreshIfEmpty){
       var accounts=vendorPaymentAccountsForNature(nature),select=el('payAcct');
@@ -2456,7 +2456,7 @@
     }
     var bankDraftId='',bankReconView=null,bankDraftOptions=[],bankStatementLoadGeneration=0,bankEntityTagRowId='';
     function bankEntityTaggingActive(){return String(bankReconView&&bankReconView.account||'').replace(/\D/g,'').slice(-4)==='7883';}
-    function bankEntityTagLabel(tag){if(tag&&tag.sourceConflict)return'Conflict — review';var nature=String(tag&&tag.nature||'').toUpperCase();return nature==='SAMAST'?'SAMAST':nature==='PERSONAL'?'PERSONAL':'Needs review';}
+    function bankEntityTagLabel(tag){if(tag&&tag.sourceConflict)return'Conflict — review';var nature=String(tag&&tag.nature||'').toUpperCase();return ['SANKI','SAMAST','PERSONAL'].includes(nature)?nature:'Needs review';}
     function bankEntityTagMeta(tag){
       tag=tag||{};var sourceNames={linked_record:'Linked ledger record',manual:'Manually reviewed',saved_decision:'Saved reconciliation decision',existing_resolution:'Existing reconciliation decision',system:'System suggestion'},parts=[];
       if(tag.source)parts.push('Source: '+(sourceNames[tag.source]||String(tag.source).replaceAll('_',' ')));
@@ -2467,7 +2467,7 @@
     function bankOwnTransferRow(row){var resolution=row&&row.resolution||{};return !!(resolution.ownAccountSelection||resolution.ownAccountTransfer||['create_internal_transfer','create_transfer'].includes(resolution.action)||row&&row.app&&row.app.kind==='transfer');}
     function bankEntityTagMarkup(row){
       if(!bankEntityTaggingActive())return'';
-      var tag=row&&row.entityTag||{},label=bankEntityTagLabel(tag),meta=bankEntityTagMeta(tag),known=label==='SAMAST'||label==='PERSONAL',conflict=!!tag.sourceConflict;
+      var tag=row&&row.entityTag||{},label=bankEntityTagLabel(tag),meta=bankEntityTagMeta(tag),known=['SANKI','SAMAST','PERSONAL'].includes(label),conflict=!!tag.sourceConflict;
       if(!conflict&&bankOwnTransferRow(row))return '<div class="muted" style="margin-top:7px">Account-based transfer · '+esc(bankTransferNature(row)||'Ownership review pending')+'. Expense / receipt entity selection is not required.</div>';
       if(!known&&!conflict)return '<div class="muted" style="margin-top:7px">Choose transaction action. Entity is required for expenses in Results, optional for transfers and incoming receipts. Account access and source checks still apply.</div>';
       return '<div style="margin-top:7px"><span class="tag" aria-label="Transaction belongs to '+esc(label)+'" style="background:'+(conflict?'#fee2e2':known?(label==='SAMAST'?'#dbeafe':'#ede9fe'):'#fef3c7')+';color:'+(conflict?'#991b1b':known?(label==='SAMAST'?'#1e40af':'#5b21b6'):'#92400e')+'">Belongs to: '+esc(label)+'</span>'+(meta?'<div class="muted" style="margin-top:3px;color:'+(conflict?'#b91c1c':'inherit')+'">'+esc(meta)+'</div>':'')+'</div>';
@@ -2842,7 +2842,7 @@
       el('brSave').disabled=true;api('/api/expenses/bank-statements/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({draftId:bankReconForm.draftId,rowId:bankReconForm.rowId,action:'bank_reversal_pair',bankRowIds:bankReconForm.bankRowIds,reason:reason,remark:reason})}).then(finishBankReconForm);
     },true);
     function bankReconRow(rowId){return(bankReconView&&bankReconView.rows||[]).find(function(x){return x.id===rowId;});}
-    function bankRowNature(row){var tagged=String(row&&row.entityTag&&row.entityTag.nature||'').toUpperCase();return ['SAMAST','PERSONAL'].includes(tagged)?tagged:bankNature;}
+    function bankRowNature(row){var tagged=String(row&&row.entityTag&&row.entityTag.nature||'').toUpperCase();return ['SANKI','SAMAST','PERSONAL'].includes(tagged)?tagged:bankNature;}
     function bankReconAmount(row){var b=row&&row.bank||{},a=row&&row.app||{};return Number(b.debit||b.credit||a.debit||a.credit||0);}
     function bankReconNet(row){var b=row&&row.bank||{},a=row&&row.app||{};return Number(b.credit||a.credit||0)-Number(b.debit||a.debit||0);}
     function saveBankReconForm(){if(!bankReconForm)return;['expenseNature','kind','otherAccount','ledger','appId','appSearch','bankRowId','principal','charge','chargeCategory','vendor','preSystemDates','advanceVendor','advanceAmount','advanceExpenses','gross','paytmCharge','hiddenCharge','customerReceiptDate','orders','transfers','receiptAmount','receiptLabel','remark'].forEach(function(k){var node=el({expenseNature:'brExpenseNature',kind:'brKind',otherAccount:'brOtherAccount',ledger:'brLedger',appId:'brAppId',appSearch:'brAppSearch',bankRowId:'brBankRow',principal:'brPrincipal',charge:'brCharge',chargeCategory:'brChargeCategory',vendor:'brVendor',preSystemDates:'brPreSystemDates',advanceVendor:'brAdvanceVendor',advanceAmount:'brAdvanceAmount',advanceExpenses:'brAdvanceExpenses',gross:'brGross',paytmCharge:'brPaytmCharge',hiddenCharge:'brHiddenCharge',customerReceiptDate:'brCustomerReceiptDate',orders:'brOrders',transfers:'brTransfers',receiptAmount:'brReceiptAmount',receiptLabel:'brReceiptLabel',remark:'brRemark'}[k]);if(node)bankReconForm[k]=node.value;});if(bankReconForm.mode==='multi_bank')bankReconForm.bankRowIds=Array.from(el('brBankRow').selectedOptions).map(function(x){return x.value;});sessionStorage.setItem('sankiBankReconForm',JSON.stringify(bankReconForm));}
@@ -2903,26 +2903,46 @@
       }).catch(function(error){button.disabled=false;el('bankEntityTagMsg').className='msg err';el('bankEntityTagMsg').textContent=error&&error.message||'Could not save the entity tag.';});
     });
     var bankRentalRowId='',bankRentalLoadGeneration=0,bankRentalSnapshot=null,bankRentalOpeningBusy=false;
-    function bankRentalAvailable(row){
-      var amount=Number(row&&row.bank&&row.bank.credit);
-      return !!(cfg.canManageRentals&&row&&row.status==='missing_in_app'&&Number.isFinite(amount)&&amount>0&&!Number(row.bank.debit||0)&&!row.reversalReviewRequired&&!row.reversalPairCandidate&&!row.bankReversalPair&&(bankNature==='PERSONAL'||bankEntityTaggingActive()));
+    function bankRentalDirection(row){
+      var bank=row&&row.bank||{},debit=Number(bank.debit||0),credit=Number(bank.credit||0);
+      if(!Number.isFinite(debit)||!Number.isFinite(credit)||debit<0||credit<0)return '';
+      return debit>0&&credit===0?'debit':credit>0&&debit===0?'credit':'';
     }
+    function bankTenantFeeKind(kind){return kind==='dealer_commission'||kind==='documentation_fee';}
+    function bankTenantFeePermission(row){
+      var tagged=String(row&&row.entityTag&&row.entityTag.nature||'').toUpperCase(),natures=(cfg.approvalNatures||[]).filter(function(nature){return nature==='SAMAST'||nature==='PERSONAL'&&cfg.canManagePersonalAccounting;}),entityAllowed=['SAMAST','PERSONAL'].includes(tagged)?natures.includes(tagged):natures.length>0;
+      return entityAllowed&&(bankRentalDirection(row)!=='debit'||!!cfg.canApprove);
+    }
+    function bankRentalAvailable(row,kind){
+      var direction=bankRentalDirection(row),fee=bankTenantFeeKind(kind);
+      return !!(cfg.canManageRentals&&row&&row.status==='missing_in_app'&&!row.resolution&&!row.bankClaimedElsewhere&&direction&&!row.reversalReviewRequired&&!row.reversalPairCandidate&&!row.bankReversalPair&&(fee?bankEntityTaggingActive()&&['SAMAST','PERSONAL'].includes(bankNature)&&bankTenantFeePermission(row):direction==='credit'&&(bankNature==='PERSONAL'||bankEntityTaggingActive())));
+    }
+    function bankRentalKindLabel(kind,direction){
+      var paid=direction==='debit'||direction==='payment';
+      if(kind==='dealer_commission')return 'Dealer commission '+(paid?'paid':'received');
+      if(kind==='documentation_fee')return 'Documentation / Agreement fee '+(paid?'paid':'received');
+      return kind==='security'?'Security deposit received':'Rent received';
+    }
+    function bankRentalKinds(row){return ['rent','security','dealer_commission','documentation_fee'].filter(function(kind){return bankRentalAvailable(row,kind);});}
     function bankRentalActions(row){
-      if(!bankRentalAvailable(row))return '';
-      return '<button class="btn mini primary" onclick="closeBankReview();openBankRental(\''+esc(row.id)+'\',\'rent\')">Record rent</button> <button class="btn mini primary" onclick="closeBankReview();openBankRental(\''+esc(row.id)+'\',\'security\')">Record security deposit</button>';
+      return bankRentalKinds(row).map(function(kind){var label=kind==='rent'?'Record rent':kind==='security'?'Record security deposit':'Record '+bankRentalKindLabel(kind,bankRentalDirection(row));return '<button class="btn mini primary" onclick="closeBankReview();openBankRental(\''+esc(row.id)+'\',\''+kind+'\')">'+label+'</button>';}).join(' ');
     }
-    function bankRentalValidation(row){
-      if(!bankRentalAvailable(row))return 'Choose an unmatched incoming transaction that is eligible for rent or security.';
+    function bankRentalValidation(row,kind){
+      kind=kind||el('rentalReconKind').value||'rent';
+      if(!['rent','security','dealer_commission','documentation_fee'].includes(kind)||!bankRentalAvailable(row,kind))return bankTenantFeeKind(kind)?'Choose an unmatched IndusInd Bank 7883 transaction eligible for a tenant-linked fee.':'Choose an unmatched incoming transaction that is eligible for rent or security.';
       if(bankEntityTaggingActive()){
         var tag=row.entityTag||{};
-        if(tag.sourceConflict)return 'Resolve the conflicting entity tag in Review / Resolve before recording this receipt.';
-        if(!['SAMAST','PERSONAL'].includes(String(tag.nature||'').toUpperCase()))return 'Tag this transaction as SAMAST or PERSONAL in Review / Resolve before recording rent or security.';
+        if(tag.sourceConflict)return 'Resolve the conflicting entity tag in Review / Resolve before recording this transaction.';
+        if(!['SAMAST','PERSONAL'].includes(String(tag.nature||'').toUpperCase()))return bankTenantFeeKind(kind)?'Tag this transaction as SAMAST or PERSONAL in Review / Resolve before recording the tenant-linked fee.':'Tag this transaction as SAMAST or PERSONAL in Review / Resolve before recording rent or security.';
       }
       return '';
     }
     function syncBankRentalKind(){
-      var security=el('rentalReconKind').value==='security';
-      el('bankRentalSave').textContent=security?'Record security & resolve':'Record rent & resolve';
+      var kind=el('rentalReconKind').value,row=bankReconRow(bankRentalRowId),fee=bankTenantFeeKind(kind),direction=bankRentalDirection(row);
+      el('bankRentalTitle').textContent=fee?'Record '+bankRentalKindLabel(kind,direction):'Record rental receipt / security deposit';
+      el('bankRentalSave').textContent=fee?'Record fee '+(direction==='debit'?'payment':'receipt')+' & resolve':kind==='security'?'Record security & resolve':'Record rent & resolve';
+      el('bankRentalTreatment').textContent=fee?'The original bank amount, date and direction are retained. This '+(direction==='debit'?'expense/payment':'receipt')+' is linked to the selected tenant. Dealer commission and Documentation / Agreement fees stay separate from rent, tenant advances and security balances.':'Rent is applied to that floor\'s oldest outstanding rent first; any balance becomes tenant advance. Security is held separately and is not treated as rent income. Deposits already included in the rental opening security must not be entered again; earlier deposits need an opening-balance review first.';
+      el('bankRentalMsg').textContent=bankRentalValidation(row,kind);
       renderBankRentalOpeningReview();
     }
     function selectedBankRentalTenancy(){return (bankRentalSnapshot&&bankRentalSnapshot.tenancies||[]).find(function(t){return t.id===el('rentalReconTenancy').value;});}
@@ -2980,14 +3000,17 @@
     window.openBankRental=function(rowId,kind){
       if(bankRentalOpeningBusy)return;
       var row=bankReconRow(rowId),b=row&&row.bank||{},generation=++bankRentalLoadGeneration;
-      if(!bankRentalAvailable(row))return;
+      kind=kind||'rent';
+      if(!bankRentalKinds(row).includes(kind))return;
       bankRentalRowId=rowId;
       bankRentalSnapshot=null;el('bankRentalOpeningReason').value='';el('bankRentalOpeningMsg').textContent='';
-      el('bankRentalSummary').textContent=(b.date||'')+' · '+fmt(Number(b.credit||0))+' · '+(b.description||'Incoming bank transaction');
-      el('bankRentalEntity').textContent='Receiving account: '+(bankReconView&&bankReconView.account||'')+' · Entity: '+(bankEntityTaggingActive()?bankEntityTagLabel(row.entityTag):bankNature);
+      var direction=bankRentalDirection(row),fee=bankTenantFeeKind(kind);
+      el('bankRentalSummary').textContent=(b.date||'')+' · '+(direction==='debit'?'Money paid ':'Money received ')+fmt(Number(direction==='debit'?b.debit:b.credit))+' · '+(b.description||'Bank transaction');
+      el('bankRentalEntity').textContent=(direction==='debit'?'Paying':'Receiving')+' account: '+(bankReconView&&bankReconView.account||'')+' · Entity: '+(bankEntityTaggingActive()?bankEntityTagLabel(row.entityTag):bankNature);
       el('rentalReconTenancy').innerHTML='<option value="">Loading rental floors…</option>';
-      el('rentalReconKind').value=kind==='security'?'security':'rent';
-      el('rentalReconNote').value='Rental receipt recorded from bank statement '+(b.reference||'');
+      el('rentalReconKind').innerHTML=bankRentalKinds(row).map(function(choice){return '<option value="'+choice+'">'+bankRentalKindLabel(choice,direction)+'</option>';}).join('');
+      el('rentalReconKind').value=kind;
+      el('rentalReconNote').value=(fee?bankRentalKindLabel(kind,direction):'Rental receipt')+' recorded from bank statement '+(b.reference||'');
       el('bankRentalMsg').className='msg';
       el('bankRentalMsg').textContent=bankRentalValidation(row);
       el('bankRentalSave').disabled=true;
@@ -3010,6 +3033,7 @@
     el('bankRentalDlg').addEventListener('cancel',function(event){if(bankRentalOpeningBusy)event.preventDefault();});
     el('bankRentalSave').addEventListener('click',function(){
       var tenancyId=el('rentalReconTenancy').value,kind=el('rentalReconKind').value,note=el('rentalReconNote').value.trim(),btn=this,error=bankRentalValidation(bankReconRow(bankRentalRowId));
+      if(btn.disabled||bankRentalOpeningBusy)return;
       if(error){el('bankRentalMsg').className='msg err';el('bankRentalMsg').textContent=error;return;}
       if(!tenancyId){el('bankRentalMsg').textContent='Choose the floor / unit.';return;}
       if(!note){el('bankRentalMsg').textContent='Enter a reconciliation remark.';return;}
@@ -3017,11 +3041,29 @@
       api('/api/expenses/bank-statements/create-rental',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({draftId:bankDraftId,rowId:bankRentalRowId,tenancyId:tenancyId,kind:kind,note:note})}).then(function(d){
         if(!d.success)throw new Error(d.error||'Could not record rental money.');
         el('bankRentalDlg').close();renderBankReconciliation(d);loadCash();loadAccountLedger();
-        el('bs_msg').className='msg ok';el('bs_msg').textContent=(kind==='security'?'Security deposit':'Rent')+' '+fmt(d.receipt.amount)+' recorded for '+d.tenancy.floor+' and linked to '+d.receipt.id+'.';
+        var recorded=d.expense||d.receipt||d.fee,label=bankTenantFeeKind(kind)?bankRentalKindLabel(kind,d.direction||bankRentalDirection(bankReconRow(bankRentalRowId))):kind==='security'?'Security deposit':'Rent';
+        el('bs_msg').className='msg ok';el('bs_msg').textContent=label+' '+fmt(recorded.amount)+' recorded for '+d.tenancy.tenant+' · '+d.tenancy.floor+' and linked to '+recorded.id+'.';
       }).catch(function(error){
         el('bankRentalMsg').className='msg err';el('bankRentalMsg').textContent=error.message||'Could not record rental money. Refresh reconciliation before retrying.';
       }).finally(function(){btn.disabled=false;});
     });
+    function syncBankTenantFeeAssignmentOptions(row){
+      ['dealer_commission','documentation_fee'].forEach(function(kind){var option=el('brKind').querySelector('option[value="tenant_'+kind+'"]'),allowed=bankRentalAvailable(row,kind);if(!option)return;option.hidden=!allowed;option.disabled=!allowed;option.textContent=bankRentalKindLabel(kind,bankRentalDirection(row))+' — linked tenant';});
+    }
+    if(typeof showBankReconForm==='function'){
+      var showBankReconFormBeforeTenantFees=showBankReconForm;
+      showBankReconForm=function(form){showBankReconFormBeforeTenantFees(form);syncBankTenantFeeAssignmentOptions(bankReconRow(form.rowId));};
+    }
+    function routeBankTenantFeeAssignment(event){
+      var value=el('brKind').value,kind=value==='tenant_dealer_commission'?'dealer_commission':value==='tenant_documentation_fee'?'documentation_fee':'';
+      if(!kind||!bankReconForm||bankReconForm.mode!=='assign')return;
+      event.preventDefault();event.stopImmediatePropagation();
+      var rowId=bankReconForm.rowId,row=bankReconRow(rowId),note=String(el('brRemark').value||'').trim();
+      if(!bankRentalAvailable(row,kind)){el('brMsg').className='msg err';el('brMsg').textContent='This row is no longer eligible for a tenant-linked fee. Reopen Review / Resolve.';return;}
+      clearBankReconForm();openBankRental(rowId,kind);if(note)el('rentalReconNote').value=note;
+    }
+    el('brKind').addEventListener('change',routeBankTenantFeeAssignment,true);
+    el('brSave').addEventListener('click',routeBankTenantFeeAssignment,true);
     var bankIncomingRowId='',bankIncomingNature='';
     function syncBankIncomingReceiptType(){var defaults={bank_interest:'Bank Interest Received',other_income:'Other Income',refund:'Refund Received',owner_contribution:'Owner Contribution',asset_sale:'Asset Sale'},category=el('biCategory');ExpenseLoans.reset('bi');if(category)category.value=defaults[el('biReceiptType').value]||'Other Income';ExpenseLoans.sync('bi');}
     function bankOwnerContributionSource(){var source=cfg&&cfg.adminOwnerContributionSource,row=bankIncomingRowId&&bankReconRow(bankIncomingRowId),bank=row&&row.bank||{},targetNature=bankIncomingNature||bankRowNature(row),reference=String(bank.reference||'').trim().toUpperCase(),text=String(bank.description||'')+' '+reference,verified=source&&((source.verifiedBankReferences||[]).includes(reference)||/\bgagan(?:\s+(?:sir|lamba))?\b/i.test(text)||/(?:\bicici\b|\ba\/?c(?:count)?\b|\bacct\b|x{2,}|\*{2,})[^0-9]{0,20}0993\b/i.test(text));return source&&verified&&source.toNature===targetNature&&source.toAccount===(bankReconView&&bankReconView.account)?source:null;}
