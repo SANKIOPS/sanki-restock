@@ -125,7 +125,7 @@ test('save and finalize cannot write while existing-payment metadata is refreshi
 });
 
 test('production wiring uses uncached GET metadata only, cache-busts the helper and pauses background redraw during refresh', () => {
-  assert.match(html, /credit-card-review\.js\?v=20261023-candidate-refresh-1/);
+  assert.match(html, /credit-card-review\.js\?v=20261025-merchant-once-discard-1/);
   assert.match(html, /api\('\/api\/expenses\/credit-cards\/statements\?cardId='\+encodeURIComponent\(cardId\),\{cache:'no-store'\}\)/);
   assert.match(html, /function reconciliationStatusBusy\(\)\{\s*if\(ccReviewSubmitting\)return true;\s*if\(ccCandidateRefreshBusy\(\)\)return true;/);
   const helper = fs.readFileSync(path.join(__dirname, '../public/credit-card-review.js'), 'utf8');
