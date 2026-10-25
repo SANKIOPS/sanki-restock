@@ -50,13 +50,21 @@
   }
   function load() { return readView(filter).then(function (result) { data = result; return result; }); }
   function refundHost() { return node(refundHostId) || el('panel'); }
+  var managedRefundOpened = false;
   window.renderRefundsSection = function (hostId) {
     refundHostId = hostId || 'panel';
     var host = refundHost();
     if (!cfg.canManageExpenseRefunds) { host.innerHTML = '<div class="card">Only Admin or Owner can manage expense refunds.</div>'; return; }
     if (!authorizedEntity(filter.nature)) filter.nature = (cfg.approvalNatures || [])[0] || '';
+    var params = new URLSearchParams(typeof location !== 'undefined' ? location.search : ''), requestedRefund = managedRefundOpened ? '' : params.get('manageRefund');
+    if (requestedRefund) {
+      managedRefundOpened = true;
+      var requestedNature = params.get('nature');
+      if (cfg.canEditLedgerTransactions !== true || !/^[A-Za-z0-9_-]{1,100}$/.test(requestedRefund) || !authorizedEntity(requestedNature)) { host.textContent = 'The requested refund is unavailable or inaccessible. No records have changed.'; return; }
+      filter = { nature: requestedNature, from: '', to: '', status: '', search: requestedRefund };
+    }
     host.innerHTML = '<div class="card">Loading Refunds &amp; Returns…</div>';
-    load().then(draw).catch(function (error) { var target = refundHost(); if (target) target.innerHTML = '<div class="card">' + esc(error.message) + '</div>'; });
+    load().then(function(){draw();if(!requestedRefund||tab!=='receivables')return;var matches=(data.refunds||[]).filter(function(record){return record.id===requestedRefund;});if(matches.length!==1){setMsg('The requested refund is unavailable or inaccessible. No other refund was selected.',false);return;}return openCorrection(matches[0]);}).catch(function (error) { var target = refundHost(); if (target) target.innerHTML = '<div class="card">' + esc(error.message) + '</div>'; });
   };
   window.renderRefunds = function () { window.renderRefundsSection('panel'); };
   function draw() {

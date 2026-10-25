@@ -16,7 +16,7 @@
   }
   function createApp(doc, win, injectedRequest) {
     var state = { config: null, catalog: [], groups: [], revision: '', selected: new Set(), busy: false, loading: 0, tool: '', editAction: '', editSources: [], preview: null, operationId: '' };
-    var openingController;
+    var openingController, transactionController;
     function el(id) { return doc.getElementById(id); }
     function message(id, text, bad) { el(id).textContent = text || ''; el(id).className = 'message ' + (bad ? 'error' : 'success'); }
     function request(url, options) {
@@ -50,7 +50,7 @@
         var items = head.items.filter(function (item) { return !query || (head.title + ' ' + item.title + ' ' + item.description + ' ' + item.actions.join(' ')).toLowerCase().includes(query); });
         if (!items.length) return '';
         return '<section class="manage-head"><button type="button" class="head-toggle" data-head="' + esc(head.key) + '" aria-expanded="false" aria-controls="manage-head-' + esc(head.key) + '"><span>' + esc(head.title) + '</span><span aria-hidden="true">＋</span></button><div class="head-items" id="manage-head-' + esc(head.key) + '" hidden>' + items.map(function (item) {
-          return '<article class="manage-item"><h3>' + esc(item.title) + '</h3><p class="muted">' + esc(item.description) + '</p><ul>' + item.actions.map(function (action) { return '<li>' + esc(action) + '</li>'; }).join('') + '</ul><a class="button" href="' + esc(item.href) + '"' + (['groups','categories','opening-balances'].includes(item.key) ? ' data-tool="' + esc(item.key) + '"' : '') + '>Open ' + esc(item.title.replace(/^Manage /i, '').toLowerCase()) + ' →</a></article>';
+          return '<article class="manage-item"><h3>' + esc(item.title) + '</h3><p class="muted">' + esc(item.description) + '</p><ul>' + item.actions.map(function (action) { return '<li>' + esc(action) + '</li>'; }).join('') + '</ul><a class="button" href="' + esc(item.href) + '"' + (['groups','categories','opening-balances'].includes(item.key) || item.key === 'transactions' && item.href === '/manage.html?section=transactions' ? ' data-tool="' + esc(item.key) + '"' : '') + '>Open ' + esc(item.title.replace(/^Manage /i, '').toLowerCase()) + ' →</a></article>';
         }).join('') + '</div></section>';
       }).join('') || '<p class="muted">No permitted tools match this search.</p>';
     }
@@ -185,12 +185,21 @@
       }).catch(function (error) { message('categoryMessage', error.message, true); return false; }).finally(function () { setBusy(false); });
     }
     function showTool(section, updateUrl) {
-      if (state.busy || !['groups', 'categories', 'opening-balances'].includes(section) || !allItems().some(function (item) { return item.key === section; })) return Promise.resolve(false);
+      if (state.busy || !['groups', 'categories', 'opening-balances', 'transactions'].includes(section) || !allItems().some(function (item) { return item.key === section; })) return Promise.resolve(false);
+      if (section === 'transactions' && !(state.config.isAdmin === true && state.config.claimantOnly === false && state.config.canEditLedgerTransactions === true)) return Promise.resolve(false);
       state.tool = section; el('manageHome').hidden = true; el('manageTool').hidden = false; el('groupWorkspace').hidden = section !== 'groups'; el('categoryWorkspace').hidden = section !== 'categories';
       el('openingWorkspace').hidden = section !== 'opening-balances';
+      el('transactionWorkspace').hidden = section !== 'transactions';
       el('toolTitle').textContent = section === 'groups' ? 'Manage groups' : section === 'opening-balances' ? 'Manage opening balances' : 'Manage categories';
       el('toolDescription').textContent = section === 'groups' ? 'Organize shared expense groups with a reviewed, audited rename or merge.' : section === 'opening-balances' ? 'Account-ledger openings: stage first, then explicit Owner review. Nothing is posted on opening this screen.' : 'Add approved expense categories and assign their group. Shared by SANKI, SAMAST and PERSONAL.';
       if (updateUrl !== false) { var url = new URL(win.location.href); url.searchParams.set('section', section); win.history.replaceState(null, '', url.pathname + url.search + url.hash); }
+      if (section === 'transactions') {
+        el('toolTitle').textContent = 'Manage transactions';
+        el('toolDescription').textContent = 'Find an existing reference, check its source and open the permitted editor. Searching or opening a form never changes a record.';
+        if (!transactionController && win.SankiManageTransactions) transactionController = win.SankiManageTransactions.create(doc,win,state.config,request,function(value){state.busy=value;el('backToManage').disabled=value;});
+        if (!transactionController) { message('pageMessage','Transaction tools could not load. Refresh this page.',true); return Promise.resolve(false); }
+        return transactionController.load();
+      }
       if (section === 'opening-balances') {
         if (!openingController && win.SankiOpeningBalances) openingController = win.SankiOpeningBalances.create(doc,win,state.config,request,function(value){state.busy=value;el('backToManage').disabled=value;});
         if (!openingController) { message('pageMessage','Opening-balance tools could not load. Refresh this page.',true); return Promise.resolve(false); }
