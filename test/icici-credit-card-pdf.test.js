@@ -18,6 +18,8 @@ const records = () => [
   { date: '22/09/2026', ref: '12345678903', description: 'SYNTHETIC FOREIGN REFUND', rewards: '0', foreign: '1.67 USD', amount: '30.50', credit: true },
   { date: '29/09/2026', ref: '12345678904', description: '24 SEVEN SYNTHETIC SHOP', rewards: '3', amount: '80.25' }
 ];
+const zeroBankNotice = (changes = {}) => ({ date: '14/09/2026', ref: '98765432101',
+  description: 'Auto Dr.Retn-Insuff. fund', rewards: '0', amount: '0.00', credit: true, ...changes });
 
 function tablePage(rows, header = true) {
   const items = header ? headings.map((value, index) => item(value, columns[index], 700)) : [];
@@ -96,6 +98,119 @@ test('ICICI separate CR cell marks both payments and refunds as credits', () => 
   const rows = parseIciciCreditCardPdf(fixture());
   assert.deepEqual(rows.filter(row => row.credit).map(row => row.credit), [90, 30.5]);
   assert.match(rows.find(row => row.reference === '12345678904').description, /24 SEVEN SYNTHETIC SHOP/);
+});
+
+test('ICICI zero-value auto-debit return notice is retained as evidence, never a financial transaction', () => {
+  const rows = parseIciciCreditCardPdf(fixture({ rows: [zeroBankNotice(), ...records()] }));
+  assert.equal(rows.length, 4);
+  assert.deepEqual(cents(rows), [20550, 12050]);
+  assert.equal(rows.at(-1).balance, 185);
+  assert.deepEqual(rows.map(row => row.row), [2, 3, 4, 5]);
+  assert.ok(rows.every(row => row.debit > 0 || row.credit > 0));
+  assert.ok(rows.every(row => !Object.hasOwn(row, 'side')));
+  assert.deepEqual(rows.statementSummary.nonPostingEntries, [{
+    date: '2026-09-14', reference: '98765432101', description: 'Auto Dr.Retn-Insuff. fund',
+    cardLast4: '1234', amount: 0, debit: 0, credit: 0, sourceRow: 1,
+    reason: 'zero_value_bank_notice',
+    explanation: 'ICICI auto-debit return notice: insufficient funds; no money moved and no ledger entry is posted.'
+  }]);
+  assert.equal(rows.statementSummary.totalDebits, 205.5);
+  assert.equal(rows.statementSummary.totalCredits, 120.5);
+  assert.equal(rows.statementSummary.validated, true);
+});
+
+test('ICICI known zero notice accepts ordinary case and spacing without changing its retained narration', () => {
+  const description = 'AUTO   DR. RETN - INSUFF. FUND';
+  const rows = parseIciciCreditCardPdf(fixture({ rows: [zeroBankNotice({ description }), ...records()] }));
+  assert.equal(rows.length, 4);
+  assert.equal(rows.statementSummary.nonPostingEntries[0].description, description);
+});
+
+test('ICICI exact zero-notice narration can wrap across positioned detail lines', () => {
+  const pdf = fixture({ rows: [zeroBankNotice({ description: 'Auto Dr.Retn-' }), ...records()] });
+  pdf.pages[0].items.push(item('Insuff. fund', columns[2], 657));
+  const rows = parseIciciCreditCardPdf(refreshText(pdf));
+  assert.equal(rows.length, 4);
+  assert.equal(rows.statementSummary.nonPostingEntries[0].description, 'Auto Dr.Retn- Insuff. fund');
+});
+
+test('ICICI zero notice requires the complete exact narration, including wrapped suffixes', () => {
+  for (const description of ['SYNTHETIC MERCHANT', 'Auto Dr.Retn-Insuff. funds',
+    'Auto Dr.Retn-Insuff. fund REVERSAL', 'Auto Dr.Retn-Other reason']) {
+    assert.throws(() => parseIciciCreditCardPdf(fixture({ rows: [zeroBankNotice({ description }), ...records()] })),
+      /transaction 1 has a zero INR amount/i, description);
+  }
+  const pdf = fixture({ rows: [zeroBankNotice(), ...records()] });
+  pdf.pages[0].items.push(item('ADDITIONAL UNKNOWN BANK EVENT', columns[2], 657));
+  assert.throws(() => parseIciciCreditCardPdf(refreshText(pdf)), /transaction 1 has a zero INR amount/i);
+});
+
+test('ICICI recognized zero notice without explicit CR direction or with DR fails closed', () => {
+  for (const marker of ['', 'DR']) {
+    const pdf = fixture({ rows: [zeroBankNotice({ credit: false }), ...records()] });
+    if (marker) pdf.pages[0].items.push(item(marker, 620, 670));
+    assert.throws(() => parseIciciCreditCardPdf(refreshText(pdf)), /transaction 1 has a zero INR amount/i, marker || 'no marker');
+  }
+});
+
+test('ICICI zero notice still rejects competing CR and DR markers', () => {
+  const pdf = fixture({ rows: [zeroBankNotice(), ...records()] });
+  pdf.pages[0].items.push(item('DR', 635, 670));
+  assert.throws(() => parseIciciCreditCardPdf(refreshText(pdf)), /conflicting debit \/ credit markers/i);
+});
+
+test('ICICI verified zero VartaSet2 overlay is retained only with its own explicit CR marker', () => {
+  const pdf = fixture({ rows: [zeroBankNotice({ amount: '199.99', credit: false }), ...records()] });
+  pdf.pages[0].fonts.numeric = 'VartaSet2';
+  pdf.pages[0].items.push(item('Q.QQ', columns[5], 670, 'numeric'), item('CR', 620, 670));
+  const rows = parseIciciCreditCardPdf(refreshText(pdf));
+  assert.equal(rows.length, 4);
+  assert.equal(rows.statementSummary.nonPostingEntries[0].amount, 0);
+  assert.deepEqual(cents(rows), [20550, 12050]);
+});
+
+test('ICICI zero overlay cannot inherit CR from a stale underlayer', () => {
+  const pdf = fixture({ rows: [zeroBankNotice({ amount: '199.99' }), ...records()] });
+  pdf.pages[0].fonts.numeric = 'VartaSet2';
+  pdf.pages[0].items.push(item('Q.QQ', columns[5], 670, 'numeric'));
+  assert.throws(() => parseIciciCreditCardPdf(refreshText(pdf)), /transaction 1 has a zero INR amount/i);
+});
+
+test('ICICI zero-notice handling never relaxes conflicting amount or replacement-layer checks', () => {
+  const ordinary = fixture({ rows: [zeroBankNotice(), ...records()] });
+  ordinary.pages[0].items.push(item('0.01', columns[5] + 1, 670));
+  assert.throws(() => parseIciciCreditCardPdf(refreshText(ordinary)), /conflicting INR amounts/i);
+  const overlay = fixture({ rows: [zeroBankNotice({ credit: false }), ...records()] });
+  overlay.pages[0].fonts.numeric = 'VartaSet2';
+  overlay.pages[0].items.push(item('Q.QQ', columns[5], 670, 'numeric'), item('0.00', columns[5] + 1, 670), item('CR', 620, 670));
+  assert.throws(() => parseIciciCreditCardPdf(refreshText(overlay)), /ambiguous replacement layer/i);
+});
+
+test('ICICI zero notice still requires valid complete date, reference and INR currency cell', () => {
+  for (const changes of [{ date: '31/09/2026' }, { date: '12/10/2026' }, { date: '14/09/202' },
+    { ref: '9876543210' }, { ref: '' }, { amount: '' }, { amount: '0.0' }, { amount: 'Q.QQ' }]) {
+    assert.throws(() => parseIciciCreditCardPdf(fixture({ rows: [zeroBankNotice(changes), ...records()] })), failure, JSON.stringify(changes));
+  }
+});
+
+test('ICICI non-zero credit with the same notice text remains a financial transaction', () => {
+  const data = records(); data[1].description = zeroBankNotice().description;
+  const rows = parseIciciCreditCardPdf(fixture({ rows: data }));
+  assert.equal(rows.length, 4);
+  assert.equal(rows.find(row => row.reference === data[1].ref).credit, 90);
+  assert.deepEqual(rows.statementSummary.nonPostingEntries, []);
+});
+
+test('ICICI retained notices cannot conceal missing transactions or mismatched declared totals', () => {
+  assert.throws(() => parseIciciCreditCardPdf(fixture({ rows: [zeroBankNotice(), ...records().slice(1)] })), /do not match declared totals/i);
+  assert.throws(() => parseIciciCreditCardPdf(fixture({ rows: [zeroBankNotice()],
+    summary: { opening: '100.00', charges: '0.00', cash: '0.00', credits: '0.00', due: '100.00' } })), /no complete dated transactions/i);
+});
+
+test('ICICI distinct notice positions preserve all notice evidence even when references repeat', () => {
+  const rows = parseIciciCreditCardPdf(fixture({ rows: [zeroBankNotice(), zeroBankNotice(), ...records()] }));
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows.statementSummary.nonPostingEntries.map(entry => entry.sourceRow), [1, 2]);
 });
 
 test('ICICI ordinary CR cells retain their visual direction when painted before the amount', () => {
