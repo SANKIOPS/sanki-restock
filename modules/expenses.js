@@ -6241,20 +6241,32 @@ function bankAmountAuthorityError(req,res,error){
   }
   return res.status(error.status||409).json({success:false,error:error.message,bankAmountAuthorityBlocked:error.message});
 }
+function bankChargeSplitTarget(s,draft,view,bankRowId,appId){
+  if(draft.originalStatementPeriod||Object.values(s.bankReconciliationApprovals||{}).some(approval=>approval.draftId===draft.id&&approval.status==='pending'))throw new Error('This reconciliation is locked or awaiting Owner approval. Review or withdraw that request before changing its bank-charge allocation.');
+  const row=view.rows.find(value=>value.id===bankRowId&&value.bank),linked=view.rows.find(value=>value.app&&value.app.id===appId),movement=linked&&linked.app||(view.linkCandidates||[]).find(value=>value.id===appId);
+  if(!row||!movement||row.resolution||row.status==='already_reconciled'||row.reversalReviewRequired||linked&&linked.id!==bankRowId&&(linked.bank||linked.resolution))throw new Error('Choose an available bank debit and existing principal. Undo an incorrect saved decision before allocating its bank charge.');
+  const targetIds=new Set([appId].concat(movement.sourceIds||[])),otherClaims=otherDraftClaimedAppIds(s,draft,appBankMovements(s,draft.account,draft.nature));
+  if(Array.from(targetIds).some(id=>otherClaims.has(id))||view.rows.some(value=>value.bank&&value.id!==bankRowId&&([value.app].concat(value.app&&value.app.linkedEntries||[]).filter(Boolean).some(item=>targetIds.has(item.id)||(item.sourceIds||[]).some(id=>targetIds.has(id)))||resolutionLinkedAppIds(value.resolution).some(id=>targetIds.has(id)))))throw new Error('This ledger entry is already matched elsewhere. Undo the incorrect decision before allocating its bank charge.');
+  if(!(num(row.bank.debit)>0)||num(row.bank.credit)!==0||!(num(movement.debit)>0)||num(movement.credit)!==0)throw new Error('Bank charges can be allocated only to an outgoing bank debit and an outgoing existing principal.');
+  return{row,linked,movement};
+}
 router.post('/api/expenses/bank-statements/amount-authority-preview',(req,res)=>{
   const s=loadStore(),b=req.body||{},draft=(s.bankReconciliationDrafts||{})[String(b.draftId||'')];
   if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});
   if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot review this bank reconciliation.'});
   if(Array.isArray(b.amountAuthorityAllocations)&&b.amountAuthorityAllocations.some(row=>String(row&&(row.nature||row.beneficiaryNature)||'').trim().toUpperCase()==='PERSONAL')&&!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'The Owner must review private card ownership allocations.'});
   try{
-    const view=draftReconciliation(s,draft),bankRowId=String(b.bankRowId||b.rowId||''),row=view.rows.find(value=>value.id===bankRowId&&value.bank),appId=String(b.appId||row&&row.app&&row.app.id||''),movement=appBankMovements(s,draft.account,draft.nature).find(value=>value.id===appId);
+    const view=draftReconciliation(s,draft,{readOnly:true}),bankRowId=String(b.bankRowId||b.rowId||''),row=view.rows.find(value=>value.id===bankRowId&&value.bank),appId=String(b.appId||row&&row.app&&row.app.id||''),movement=appBankMovements(s,draft.account,draft.nature).find(value=>value.id===appId);
     if(!row||!movement||row.status==='already_reconciled'||row.resolution||row.reversalReviewRequired)throw new Error('Choose an available one-to-one bank transaction and ledger entry.');
     if(!view.rows.some(value=>value.app&&value.app.id===appId)&&!(view.linkCandidates||[]).some(value=>value.id===appId))throw new Error('This ledger entry is outside the available reconciliation candidates. Select an available entry.');
     const claims=otherDraftClaimedAppIds(s,draft,appBankMovements(s,draft.account,draft.nature));
     if(claims.has(appId)||view.rows.some(value=>value.bank&&value.id!==bankRowId&&([value.app].concat(value.app&&value.app.linkedEntries||[]).filter(Boolean).some(item=>item.id===appId||(item.sourceIds||[]).includes(appId))||resolutionLinkedAppIds(value.resolution).includes(appId))))throw new Error('This ledger entry is already matched elsewhere. Undo the incorrect decision first.');
     const originalAmount=roundMoney(num(movement.debit)+num(movement.credit)),bankAmount=roundMoney(num(row.bank.debit)+num(row.bank.credit));
     if(Math.sign(num(movement.credit)-num(movement.debit))!==Math.sign(num(row.bank.credit)-num(row.bank.debit)))return res.status(400).json({success:false,error:'Bank and ledger movements must have the same money direction.'});
-    if(reconciliationCandidate(row.bank,movement,draft.matchingPolicy,draft.account)?.axisTransferCharge)throw new Error('This bank amount includes a recognized Axis transfer charge. Keep the separate principal and Bank Charges allocation instead of replacing the principal.');
+    if(reconciliationCandidate(row.bank,movement,draft.matchingPolicy,draft.account)?.axisTransferCharge){
+      bankChargeSplitTarget(s,draft,view,bankRowId,appId);
+      return res.json({success:true,bankAmountAuthority:null,bankAmountAuthorityBlocked:'',bankDate:row.bank.date,originalAmount,bankAmount,axisTransferChargeSplit:{bankRowId,appId,principalAmount:originalAmount,chargeAmount:roundMoney(bankAmount-originalAmount),chargeCategory:'BANK CHARGES',grossAmount:bankAmount}});
+    }
     const plan=originalAmount===bankAmount?null:bankAmountAuthorityPolicy.prepare(s,draft,row.bank,movement,bankRowId,'manual',{amountAuthorityAllocations:b.amountAuthorityAllocations});
     return res.json({success:true,bankAmountAuthority:plan?bankAmountAuthorityPolicy.publicPlan(plan):null,bankAmountAuthorityBlocked:'',bankDate:row.bank.date,originalAmount,bankAmount});
   }catch(error){return bankAmountAuthorityError(req,res,error);}
@@ -6611,10 +6623,12 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   const chargeCategory=b.action==='paytm_settlement'?'PAYTM CHARGES':String(b.chargeCategory||'BANK CHARGES').trim();
   if(['create_split_adjustment','split_allocation'].includes(b.action)&&!['BANK CHARGES','PAYTM CHARGES'].includes(chargeCategory))return res.status(400).json({success:false,error:'Choose Bank Charges or Paytm Charges.'});
   if(b.action==='split_allocation'){
-    const total=num(row.bank&&row.bank.debit||row.bank&&row.bank.credit),principal=num(b.principalAmount),charge=num(b.chargeAmount),appId=String(b.appId||'').trim(),linked=view.rows.find(x=>x.app&&x.app.id===appId);
-    if(!row.bank||!appId||!linked||Math.abs(principal+charge-total)>.01||Math.abs((num(linked.app.debit)||num(linked.app.credit))-principal)>.01)return res.status(400).json({success:false,error:'Choose an existing ledger reference and make principal plus charge equal the bank amount.'});
-    const linkedNature=reconciliationOwnershipNature(linked.app.entity);if(isSharedBankReconciliationAccount(draft.account)){if(!linkedNature)return res.status(409).json({success:false,error:'The linked principal has no reliable SAMAST or PERSONAL entity.'});if(postingNature&&postingNature!==linkedNature)return res.status(409).json({success:false,error:'The manual transaction tag conflicts with the linked '+linkedNature+' principal.'});postingNature=linkedNature;}
-    draft.resolutions[linked.id]={action:'linked_split',reason:'Linked as principal component of '+b.rowId,appId,by:req.user.username,at:new Date().toISOString()};
+    const total=num(row.bank&&row.bank.debit),principal=num(b.principalAmount),charge=num(b.chargeAmount),appId=String(b.appId||'').trim();let selected;
+    try{selected=bankChargeSplitTarget(s,draft,view,b.rowId,appId);}catch(error){return res.status(409).json({success:false,error:error.message});}
+    const cents=value=>Math.round(value*100);
+    if(!(principal>0)||!(charge>0)||Math.abs(principal*100-cents(principal))>.000001||Math.abs(charge*100-cents(charge))>.000001||cents(principal)+cents(charge)!==cents(total)||cents(num(selected.movement.debit))!==cents(principal))return res.status(400).json({success:false,error:'Choose an existing ledger reference and make positive principal plus positive charge equal the bank debit exactly.'});
+    const linkedNature=reconciliationOwnershipNature(selected.movement.entity);if(isSharedBankReconciliationAccount(draft.account)){if(!linkedNature)return res.status(409).json({success:false,error:'The linked principal has no reliable SAMAST or PERSONAL entity.'});if(postingNature&&postingNature!==linkedNature)return res.status(409).json({success:false,error:'The manual transaction tag conflicts with the linked '+linkedNature+' principal.'});postingNature=linkedNature;}
+    if(selected.linked&&selected.linked.id!==b.rowId){draft.resolutions=draft.resolutions||{};draft.resolutions[selected.linked.id]={action:'linked_split',reason:'Linked as principal component of '+b.rowId,appId,linkedRowId:b.rowId,by:req.user.username,at:new Date().toISOString()};}
   }
   if(b.action==='opening_vendor_payable_split'){
     const total=num(row.bank&&row.bank.debit),principal=num(b.principalAmount),openingPayable=num(b.openingPayableAmount),appId=String(b.appId||'').trim(),vendor=String(b.vendor||'').trim(),linked=view.rows.find(x=>x.app&&x.app.id===appId);
