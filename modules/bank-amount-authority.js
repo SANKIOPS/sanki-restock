@@ -43,6 +43,7 @@ function sources(store, movementId) {
 }
 const prohibitedKeys = ['accountingExcluded', 'personalFunds', 'historicalSettlement', 'creditOnly', 'refundCredit', 'provisional', 'batchPaymentId', 'batchId', 'settledByTransferId', 'creditCardId', 'creditCardStatementId', 'bankStatementEvidence', 'gokwikPostingId', 'gokwikSettlementId', 'paytmRoundingTransactionId', 'paytmSettlementId', 'paytmTransactionId', 'paytmPayoutId', 'settledThroughPaytm', 'originalToAccount', 'settlementId', 'refundRecoveryExpenseId', 'refundId', 'expenseRefundId', 'loanId', 'salaryAdvanceId', 'reimbursementAllocationId', 'automaticAxisTransferCharge', 'roundingDifference', 'reconciledClosingCorrection', 'bankTruthOnly'];
 function hasProtectedMarker(record) {
+  if(record.rentalFeeId)return true;
   return prohibitedKeys.some(key => !!record[key]) || list(record.batchPaymentIds).length || list(record.sourceIds).length || list(record.linkedEntries).length;
 }
 function callbackBlocked(value) { return value === true || typeof value === 'string' && !!value || value && typeof value === 'object' && !!(value.locked || value.protected || value.error); }
