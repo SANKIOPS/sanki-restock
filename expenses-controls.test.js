@@ -2479,7 +2479,10 @@ test('discarding a temporary bank preview removes only that draft and its tempor
 });
 
 test('shared 7883 has one physical bank book while private 0993 reconciliation remains Owner-only',()=>{
-  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(expenseFile,'utf8'),stored=JSON.parse(baseline);
+  // Keep finalized physical-book evidence scoped to this migration fixture.
+  // Later historical expense scenarios must not inherit its closed period.
+  try{
   stored.bankStatements=stored.bankStatements||{};
   stored.bankStatements['IndusInd Bank 7883']={transactions:{business:{id:'BTX-BUSINESS',date:'2026-08-20',debit:10,credit:0,balance:90}},imports:[],reconciledThrough:'2026-08-20'};
   stored.bankStatements['PERSONAL|IndusInd Bank 7883']={transactions:{personal:{id:'BTX-PERSONAL',date:'2026-08-21',debit:20,credit:0,balance:80}},imports:[],reconciledThrough:'2026-08-21'};
@@ -2511,6 +2514,7 @@ test('shared 7883 has one physical bank book while private 0993 reconciliation r
   assert.ok(ownerConfig.ledgerAccountsByNature.PERSONAL.includes('IndusInd Bank 7883'));
   assert.ok(ownerConfig.ledgerAccountsByNature.PERSONAL.includes('Namita 5464'));
   assert.ok(ownerConfig.ledgerAccountsByNature.PERSONAL.includes('Namita Cash'));
+  }finally{fs.writeFileSync(expenseFile,baseline);}
 });
 
 test('Owner transfers from business or Personal accounts into private Namita ledgers',()=>{
@@ -2935,9 +2939,10 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html, /matches\('img\.thumb'\)/);
   assert.match(html, /\.claim-card summary \{ padding:3px 7px/);
   assert.doesNotMatch(html, /fmt\(approvedNow\)\+' now/);
-  assert.match(html,/\['editAmount','editTotal','editRequested'\]\.forEach\(function\(x\)\{el\(x\)\.disabled=locked\|\|!cfg\.isOwner/);
+  assert.match(html,/canEditFinancials=cfg\.canEditExpenseFinancials===true/);
+  assert.match(html,/\['editAmount','editTotal','editRequested'\]\.forEach\(function\(x\)\{el\(x\)\.disabled=locked\|\|!canEditFinancials/);
   assert.match(html,/el\(x\)\.title=locked\?'Locked for every role: this payment is reconciled\.'/);
-  assert.match(html,/Only the Owner can change amounts/);
+  assert.match(html,/Manage expense financial-edit permission is required to change amounts/);
   assert.match(html,/<label>Paying account<\/label><select id="lf_account">/);
   assert.match(html,/payingAccount='\+encodeURIComponent/);
   assert.match(html,/var claimantName=e\.claimant\|\|e\.createdBy/);
@@ -2990,7 +2995,19 @@ test('Owner/Admin can edit finalized expenses with a mandatory audit reason', ()
   const oldLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448'}}).body;
   const newLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645'}}).body;
   assert.ok(!oldLedger.entries.some(x=>x.id===created.body.expense.id+'/PAY-001'));assert.ok(newLedger.entries.some(x=>x.id===created.body.expense.id+'/PAY-001'));
-  assert.equal(invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},role:'admin',body:{paymentAccount:'Tiana 0425',editReason:'Admin tries account'}}).status,403);
+  const adminUnchanged=invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},role:'admin',body:{paymentAccount:'Prashant Axis 3645',editReason:'Admin confirms unchanged paying account'}});
+  assert.equal(adminUnchanged.status,200);assert.equal(adminUnchanged.body.expense.payments.at(-1).account,'Prashant Axis 3645');
+  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(expenseFile,'utf8'),locked=JSON.parse(baseline);
+  locked.expenses[created.body.expense.id].payments.at(-1).reconciled=true;
+  fs.writeFileSync(expenseFile,JSON.stringify(locked));
+  const lockedSnapshot=fs.readFileSync(expenseFile,'utf8');
+  try{
+    for(const role of ['owner','admin']){
+      const denied=invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},role,body:{amount:451,editReason:'Cannot change reconciled amounts'}});
+      assert.equal(denied.status,409,role+': '+JSON.stringify(denied.body));
+      assert.equal(fs.readFileSync(expenseFile,'utf8'),lockedSnapshot,'reconciliation lock preserves the complete saved fixture for '+role);
+    }
+  }finally{fs.writeFileSync(expenseFile,baseline);}
 });
 
 test('Owner/Admin can correct an expense entity before payment and the change is audited', () => {
