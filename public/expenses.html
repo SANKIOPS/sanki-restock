@@ -2918,8 +2918,9 @@
       return !!(cfg.canManageRentals&&row&&row.status==='missing_in_app'&&!row.resolution&&!row.bankClaimedElsewhere&&direction&&!row.reversalReviewRequired&&!row.reversalPairCandidate&&!row.bankReversalPair&&(fee?bankEntityTaggingActive()&&['SAMAST','PERSONAL'].includes(bankNature)&&bankTenantFeePermission(row):direction==='credit'&&(bankNature==='PERSONAL'||bankEntityTaggingActive())));
     }
     function bankRentalKindLabel(kind,direction){
-      if(kind==='dealer_commission')return 'Dealer commission '+(direction==='debit'?'paid':'received');
-      if(kind==='documentation_fee')return 'Documentation / Agreement fee '+(direction==='debit'?'paid':'received');
+      var paid=direction==='debit'||direction==='payment';
+      if(kind==='dealer_commission')return 'Dealer commission '+(paid?'paid':'received');
+      if(kind==='documentation_fee')return 'Documentation / Agreement fee '+(paid?'paid':'received');
       return kind==='security'?'Security deposit received':'Rent received';
     }
     function bankRentalKinds(row){return ['rent','security','dealer_commission','documentation_fee'].filter(function(kind){return bankRentalAvailable(row,kind);});}
