@@ -19,19 +19,24 @@ const galleryCache = new Map();
 let costCache = { at: 0, products: null };
 let costInflight = null;
 let visualCatalog = { at: 0, products: null };
+let visualCatalogInflight = null;
 require('./inventory-visual-search').register(router, async () => {
   if (!visualCatalog.products || Date.now()-visualCatalog.at>30*60*1000) {
-    const live = await fetchProducts(catalogClient);
-    const byHandle = new Map(live.map(p => [p.handle,p]));
-    visualCatalog = { at:Date.now(), products:DATA.map(p => {
-      const match = byHandle.get(p.handle);
-      const images = (match?.images || []).map(im => im.src).filter(Boolean);
-      if (!images.length && match?.image?.src) images.push(match.image.src);
-      return {...p,images,image:images[0] || null};
-    }) };
+    if (!visualCatalogInflight) visualCatalogInflight = fetchProducts(catalogClient).then(live => {
+      // Use all current Shopify products, including articles added since the physical sheet.
+      visualCatalog = { at:Date.now(), products:live.map(p => {
+        const images = [...new Set([p.image?.src, ...(p.images || []).map(im => im.src)].filter(Boolean))];
+        return { handle:p.handle, images, image:images[0] || null };
+      }) };
+    }).finally(() => { visualCatalogInflight = null; });
+    await visualCatalogInflight;
   }
   const byHandle = new Map(visualCatalog.products.map(p => [p.handle, p]));
-  return inventoryState.catalog(await inventoryState.snapshot(), DATA).map(p => ({ ...p, images: byHandle.get(p.handle)?.images || p.images }));
+  const snapshot = await inventoryState.snapshot();
+  return inventoryState.catalog(snapshot, DATA).map(p => {
+    const fresh = byHandle.get(p.handle);
+    return { ...p, inventoryAt:snapshot.at, image:fresh?.image || p.image, images:fresh?.images?.length ? fresh.images : p.images };
+  });
 });
 
 async function jsonRequest(url, options) {
