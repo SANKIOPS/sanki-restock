@@ -785,7 +785,7 @@
     }
     function vendorPaymentAccountOptions(nature){
       var owners=cfg.claimantAccountOwners||{};
-      return vendorPaymentAccountsForNature(nature).map(function(account){var owner=owners[account],person=owner?owner.charAt(0).toUpperCase()+owner.slice(1):'',sharedSanki=String(nature||'SANKI').trim().toUpperCase()==='SANKI'&&account==='IndusInd Bank 7883';return '<option value="'+esc(account)+'">'+esc(account)+(person?' — paid personally by '+esc(person):sharedSanki?' — shared bank; SANKI expense':'')+'</option>';}).join('');
+      return vendorPaymentAccountsForNature(nature).map(function(account){var owner=owners[account],person=owner?owner.charAt(0).toUpperCase()+owner.slice(1):'',entity=String(nature||'SANKI').trim().toUpperCase(),sharedSanki=entity==='SANKI'&&account==='IndusInd Bank 7883',personalSamast=entity==='SAMAST'&&account==='ICICI Bank 0992';return '<option value="'+esc(account)+'">'+esc(account)+(person?' — paid personally by '+esc(person):sharedSanki?' — shared bank; SANKI expense':personalSamast?" — Sir's personal account; SAMAST expense":'')+'</option>';}).join('');
     }
     function populateVendorPayAccounts(nature,refreshIfEmpty){
       var accounts=vendorPaymentAccountsForNature(nature),select=el('payAcct');
