@@ -2016,6 +2016,12 @@ function canEditExpenseFinancials(req){return canEditLedgerTransactions(req)&&re
 function canManageRestrictedCard(req,card){return !!card&&(!card.ownerOnly||(canEditLedgerTransactions(req)&&canManagePersonalAccounting(req)));}
 function canManageRestrictedExpense(req,e){return !!e&&(!e.ownerOnly||isOwner(req)||(normalizedNature(e.nature)==='PERSONAL'&&canEditLedgerTransactions(req)&&canManagePersonalAccounting(req)));}
 function isPrashant(req){return String(req&&req.user&&req.user.username||'').trim().toLowerCase()==='prashant';}
+const PRASHANT_BANK_AMOUNT_MATCH_LIMIT=3;
+function bankAmountManualMatchApproval(req,plan){
+  const difference=roundMoney(Math.abs(num(plan&&plan.amountDifference)));
+  const owner=isOwner(req),prashant=isPrashant(req),withinPrashantLimit=difference<PRASHANT_BANK_AMOUNT_MATCH_LIMIT;
+  return{difference,limit:PRASHANT_BANK_AMOUNT_MATCH_LIMIT,authorized:owner||prashant&&withinPrashantLimit,ownerApprovalRequired:!owner&&(!prashant||!withinPrashantLimit),policy:owner?'owner':prashant&&withinPrashantLimit?'prashant_under_3':'owner_required'};
+}
 function canManageCategoriesAndVendors(req){return isOwner(req)||isPrashant(req);}
 function canSelectOwnerPersonalTransferAccounts(req){return isOwner(req)||(rolesOfReq(req).includes('admin')&&isPrashant(req));}
 function ownerPersonalTransferClassification(fromNature,toNature){
@@ -6283,7 +6289,7 @@ router.post('/api/expenses/bank-statements/amount-authority-preview',(req,res)=>
       return res.json({success:true,bankAmountAuthority:null,bankAmountAuthorityBlocked:'',bankDate:row.bank.date,originalAmount,bankAmount,axisTransferChargeSplit:{bankRowId,appId,principalAmount:originalAmount,chargeAmount:roundMoney(bankAmount-originalAmount),chargeCategory:'BANK CHARGES',grossAmount:bankAmount}});
     }
     const plan=originalAmount===bankAmount?null:bankAmountAuthorityPolicy.prepare(s,draft,row.bank,movement,bankRowId,'manual',{amountAuthorityAllocations:b.amountAuthorityAllocations});
-    return res.json({success:true,bankAmountAuthority:plan?bankAmountAuthorityPolicy.publicPlan(plan):null,bankAmountAuthorityBlocked:'',bankDate:row.bank.date,originalAmount,bankAmount});
+    return res.json({success:true,bankAmountAuthority:plan?bankAmountAuthorityPolicy.publicPlan(plan):null,manualMatchApproval:plan?bankAmountManualMatchApproval(req,plan):null,bankAmountAuthorityBlocked:'',bankDate:row.bank.date,originalAmount,bankAmount});
   }catch(error){return bankAmountAuthorityError(req,res,error);}
 });
 router.get('/api/expenses/salary-advance-transfer-candidates',(req,res)=>{
@@ -6472,7 +6478,7 @@ router.post('/api/expenses/bank-statements/create-loan-repayment',(req,res)=>{
 });
 router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];
-  let preparedBankAmountAuthorityPlan=null;
+  let preparedBankAmountAuthorityPlan=null,bankAmountManualMatchApprovalRecord=null;
   if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});
   if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot resolve this bank reconciliation.'});
   if(Array.isArray(b.amountAuthorityAllocations)&&b.amountAuthorityAllocations.some(row=>String(row&&(row.nature||row.beneficiaryNature)||'').trim().toUpperCase()==='PERSONAL')&&!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'The Owner must review private card ownership allocations.'});
@@ -6565,6 +6571,11 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   if(b.action==='accept_match'){
     if(roundMoney(num(row.app.debit)+num(row.app.credit))!==roundMoney(num(row.bank.debit)+num(row.bank.credit))){try{const plan=bankAmountAuthorityPolicy.prepare(s,draft,row.bank,row.app,row.id,'manual',{amountAuthorityAllocations:b.amountAuthorityAllocations});if(b.confirmBankAmount===true&&String(b.bankAmountAuthorityFingerprint||'')!==plan.id)return res.status(409).json({success:false,error:'The bank or ledger evidence changed. Review the amount correction again.'});if(b.confirmBankAmount!==true)return res.status(400).json({success:false,error:'Review and explicitly confirm the bank amount correction before saving this match.'});preparedBankAmountAuthorityPlan=plan;}catch(error){return bankAmountAuthorityError(req,res,error);}}
     b.reason=String(b.reason||'Confirmed displayed ledger and bank match; bank amount and date are authoritative');b.remark=String(b.remark||'Confirmed displayed match');
+  }
+  if(preparedBankAmountAuthorityPlan){
+    const approval=bankAmountManualMatchApproval(req,preparedBankAmountAuthorityPlan);
+    if(isPrashant(req)&&!approval.authorized)return res.status(403).json({success:false,ownerApprovalRequired:true,amountDifference:approval.difference,limit:approval.limit,error:'This amount differs by ₹'+approval.difference.toFixed(2)+'. Prashant can manually match differences below ₹3.00; this match requires the Owner.'});
+    bankAmountManualMatchApprovalRecord={policy:approval.policy,amountDifference:approval.difference,limit:approval.limit,authorizedBy:req.user.username,authorizedAt:new Date().toISOString()};
   }
   if(['link_multiple_existing','link_with_rounding','vendor_advance_split'].includes(b.action)){
     const appIds=Array.from(new Set((Array.isArray(b.appIds)?b.appIds:String(b.appIds||b.appId||'').split(',')).map(x=>String(x).trim()).filter(Boolean))),movements=appBankMovements(s,draft.account,draft.nature),linked=appIds.map(id=>movements.find(x=>x.id===id)).filter(Boolean),bankNet=num(row.bank&&row.bank.credit)-num(row.bank&&row.bank.debit),appNet=linked.reduce((n,x)=>n+num(x.credit)-num(x.debit),0);
@@ -6669,7 +6680,7 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   }
   draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:b.action,reason:String(b.reason||'').trim(),category,chargeCategory,postingNature:postingNature||undefined,appId:['opening_vendor_payable_split','link_existing','split_allocation'].includes(b.action)?String(b.appId||'').trim():row.app&&row.app.id,excludedEntry:b.action==='exclude'&&row.app?Object.assign({},row.app):null,appIds:Array.isArray(b.appIds)?b.appIds:[],appNet:num(b.appNet),roundingAmount:num(b.roundingAmount),advanceAmount:num(b.advanceAmount),advanceExpenseIds:Array.isArray(b.advanceExpenseIds)?b.advanceExpenseIds:[],advanceApplications:Array.isArray(b.advanceApplications)?b.advanceApplications:[],otherAccount:String(b.otherAccount||'').trim(),grossAmount:num(b.grossAmount),chargeAmount:num(b.chargeAmount),paytmChargeAmount:num(b.paytmChargeAmount),hiddenChargeAmount:num(b.hiddenChargeAmount),orderIds:Array.isArray(b.orderIds)?b.orderIds.map(String).filter(Boolean):[],transferIds:Array.isArray(b.transferIds)?b.transferIds.map(String).filter(Boolean):[],paytmOrderTargets:Array.isArray(b.paytmOrderTargets)?b.paytmOrderTargets:[],paytmTransferTargets:Array.isArray(b.paytmTransferTargets)?b.paytmTransferTargets:[],otherReceipts:Array.isArray(b.otherReceipts)?b.otherReceipts:[],principalAmount:num(b.principalAmount),openingPayableAmount:num(b.openingPayableAmount),openingNature:normalizedNature(b.openingNature||postingNature||draft.nature),vendor:String(b.vendor||'').trim(),preSystemDates:String(b.preSystemDates||'').trim(),linkedRowId:b.action==='opening_vendor_payable_split'?(view.rows.find(x=>x.app&&x.app.id===String(b.appId||'').trim())||{}).id||'':String(b.linkedRowId||''),remark:String(b.remark||''),linkedTransferAmount:(Array.isArray(b.transferIds)?b.transferIds:[]).reduce((n,id)=>{const t=(s.transfers||[]).find(x=>x.id===id);return n+num(t&&t.amount);},0),by:req.user.username,at:new Date().toISOString()};
   draft.resolutions[b.rowId].bankTruth=b.action==='exclude'&&!!row.bank;
-  if(preparedBankAmountAuthorityPlan){s.bankAmountAuthorityProposals=s.bankAmountAuthorityProposals||{};s.bankAmountAuthorityProposals[preparedBankAmountAuthorityPlan.id]=preparedBankAmountAuthorityPlan;draft.resolutions[b.rowId].bankAmountAuthority={planId:preparedBankAmountAuthorityPlan.id};}
+  if(preparedBankAmountAuthorityPlan){s.bankAmountAuthorityProposals=s.bankAmountAuthorityProposals||{};s.bankAmountAuthorityProposals[preparedBankAmountAuthorityPlan.id]=preparedBankAmountAuthorityPlan;draft.resolutions[b.rowId].bankAmountAuthority={planId:preparedBankAmountAuthorityPlan.id};draft.resolutions[b.rowId].manualMatchApproval=bankAmountManualMatchApprovalRecord;}
   if(b.action==='create_internal_transfer')Object.assign(draft.resolutions[b.rowId],{otherNature:b.otherNature,classification:b.classification,...(ownAccountSelection?{ownAccountSelection}:{}),...(ownAccountTransfer?{ownAccountTransfer}:{}),...(claimantTransferSelection?{claimantTransferSelection}:{})});
   applyReviewedBankDates(s,draft);saveStore(s);res.json(draftReconciliation(s,draft));
 });
