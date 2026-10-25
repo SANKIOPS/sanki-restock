@@ -41,7 +41,8 @@ function create(deps) {
   const tokenSecret = crypto.randomBytes(32);
   function policy() { const result = typeof deps.policy === 'function' ? deps.policy() : deps; if (!result || typeof result.read !== 'function') fail('The audited correction service is unavailable. No records were changed.'); return result; }
   function canAccess(req, card, p) {
-    return !!card && p.canEdit(req) && (!card.ownerOnly || p.isOwner(req));
+    return !!card && p.canEdit(req) && (typeof p.canAccessCard === 'function'
+      ? p.canAccessCard(req, card) === true : !card.ownerOnly || p.isOwner(req));
   }
   function cardFor(snapshot, req, cardId, p) {
     if (!p.canEdit(req)) fail('Manage transactions access is required for corrections.', 403);

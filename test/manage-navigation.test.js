@@ -13,7 +13,7 @@ const { apiAllowedForUser } = require('../auth');
 const person = (...roles) => ({ username: 'test-user', role: roles[0], roles });
 const owner = person('owner');
 const prashant = { username: 'prashant', role: 'admin', roles: ['admin'] };
-const config = { claimantOnly: false, canManageCategories: true, canManageVendors: true, canApprove: true, isAdmin: true, isOwner: true };
+const config = { claimantOnly: false, canManageCategories: true, canManageVendors: true, canApprove: true, canManageCreditCards: true, isAdmin: true, isOwner: true };
 function catalog(user, expenseConfig = config) { return buildCatalog({ modules: visibleFor(user), user, expenseConfig }); }
 function items(heads) { return heads.flatMap(head => head.items); }
 function keys(heads) { return items(heads).map(item => item.key); }
@@ -92,8 +92,24 @@ test('an edit capability alone cannot grant Manage transactions or expand verifi
   assert.equal(verifier.title, 'Counter Cash verification');
 });
 
-test('Prashant catalog retains fixed live modules and excludes private or unrelated tools', () => {
-  const actual = keys(catalog(prashant, { ...config, isOwner: false }));
+test('Manage card tools require the exact server capability and underlying Admin expense access', () => {
+  const granted = items(catalog(prashant, { ...config, isOwner: false, canManageCreditCards: true })).find(item => item.key === 'creditcards');
+  assert.equal(granted.href, '/expenses.html?tab=creditcards');
+  assert.ok(granted.actions.includes('Correct permitted card payments'));
+  assert.match(granted.description, /Approval and reconciliation locks still apply/);
+  assert.doesNotMatch(granted.description, /Owner-only/);
+  for (const canManageCreditCards of [undefined, false, 'true', 1]) {
+    assert.equal(keys(catalog(owner, { ...config, canManageCreditCards })).includes('creditcards'), false);
+  }
+  for (const isAdmin of [undefined, false, 'true', 1]) {
+    assert.equal(keys(catalog(owner, { ...config, isAdmin })).includes('creditcards'), false);
+  }
+  assert.equal(keys(catalog(owner, { ...config, claimantOnly: true })).includes('creditcards'), false);
+  assert.equal(keys(buildCatalog({ user: owner, expenseConfig: config, modules: [] })).includes('creditcards'), false);
+});
+
+test('Prashant catalog retains fixed live modules and excludes ungranted private or unrelated tools', () => {
+  const actual = keys(catalog(prashant, { ...config, isOwner: false, canManageCreditCards: false }));
   for (const key of ['vendors', 'categories', 'groups', 'expenses', 'transactions', 'purchases', 'salary', 'incentives']) assert.ok(actual.includes(key), key);
   for (const key of ['users', 'seo', 'meta-ads', 'catalogue-images', 'sales-orders', 'orders', 'creditcards', 'rentals']) assert.equal(actual.includes(key), false, key);
 });

@@ -58,7 +58,7 @@ function linked(snapshot, req, id, deps) {
   (expense.payments || []).filter(row => !row.accountingExcluded && !row.provisional).forEach(row => savedMoney(row.amount, true));
   const paymentIds = (expense.payments || []).map(row => row.id);
   if (new Set(paymentIds).size !== paymentIds.length) fail('The original payment identities are ambiguous. Review their source history first.');
-  if (expense.ownerOnly && !policy.isOwner(req)) fail('The original expense is restricted to the Owner.', 403);
+  if (typeof policy.canAccessExpense === 'function' ? policy.canAccessExpense(req, expense) !== true : expense.ownerOnly && !policy.isOwner(req)) fail('Your accounting permissions do not allow corrections to the original expense.', 403);
   if ((record.nature === 'PERSONAL' || (source.paymentAllocations || []).some(row => row.personal)) && !policy.canPersonal(req)) fail('Personal-account access is required for this refund correction.', 403);
   if ((store.receipts || []).some(row => !row.accountingExcluded && row.refundRecoveryExpenseId === source.expenseId)) fail('An employee recovery depends on this refund. Correct the recovery through its dedicated workflow first.');
   if (component && component.externalMovementId) fail('This refund links an existing movement. Correct that movement through its dedicated source workflow first.');

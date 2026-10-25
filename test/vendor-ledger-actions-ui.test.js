@@ -8,12 +8,12 @@ const ledgerCode=section('    var vendorPaymentProofRows=','    function renderV
 const managerCode=section('    function openVendorManager(','    // ── ACCOUNT LEDGERS & ACCOUNT-TO-ACCOUNT TRANSFERS');
 const spendingCode=section('    function spendingPaymentCard(','    function loadSpendingDashboard(){');
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
-function harness({owner=false,admin=true,manager=false,expense={},response,tab='vendors'}={}){
+function harness({owner=false,admin=true,manager=false,financialCapability=owner,expense={},response,tab='vendors'}={}){
   const nodes={},calls=[],messages=[],loads=[],confirms=[];
   const node=id=>nodes[id]||(nodes[id]={value:'',textContent:'',innerHTML:'',disabled:false,open:false,files:[],style:{},dataset:{},attrs:{},listeners:{},
     setAttribute(k,v){this.attrs[k]=v;},addEventListener(k,fn){this.listeners[k]=fn;},focus(){},showModal(){this.open=true;},close(){this.open=false;},querySelectorAll(){return[];}});
   const e={id:'EX-00112',nature:'SANKI',status:'paid',date:'2026-08-28',amount:20000,vendor:'UJ',particulars:'Old particulars',ledger:'General',type:'variable',paymentType:'UPI',paidAlready:false,payments:[{id:'PAY-001',amount:20000,account:'Axis',date:'2026-08-28',proof:'/proof-one.jpg'}],...expense};
-  const s={window:{},cfg:{isAdmin:admin,isOwner:owner,canManageVendors:manager,natures:['SANKI','SAMAST'],types:['fixed','variable'],vendors:['UJ','Final Vendor'],vendorsByNature:{SANKI:['UJ','Final Vendor'],SAMAST:['Another Vendor']}},expensesById:{[e.id]:e},vendorManageState:null,tab,el:node,esc,fmt:n=>'₹'+n,opts:()=>'',accountsForNature:()=>['Axis'],encodeURIComponent,
+  const s={window:{},cfg:{isAdmin:admin,isOwner:owner,canManageVendors:manager,canEditExpenseFinancials:financialCapability,natures:['SANKI','SAMAST'],types:['fixed','variable'],vendors:['UJ','Final Vendor'],vendorsByNature:{SANKI:['UJ','Final Vendor'],SAMAST:['Another Vendor']}},expensesById:{[e.id]:e},vendorManageState:null,tab,el:node,esc,fmt:n=>'₹'+n,opts:()=>'',accountsForNature:()=>['Axis'],encodeURIComponent,
     setMsg:(...args)=>messages.push(args),loadConfig:()=>Promise.resolve(),loadVendors:()=>loads.push('vendors'),loadSpendingDashboard:()=>loads.push('spending'),loadList:()=>loads.push('list'),
     uploadFiles:()=>{throw Error('No uploads expected');},uploadFile:()=>{throw Error('No uploads expected');},
     api:(url,options={})=>{calls.push({url,...options});return Promise.resolve(response?response(url,options):options.method==='POST'?{success:true,expense:e,updatedExpenses:1}:{success:true,expense:e});},
@@ -48,13 +48,39 @@ test('late expense requests cannot reopen an editor after switching surface or c
   }
 });
 
-test('all roles including Owner see reconciled financial fields locked but metadata available',async()=>{
-  for(const owner of [false,true]){
-    const h=harness({owner,expense:{financialFieldsLocked:true,financialLockReason:'Payment reconciled'}});await h.s.window.editExpense(h.e.id);
+test('all roles including granted Manage users and Owner see reconciled financial fields locked but metadata available',async()=>{
+  for(const owner of [false,true])for(const financialCapability of [false,true]){
+    const h=harness({owner,financialCapability,expense:{financialFieldsLocked:true,financialLockReason:'Payment reconciled'}});await h.s.window.editExpense(h.e.id);
     for(const id of ['editNature','editDate','editAmount','editTotal','editRequested','editPaidAlready','editPaymentType','editPayingAccount','editPersonalAccount','editInstallment','editBillFile','editQrFile','editPersonalFile'])assert.equal(h.node(id).disabled,true,id);
     for(const id of ['editVendor','editParticulars','editLedger','editType'])assert.equal(h.node(id).disabled,false,id);
     assert.match(h.nodes.editMsg.textContent,/reconciled/);
   }
+});
+
+test('granted Manage financial permission enables unlocked expense amounts and paying account without Owner status',async()=>{
+  const h=harness({owner:false,financialCapability:true,expense:{financialFieldsLocked:false}});await h.s.window.editExpense(h.e.id);
+  for(const id of ['editAmount','editTotal','editRequested','editPayingAccount'])assert.equal(h.node(id).disabled,false,id);
+  assert.equal(h.nodes.editMsg.textContent,'');
+  h.nodes.editAmount.value='19999.63';h.nodes.editPayingAccount.value='Axis';h.nodes.editReason.value='Correct the amount from retained evidence';
+  h.nodes.editGo.onclick();await flush();const payload=JSON.parse(h.calls.find(x=>x.method==='POST').body);
+  assert.equal(payload.amount,'19999.63');assert.equal(payload.paymentAccount,'Axis');assert.equal(payload.editReason,'Correct the amount from retained evidence');
+});
+
+test('expense amount permission fails closed without an exact true capability, including for Owner role labels',async()=>{
+  for(const financialCapability of [undefined,false,'true',1])for(const owner of [false,true]){
+    const h=harness({owner,financialCapability,expense:{financialFieldsLocked:false}});
+    if(financialCapability===undefined)delete h.s.cfg.canEditExpenseFinancials;
+    await h.s.window.editExpense(h.e.id);
+    for(const id of ['editAmount','editTotal','editRequested','editPayingAccount'])assert.equal(h.node(id).disabled,true,id);
+    for(const id of ['editVendor','editParticulars','editLedger','editType'])assert.equal(h.node(id).disabled,false,id);
+    assert.match(h.nodes.editMsg.textContent,/Manage expense financial-edit permission/);
+    assert.doesNotMatch(h.nodes.editMsg.textContent,/Only the Owner/);
+  }
+});
+
+test('restricted cards are labelled by PERSONAL access, not a contradictory Owner-only edit promise',()=>{
+  assert.match(html,/c\.ownerOnly\?'<span>Restricted PERSONAL access<\/span>'/);
+  assert.doesNotMatch(html,/c\.ownerOnly\?'<span>Owner only<\/span>'/);
 });
 
 test('locked saves submit only metadata even if disabled financial inputs are tampered with; refresh preserves current surface',async()=>{
