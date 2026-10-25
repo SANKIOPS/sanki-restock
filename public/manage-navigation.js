@@ -66,8 +66,8 @@
       add('money', 'receivables', 'Receivables, refunds & returns', 'Open the current receivables and refund-recovery workflows.', '/expenses.html?tab=receivables', ['Review receivables', 'Review refunds and returns']);
       add('money', 'audit', 'Audit history', 'Review existing expense and accounting change history.', '/expenses.html?tab=audit', ['Review changes']);
     }
-    if (expenses && cfg.isOwner === true) {
-      add('money', 'creditcards', 'Manage credit cards', 'Open the existing Owner-only card management and statement tools.', '/expenses.html?tab=creditcards', ['Manage cards', 'Review statements']);
+    if (expenses && cfg.isAdmin === true && cfg.canManageCreditCards === true) {
+      add('money', 'creditcards', 'Manage credit cards', 'Open permitted card management, statement and audited payment-correction tools. Approval and reconciliation locks still apply.', '/expenses.html?tab=creditcards', ['Manage permitted cards', 'Review statements', 'Correct permitted card payments']);
     }
     // The current Rental page still mounts its tools only for the Owner,
     // even though the registry also retains Prashant's existing page entry.
