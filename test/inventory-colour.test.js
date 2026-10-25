@@ -63,6 +63,43 @@ test('named options are authoritative, aliases normalize and ambiguous or unknow
   assert.equal(view.variantColour({variant:'Universal Size (Fits M-3XL)',colour:'See product'},{title:'Three cards shirt'}),'');
   assert.deepEqual(view.colours(product('unknown',[variant('UNKNOWN','See product',1)]),'all'),[],'placeholders are not offered as colour choices');
 });
+test('size-only Shopify colour values are excluded while valid fallback colours remain usable',()=>{
+  const sizes=['XS',' S ','M','L','XL','XXL','2xl','3xl','4XL','5XL','34','42','S / M','M-3XL','Free Size','One Size Fits All','Universal Size (Fits M-3XL)'];
+  for(const value of sizes){
+    assert.equal(view.colourLabel(value),'',value+' must not become a colour choice');
+    assert.equal(view.variantColour({selectedOptions:[{name:'Color',value}],colour:value,variant:'Black / '+value},{}),'Black','variant colour fallback for '+value);
+    assert.equal(view.variantColour({colour:value,variant:value},{title:'Classic Navy trousers'}),'Navy','product colour fallback for '+value);
+    assert.equal(view.variantColour({color:value,variant:value},{title:'Everyday trousers'}),'','unknown colour stays unknown for '+value);
+  }
+  assert.equal(view.variantColour({selectedOptions:[{name:'Shade',value:'L'}],colour:'Olive Green',variant:'L'},{}),'Olive Green','a valid legacy shade survives a misnamed size option');
+});
+
+test('custom shade names and numbers within real colour labels are preserved',()=>{
+  for(const value of ['Petrol','Mauve','Dusty Rose','Blue 2','Navy 19','Pantone 19-4052','Black / White']){
+    const expected=view.colourLabel(value);
+    assert.ok(expected,value+' is a valid custom colour label');
+    assert.equal(view.variantColour({selectedOptions:[{name:'Colour',value}],variant:'M'},{title:'Black shirt'}),expected,'named custom colour stays authoritative');
+  }
+  assert.equal(view.colourLabel('BLUE 2'),'Blue 2');
+  assert.equal(view.colourLabel('BLACK / WHITE'),'Black / White');
+});
+
+test('colour facets omit misnamed sizes and retain AND filters and unchanged underlying stock',()=>{
+  const p=product('bad-option',[
+    variant('BLACK-2XL','2xl',2,{selectedOptions:[{name:'Color',value:'2xl'}],variant:'Black / 2XL'}),
+    variant('BLACK-L','L',1,{selectedOptions:[{name:'Color',value:'L'}],variant:'Black / L'}),
+    variant('CUSTOM','Navy 19',4),
+    variant('UNKNOWN','3xl',5,{variant:'3XL'})
+  ]);
+  const c=harness([p,product('other-category',[variant('SHIRT','Black',8)],{category:'Shirts'})],{Colour:'Black',Collection:'SANKI Casuals',Category:'Trousers'});
+  assert.deepEqual(Array.from(c.allowedValues('Colour')),['Black','Navy 19']);
+  assert.deepEqual(Array.from(c.selected(),item=>item.handle),['bad-option']);
+  const shown=view.listProduct(p,'all','Black');
+  assert.deepEqual(shown.variants.map(v=>v.sku),['BLACK-2XL','BLACK-L']);
+  assert.equal(shown.availableQty,3);assert.equal(shown.warehouseQty,3);assert.equal(shown.totalQty,3);
+  assert.equal(p.availableQty,12);assert.equal(p.warehouseQty,12);assert.equal(p.totalQty,12);assert.equal(p.variants.length,4);
+});
+
 test('explicit care and location views filter colours while retaining truthful owned totals',()=>{
   const p=product('care',[variant('BLACK','Black',1,{displayQty:1,warehouseQty:0}),variant('BLACK-CLEAN','Black',0,{cleaningQty:2,totalQty:2}),variant('WHITE','White',4)]);
   assert.equal(view.includes(p,'warehouse','Black'),false);assert.equal(view.includes(p,'display','Black'),true);
