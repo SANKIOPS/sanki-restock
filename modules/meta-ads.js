@@ -443,6 +443,30 @@ function createStore(options = {}) {
       validateRelationships(state);if(changedRecords){state.revision++;save(state);}return {revision:state.revision,changedRecords};
     });
   }
+  function copySettings(body,actor){
+    const allowed={destination:['destination','destinationRef','whatsappNumber','performanceGoal'],budget:['budgetDaily'],locations:['locations'],interests:['interests','interestsConfirmed','behaviors','behaviorsConfirmed','placements','placementsConfirmed'],age:['ageMin','ageMax','gender'],collection:['collection'],creativeTypes:['creativeTypes'],model:['model']};
+    if(!plain(body)||!Array.isArray(body.targets)||!body.targets.length||body.targets.length>2000||new Set(body.targets).size!==body.targets.length||!Array.isArray(body.groups)||!body.groups.length||body.groups.some(g=>!allowed[g]))fail('Choose target ad sets and settings to copy.');
+    return locked(()=>{
+      const state=loadUnlocked();if(body.revision!==state.revision)fail('Records changed. Reload before copying.',409);
+      const source=state.adSets.find(s=>s.id===body.source&&!s.archived);if(!source)fail('Source ad set not found.',404);
+      const targets=body.targets.map(id=>state.adSets.find(s=>s.id===id&&!s.archived&&s.id!==source.id&&s.campaignId===source.campaignId));if(targets.some(s=>!s))fail('Choose other ad sets in the same campaign.');
+      const sourceAds=state.ads.filter(a=>a.adSetId===source.id&&!a.archived),setPatch={},adPatch={};
+      for(const group of body.groups)for(const field of allowed[group]){
+        if(['collection','creativeTypes','model'].includes(group)){
+          const values=sourceAds.map(a=>a[field]);if(!values.length||values.some(v=>JSON.stringify(v)!==JSON.stringify(values[0])))fail('Source ads have different '+group+' values. Copy creative details separately.');
+          if(values[0]!=null&&values[0]!==''&&(!Array.isArray(values[0])||values[0].length))adPatch[field]=clone(values[0]);
+        }else if(source[field]!=null&&source[field]!==''&&(!Array.isArray(source[field])||source[field].length||(field==='interests'&&source.interestsConfirmed)||(field==='behaviors'&&source.behaviorsConfirmed))&&(!field.endsWith('Confirmed')||source[field]===true))setPatch[field]=clone(source[field]);
+      }
+      let changedRecords=0;const now=clock();
+      const apply=(type,previous,patch)=>{
+        const record=normalizeRecord(type,patch,previous),changed=Object.keys(patch).filter(k=>JSON.stringify(previous[k])!==JSON.stringify(record[k]));if(!changed.length)return;
+        Object.assign(record,{createdAt:previous.createdAt,createdBy:previous.createdBy,updatedAt:now,updatedBy:actor});state[type][state[type].findIndex(r=>r.id===previous.id)]=record;changedRecords++;
+        for(const field of changed)state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:record.id,field,before:previous[field]??null,after:record[field],action:'update',reason:'Copy settings from ad set '+source.name,revision:state.revision+1});
+      };
+      for(const target of targets){apply('adSets',target,setPatch);for(const ad of state.ads.filter(a=>a.adSetId===target.id&&!a.archived))apply('ads',ad,adPatch);}
+      validateRelationships(state);if(changedRecords){state.revision++;save(state);}return {revision:state.revision,changedRecords};
+    });
+  }
   function confirmStatuses(body,actor){
     if(!plain(body)||!Array.isArray(body.records)||!body.records.length||body.records.length>2000)fail('Choose statuses to confirm.');
     return locked(()=>{
@@ -460,7 +484,7 @@ function createStore(options = {}) {
       if(changedRecords){state.revision++;save(state);}return {revision:state.revision,changedRecords};
     });
   }
-  return { file, load, view, mutate, importSetup, importPerformance,bulk,confirmStatuses };
+  return { file, load, view, mutate, importSetup, importPerformance,bulk,confirmStatuses,copySettings };
 }
 
 function createRouter(store = createStore()) {
@@ -515,6 +539,7 @@ function createRouter(store = createStore()) {
     }catch(e){sendError(e,res);}
   }));
   router.use(BASE, express.json({ limit: '128kb' }));
+  router.post(`${BASE}/copy-settings`,(req,res)=>{try{res.json({success:true,...store.copySettings(req.body,req.user.username)});}catch(e){sendError(e,res);}});
   router.post(`${BASE}/confirm-statuses`,(req,res)=>{try{res.json({success:true,...store.confirmStatuses(req.body,req.user.username)});}catch(e){sendError(e,res);}});
   router.post(`${BASE}/bulk`,(req,res)=>{try{res.json({success:true,...store.bulk(req.body,req.user.username)});}catch(e){sendError(e,res);}});
   for (const [route, type] of Object.entries(TYPES)) {
