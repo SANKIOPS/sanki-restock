@@ -140,7 +140,7 @@ function loadCreditCards(){bankAuthorityTransaction.recover(DATA_DIR);try{return
 function creditCardName(card){return card&&`${card.name} ${card.last4}`.trim();}
 function visibleCreditCards(req){return Object.values(loadCreditCards().cards||{}).filter(card=>card.active!==false&&canManageRestrictedCard(req,card));}
 function resolveCreditCard(req,value){const key=String(value||'').trim().toLowerCase();return visibleCreditCards(req).find(card=>card.id.toLowerCase()===key||creditCardName(card).toLowerCase()===key);}
-function creditCardByAccount(value){const key=String(value||'').trim().toLowerCase();return Object.values(loadCreditCards().cards||{}).find(card=>card.active!==false&&(String(card.id||'').toLowerCase()===key||creditCardName(card).toLowerCase()===key));}
+function creditCardByAccount(value,cardsSnapshot){const key=String(value||'').trim().toLowerCase(),cards=cardsSnapshot===undefined?loadCreditCards():cardsSnapshot;return Object.values(cards.cards||{}).find(card=>card.active!==false&&(String(card.id||'').toLowerCase()===key||creditCardName(card).toLowerCase()===key));}
 function cashEntryIsVisible(account,date) { return String(account||'')!==DEFAULT_COUNTER_CASH||String(date||'').slice(0,10)>=COUNTER_CASH_RESET_DATE; }
 function vendorKey(v) { return String(v || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); }
 function cleanVendorName(v) { return String(v||'').normalize('NFKC').replace(/[\u200B-\u200D\u2060\uFEFF]/g,'').replace(/\s+/g,' ').trim(); }
@@ -2286,11 +2286,11 @@ function paytmReportView(s) {
 bankMatches.forEach(x=>{x.reconciliationStatus=statusById.get(x.settlementId);if(x.reconciliationStatus.historicalEvidenceLink){x.posted=true;x.postingId=x.reconciliationStatus.historicalEvidenceLink.historicalSettlementId;}x.readyToFinalize=x.reconciliationStatus.code==='ready';x.readyForBulkFinalize=x.reconciliationStatus.code==='ready';x.readyToPost=x.readyToPost&&x.reconciliationStatus.bankLinkReady;});
   return {transactions,payouts:bankMatches,orderMatches,returnReviews:returnResolutionView(s),imports:(s.paytmReportImports||[]).slice().reverse(),legacyDrafts,reportPreviews:paytmPreviewStatuses(s),reconciliationStatus:sharedStatus,paytmCoverage:paytmProjection.coverage,from:PAYTM_START_DATE,through:indiaBusinessDate()};
 }
-function reconciliationAccountsForNature(s,nature){
-  const n=normalizedNature(nature),cards=n==='SANKI'?Object.values(loadCreditCards().cards||{}).filter(card=>card.active!==false).map(creditCardName):[];
+function reconciliationAccountsForNature(s,nature,cardsSnapshot){
+  const n=normalizedNature(nature),cards=n==='SANKI'?Object.values((cardsSnapshot===undefined?loadCreditCards():cardsSnapshot).cards||{}).filter(card=>card.active!==false).map(creditCardName):[];
   return Array.from(new Set(ledgerAccountsForNature(s,n).concat(cards))).filter(account=>account&&!(n==='PERSONAL'&&isSharedBankReconciliationAccount(account))).sort((a,b)=>a.localeCompare(b));
 }
-function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||''),card=creditCardByAccount(name);if(sharedBankBookConflict(s,name))return false;if(isSharedBankReconciliationAccount(name)){if(n!=='SAMAST'||!(canManagePersonalAccounting(req)||isPrashant(req))||!accountVisibleToReq(req,name))return false;return reconciliationAccountsForNature(s,'SAMAST').some(x=>x.toLowerCase()===name.toLowerCase());}if((!isAdmin(req)&&!(n==='PERSONAL'&&canManagePersonalAccounting(req)))||!approvalNatures(req).includes(n)||!accountVisibleToReq(req,name))return false;if(n==='PERSONAL'&&!canManagePersonalAccounting(req))return false;if(card&&!canManageRestrictedCard(req,card))return false;return reconciliationAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase());}
+function canAccessBankReconciliation(req,s,nature,account,cardsSnapshot){const n=normalizedNature(nature),name=String(account||''),card=creditCardByAccount(name,cardsSnapshot);if(sharedBankBookConflict(s,name))return false;if(isSharedBankReconciliationAccount(name)){if(n!=='SAMAST'||!(canManagePersonalAccounting(req)||isPrashant(req))||!accountVisibleToReq(req,name))return false;return reconciliationAccountsForNature(s,'SAMAST',cardsSnapshot).some(x=>x.toLowerCase()===name.toLowerCase());}if((!isAdmin(req)&&!(n==='PERSONAL'&&canManagePersonalAccounting(req)))||!approvalNatures(req).includes(n)||!accountVisibleToReq(req,name))return false;if(n==='PERSONAL'&&!canManagePersonalAccounting(req))return false;if(card&&!canManageRestrictedCard(req,card))return false;return reconciliationAccountsForNature(s,n,cardsSnapshot).some(x=>x.toLowerCase()===name.toLowerCase());}
 function isBankLedgerName(name){return !/cash/i.test(String(name||''))&&![PAYTM_CLEARING_ACCOUNT,VELOCITY_CLEARING_ACCOUNT,'Velocity Shipping Wallet',gokwikAccounting.CLEARING].includes(String(name||''));}
 function canAccessBankDraft(req,s,draft){return !!draft&&canAccessBankReconciliation(req,s,draft.nature,draft.account);}
 // Who may APPROVE & PAY: admin or accounting. A pure claimant may only LOG.
@@ -4605,6 +4605,21 @@ function privateBankAuthorityLedgerEntry(req,s,account,entry,sourceIds){
   if(!synthesized&&!privateSource)return entry;
   return{id:entry.id,date:entry.date,kind:privateSource?'personal_bank_cash_redacted':'verified_bank_cash',entity:entry.entity||'',description:privateSource?'Owner personal bank movement · private details restricted [PERSONAL]':'Verified bank cash movement · source details restricted',reference:entry.reference||'',debit:num(entry.debit),credit:num(entry.credit),proof:'',proofs:[],note:'',by:'',editable:false,deletable:false,privacyRedacted:true,bankMovementAuthority:marker,...(entry.sourceIds?{sourceIds:entry.sourceIds.slice()}:{}),...(entry.linkedEntryIds?{linkedEntryIds:entry.linkedEntryIds.slice()}:{}),...(entry.originalDate?{originalDate:entry.originalDate}:{}),...(entry.bankSourceMissing?{bankSourceMissing:true}:{})};
 }
+router.get('/api/expenses/bank-opening-anchor-evidence', (req, res) => {
+  const {nature,account,draftId}=req.query;
+  if(!['SANKI','SAMAST','PERSONAL'].includes(nature)||![account,draftId].every(value=>typeof value==='string'&&value.length>0&&value.length<=256&&value.trim()===value))return res.status(400).json({success:false,error:'Select an exact account, entity and saved draft.'});
+  const shared=isSharedBankReconciliationAccount(account);
+  if((!isAdmin(req)&&!(nature==='PERSONAL'&&canManagePersonalAccounting(req))&&!(shared&&nature==='SAMAST'&&(canManagePersonalAccounting(req)||isPrashant(req))))||(!shared&&!approvalNatures(req).includes(nature))||!accountVisibleToReq(req,account)||(nature==='PERSONAL'&&!canManagePersonalAccounting(req)))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation evidence.'});
+  let snapshot;try{snapshot=readLedgerEditSnapshot();}catch(error){return res.status(409).json({success:false,error:'The accounting evidence cannot be read safely. Complete its protected recovery workflow first; no records were changed.'});}
+  // Pass the already-read card snapshot: normal card discovery can recover an
+  // accounting journal, which is forbidden for this evidence-only endpoint.
+  try{
+    const s=snapshot.store,cards=snapshot.external[CREDIT_CARD_PATH]||{cards:{}};
+    if(!canAccessBankReconciliation(req,s,nature,account,cards))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation evidence.'});
+    const out=require('./bank-opening-anchor-evidence').snapshot(s,{nature,account,bookKey:bankStatementBookKey(nature,account),draftId});
+    return res.status(out.error?out.status||400:200).json(out.error?{success:false,error:out.error}:out);
+  }catch(error){return res.status(409).json({success:false,error:'The saved opening-anchor evidence cannot be interpreted safely. Review its retained sources; no records were changed.'});}
+});
 router.get('/api/expenses/bank-reconciliation-evidence', (req, res) => {
   const nature=normalizedNature(req.query.nature),account=String(req.query.account||'');
   if(nature!=='PERSONAL'||!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation evidence.'});
