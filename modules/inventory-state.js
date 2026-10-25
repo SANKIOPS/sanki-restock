@@ -39,10 +39,13 @@ function normalizeItem(n) {
     if (!names.every(k => Number.isSafeInteger(quantities[k]))) fail('Shopify returned incomplete inventory quantities.', 502);
     return { locationId: l.location.id, location: l.location.name, ...quantities };
   });
-  return { id: n.id, sku: (n.sku || '').trim().toUpperCase(), tracked: n.tracked, variantId: n.variant.id, variant: n.variant.title, price: n.variant.price != null && String(n.variant.price).trim() !== '' && Number.isFinite(Number(n.variant.price)) && Number(n.variant.price) >= 0 ? Number(n.variant.price) : null, inventoryPolicy: n.variant.inventoryPolicy, unitCost: Number(n.unitCost?.amount) || 0, product: n.variant.product, levels };
+  const selectedOptions = (n.variant.selectedOptions || []).filter(o => o && typeof o.name === 'string' && typeof o.value === 'string').map(o => ({ name: o.name.trim(), value: o.value.trim() }));
+  const colour = selectedOptions.find(o => /^(colou?r|shade)$/i.test(o.name))?.value || '';
+  const size = selectedOptions.find(o => /^size$/i.test(o.name))?.value || '';
+  return { id: n.id, sku: (n.sku || '').trim().toUpperCase(), tracked: n.tracked, variantId: n.variant.id, variant: n.variant.title, selectedOptions, colour, size, price: n.variant.price != null && String(n.variant.price).trim() !== '' && Number.isFinite(Number(n.variant.price)) && Number(n.variant.price) >= 0 ? Number(n.variant.price) : null, inventoryPolicy: n.variant.inventoryPolicy, unitCost: Number(n.unitCost?.amount) || 0, product: n.variant.product, levels };
 }
 const levelFields = 'nodes{location{id name} quantities(names:$names){name quantity}} pageInfo{hasNextPage endCursor}';
-const itemFields = `id sku tracked unitCost{amount} variant{id title price inventoryPolicy product{id handle title productType tags status updatedAt featuredImage{url}}} inventoryLevels(first:2){${levelFields}}`;
+const itemFields = `id sku tracked unitCost{amount} variant{id title price inventoryPolicy selectedOptions{name value} product{id handle title productType tags status updatedAt featuredImage{url}}} inventoryLevels(first:2){${levelFields}}`;
 async function completeItem(n, client) {
   if (!n) return null;
   let pi = n.inventoryLevels.pageInfo;
@@ -115,7 +118,7 @@ function catalog(s, physical, purchases = metadata.loadPurchases()) {
     }
     const previous = (base.variants || []).find(v => String(v.sku).trim().toUpperCase() === item.sku) || {};
     const q = quantities(item, s.mapping), racks = rackFor(item.sku);
-    products.get(p.handle).variants.push({ ...previous, sku: item.sku, variant: item.variant, price: item.price ?? null, inventoryItemId: item.id, ...q, ...racks, rackReferenceNeedsVerification: racks.rackReferenceNeedsVerification || (q.warehouseQty > 0 && !racks.warehouseRacks.length) });
+    products.get(p.handle).variants.push({ ...previous, sku: item.sku, variant: item.variant, selectedOptions: item.selectedOptions || [], colour: item.colour || previous.colour || '', size: item.size || previous.size || '', price: item.price ?? null, inventoryItemId: item.id, ...q, ...racks, rackReferenceNeedsVerification: racks.rackReferenceNeedsVerification || (q.warehouseQty > 0 && !racks.warehouseRacks.length) });
   }
   return [...products.values()].map(p => {
     for (const k of Object.keys(quantities({ levels: [] }))) p[k] = p.variants.reduce((n, v) => n + v[k], 0);
