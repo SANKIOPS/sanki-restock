@@ -61,3 +61,5 @@ main{max-width:none;padding:20px 18px 35px}.page-header h1{font-size:25px;letter
 #lwRows th:nth-child(n){padding:8px 3px!important;font-size:10px!important;line-height:1.4!important}
 
 #lwRows table.lw-performance{table-layout:auto!important;min-width:2600px!important;width:max-content!important}#lwRows table.lw-performance th:nth-child(n),#lwRows table.lw-performance td{width:auto!important;min-width:115px;max-width:240px;padding:10px 12px!important;font-size:12px!important;overflow-wrap:normal!important}#lwRows table.lw-performance th:nth-child(-n+3){min-width:180px}#lwRows table.lw-performance td:nth-child(n+4){white-space:nowrap;text-align:right}
+
+#lwRows table:not(.lw-performance){min-width:1600px!important}#lwRows table:not(.lw-performance) th:nth-child(n){width:5%}#lwRows table:not(.lw-performance) th:nth-child(2),#lwRows table:not(.lw-performance) th:nth-child(3){width:8%}#lwRows table:not(.lw-performance) th:nth-child(4){width:7%}#lwRows table:not(.lw-performance) th:nth-child(7),#lwRows table:not(.lw-performance) th:nth-child(8){width:4%}#lwRows table:not(.lw-performance) th:nth-child(14),#lwRows table:not(.lw-performance) th:nth-child(18){width:7%}

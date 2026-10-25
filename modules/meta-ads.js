@@ -34,7 +34,7 @@ const SCHEMAS = {
     status: ['status'], confirmedOn: ['date'], notes: ['text', 5000]
   },
   ads: {
-    collection:['text',80],creativeTypes:['list',100],
+    product:['text',200],skus:['list',120],collection:['text',80],creativeTypes:['list',100],
     metaSourceId: ['text',120], adSetId: ['id', true], name: ['text', 200, true], model: ['text', 160],
     format: ['text', 100], description: ['text', 5000], mediaUrls: ['urls'],
     assessment:['text',1000],setupSource:['text',60000],whatsappNumber:['phone'],mediaCount: ['count'], cta: ['text', 150], primaryText: ['text', 10000],
@@ -444,7 +444,7 @@ function createStore(options = {}) {
     });
   }
   function copySettings(body,actor){
-    const allowed={destination:['destination','destinationRef','whatsappNumber','performanceGoal'],budget:['budgetDaily'],locations:['locations'],interests:['interests','interestsConfirmed','behaviors','behaviorsConfirmed','placements','placementsConfirmed'],age:['ageMin','ageMax','gender'],collection:['collection'],creativeTypes:['creativeTypes'],model:['model']};
+    const allowed={destination:['destination','destinationRef','whatsappNumber','performanceGoal'],budget:['budgetDaily'],locations:['locations'],interests:['interests','interestsConfirmed','behaviors','behaviorsConfirmed','placements','placementsConfirmed'],age:['ageMin','ageMax','gender'],collection:['collection'],creativeTypes:['creativeTypes'],model:['model'],product:['product'],skus:['skus']};
     if(!plain(body)||!Array.isArray(body.targets)||!body.targets.length||body.targets.length>2000||new Set(body.targets).size!==body.targets.length||!Array.isArray(body.groups)||!body.groups.length||body.groups.some(g=>!allowed[g]))fail('Choose target ad sets and settings to copy.');
     return locked(()=>{
       const state=loadUnlocked();if(body.revision!==state.revision)fail('Records changed. Reload before copying.',409);
@@ -452,7 +452,7 @@ function createStore(options = {}) {
       const targets=body.targets.map(id=>state.adSets.find(s=>s.id===id&&!s.archived&&s.id!==source.id&&s.campaignId===source.campaignId));if(targets.some(s=>!s))fail('Choose other ad sets in the same campaign.');
       const sourceAds=state.ads.filter(a=>a.adSetId===source.id&&!a.archived),setPatch={},adPatch={};
       for(const group of body.groups)for(const field of allowed[group]){
-        if(['collection','creativeTypes','model'].includes(group)){
+        if(['collection','creativeTypes','model','product','skus'].includes(group)){
           const values=sourceAds.map(a=>a[field]);if(!values.length||values.some(v=>JSON.stringify(v)!==JSON.stringify(values[0])))fail('Source ads have different '+group+' values. Copy creative details separately.');
           if(values[0]!=null&&values[0]!==''&&(!Array.isArray(values[0])||values[0].length))adPatch[field]=clone(values[0]);
         }else if(source[field]!=null&&source[field]!==''&&(!Array.isArray(source[field])||source[field].length||(field==='interests'&&source.interestsConfirmed)||(field==='behaviors'&&source.behaviorsConfirmed))&&(!field.endsWith('Confirmed')||source[field]===true))setPatch[field]=clone(source[field]);
