@@ -123,6 +123,7 @@
       col('adSetId','Ad set',r => display((adSetFor(view,r)||{}).name),false,r=>(adSetFor(view,r)||{}).name),
       col('collection','Collection',r => display((adSetFor(view,r)||{}).collection),false,r=>(adSetFor(view,r)||{}).collection),
       col('model','Model',r => display(r.model)),
+      col('product','Product',r=>display(r.product)),col('skus','SKUs used',r=>lines(r.skus||[]),false,r=>(r.skus||[]).join(' ')),
       col('description','Creative concept',r => display(r.description) + note(r.format)),
       col('mediaCount','Selected media',r => integer(r.mediaCount) + note(r.mediaUrls.length ? r.mediaUrls.length+' linked file(s)' : 'File links pending'),true),
       col('cta','Call to action',r => display(r.cta)),
@@ -331,6 +332,7 @@
     ];
     if(type==='ads')return [
       f('collection','Collection','select',{options:[['','Unconfirmed'],['Femme','Femme'],['Homme','Homme'],['Studio','Studio'],['Both','Both'],['Other','Other']]}),
+      f('product','Product','text',{max:200,help:'For example: Shirts, T-shirts, Trousers.'}),f('skus','SKUs used in the video','list',{wide:true,help:'One SKU per line. Press Enter for the next SKU.'}),
       f('creativeTypes','Creative types','list',{wide:true,help:'One type per line. Examples: Aesthetic, Vocal, UGC, Store walkthrough. Add any type you need; confirm from the actual creative.'}),
       f('adSetId','Ad set','select',{required:true,wide:true,options:state.adSets.filter(x=>!isArchived('adSets',x)).map(x=>[x.id,x.name])}),
       f('name','Ad name','text',{required:true,max:200}),f('model','Model / creator','text',{max:160}),f('format','Creative format','text',{max:100}),

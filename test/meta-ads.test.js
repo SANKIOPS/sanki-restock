@@ -278,3 +278,11 @@ test('copy settings stays within campaign, preserves identity and metrics, and r
   assert.throws(()=>store.copySettings({revision:after.revision,source:'S1',targets:['S1'],groups:['age']},'tester'),/same campaign/);
   assert.throws(()=>store.copySettings({revision:after.revision,source:'S1',targets:['S2'],groups:['status']},'tester'),/Choose target/);
 });
+
+test('ad product and line-separated SKU list persist with per-field history and survive setup imports',async t=>{
+  const {store,write}=await fixture(t);
+  const saved=await write('PATCH','/ads/A1',{product:'T-shirts',skus:['SKU-001','SKU-002']});assert.equal(saved.success,true);
+  const current=store.load();assert.deepEqual(current.ads[0].skus,['SKU-001','SKU-002']);assert.equal(current.ads[0].product,'T-shirts');
+  store.importSetup({campaigns:[],adSets:[],ads:[{id:'A1',adSetId:'S1',name:'Updated video'}]},current.revision,'tester');
+  const after=store.load();assert.equal(after.ads[0].product,'T-shirts');assert.deepEqual(after.ads[0].skus,['SKU-001','SKU-002']);assert.ok(after.changes.some(c=>c.field==='skus'));
+});
