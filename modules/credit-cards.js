@@ -12,6 +12,7 @@ const expenseRefunds=require('./expense-refunds');
 const bankAuthorityTransaction=require('./bank-authority-transaction');
 const settlements=require('./credit-card-settlements');
 const reviewDrafts=require('./credit-card-review-drafts');
+const reviewArchives=require('./credit-card-review-archives');
 const DATA_DIR=process.env.DATA_PATH?path.dirname(process.env.DATA_PATH):path.join(__dirname,'..');
 const STORE_PATH=path.join(DATA_DIR,'credit-cards.json');
 const EXP_PATH=path.join(DATA_DIR,'expenses.json');
@@ -64,17 +65,18 @@ function allowed(req){return roles(req).some(x=>['admin','owner','accounting'].i
 function owner(req){return roles(req).some(x=>['admin','owner'].includes(x));}
 function guard(req,res,next){return allowed(req)?next():res.status(403).json({success:false,error:'Credit cards are admin/accounting only.'});}
 function visibleCard(req,c){const policy=expenseModule.sourceCorrectionPolicy;return !!c&&(policy&&typeof policy.canAccessCard==='function'?policy.canAccessCard(req,c)===true:!c.ownerOnly||roles(req).includes('owner'));}
-function audit(s,req,action,subjectId,details){s.auditSeq=(s.auditSeq||0)+1;s.audit.push({id:'CCA-'+String(s.auditSeq).padStart(6,'0'),at:new Date().toISOString(),by:req.user&&req.user.username||'admin',action,subjectId,details:details||{}});}
+function audit(s,req,action,subjectId,details,at){s.auditSeq=(s.auditSeq||0)+1;s.audit.push({id:'CCA-'+String(s.auditSeq).padStart(6,'0'),at:at||new Date().toISOString(),by:req.user&&req.user.username||'admin',action,subjectId,details:details||{}});}
 function cardName(c){return c.name+' '+c.last4;}
 function merchantText(v){return String(v||'').toLowerCase().replace(/\b(?:upi|pos|txn|ref|payment|purchase|debit|credit)\b/g,' ').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();}
 function merchantKey(v){const s=merchantText(v);return s.split(' ').filter(x=>x.length>2&&!/^\d+$/.test(x)).slice(0,3).join(' ');}
 function suggestRule(s,narration){const text=merchantText(narration),rules=Object.values(s.merchantRules||{}).filter(r=>text.includes(r.pattern)).sort((a,b)=>b.pattern.length-a.pattern.length);return rules[0]||null;}
 function inferClassification(row){const n=String(row.description||'').toLowerCase();if(row.credit){if(settlements.isSettlementNarration(n))return'card_payment';if(/refund|reversal|reversed|chargeback/.test(n))return'refund';return'unclassified_credit';}if(/emi/.test(n)&&/interest/.test(n))return'emi_interest';if(/emi/.test(n))return'emi_principal';if(/fee|charge|interest|gst/.test(n))return'fee';return'expense';}
 function expenseType(name){const n=String(name||'').toLowerCase();if(/rent|salary/.test(n))return'fixed';if(/marketing|advertis|meta|social media|promotion|model|shoot/.test(n))return'marketing';if(/subscription|fee|charge|bank|internet|wifi|technology|telephone|courier|packing|freight/.test(n))return'running';return'variable';}
-function assertDiscardReview(s,st,c,exp,req,external={}){
+function assertDiscardReview(s,st,c,exp,req,external={},operation='discard'){
   const policy=expenseModule.sourceCorrectionPolicy;
   if(!allowed(req)||!c||!visibleCard(req,c))throw Object.assign(new Error('This card review is unavailable or inaccessible.'),{status:403});
-  return reviewDrafts.assertDiscardable({cards:s,expenses:exp,statement:st,card:c,external,canPersonal:canReviewPersonal(req),
+  const check=operation==='archive'?reviewArchives.assertArchivable:operation==='restore'?reviewArchives.assertRestorable:reviewDrafts.assertDiscardable;
+  return check({cards:s,expenses:exp,statement:st,card:c,external,canPersonal:canReviewPersonal(req),
     visibleSource:(nature,account)=>settlementSourceVisible(req,nature,account),
     visibleExpense:expense=>!!(policy&&policy.canAccessExpense&&policy.canAccessExpense(req,expense)===true),
     assertUnlocked:policy&&policy.assertUnlocked});
@@ -82,8 +84,14 @@ function assertDiscardReview(s,st,c,exp,req,external={}){
 function discardReviewState(s,st,c,exp,req){
   // Advisory UI state; the POST repeats these checks with every linked-store
   // snapshot, then compares all raw evidence immediately before its commit.
-  try{assertDiscardReview(s,st,c,exp,req);return{canDiscardReview:true,discardReviewBlockedReason:''};}
-  catch(error){return{canDiscardReview:false,discardReviewBlockedReason:error.message};}
+  try{assertDiscardReview(s,st,c,exp,req);return{...archiveReviewState(s,st,c,exp,req),canDiscardReview:true,discardReviewBlockedReason:''};}
+  catch(error){return{...archiveReviewState(s,st,c,exp,req),canDiscardReview:false,discardReviewBlockedReason:error.message};}
+}
+function archiveReviewState(s,st,c,exp,req){
+  const restoring=st.status==='archived',result={canArchiveReview:false,canRestoreReview:false,archiveReviewBlockedReason:'',restoreReviewBlockedReason:''};
+  try{assertDiscardReview(s,st,c,exp,req,{},restoring?'restore':'archive');result[restoring?'canRestoreReview':'canArchiveReview']=true;}
+  catch(error){result[restoring?'restoreReviewBlockedReason':'archiveReviewBlockedReason']=error.message;}
+  return result;
 }
 function statementView(s,st,req){const card=s.cards[st.cardId],exp=loadExpenses(),canView=(nature,account)=>settlementSourceVisible(req,nature,account),rows=(st.rows||[]).map(r=>Object.assign({},r,{merchant:cardAccounting.merchantName(r.merchant||r.narration,card&&(card.issuingBank||card.name)),suggested:!!r.suggestedCategory,duplicateWarnings:visibleDuplicateWarnings(s,st,r,req,exp),settlementCandidates:num(r.credit)>0?settlements.candidates(s,exp,st,r,canView):[]},privateSettlement(req,r)?{settlementProtected:true,settlementProtectedMessage:'Private settlement source — Owner review required',settlementMode:'',settlementSourceId:'',settlementSourceFingerprint:'',settlementReason:'',settlementReference:'',settlementLegacyConfirmed:false,payingNature:'',payingAccount:'',settlementCandidates:[]}:{})),available=expenseRefunds.manualCardRefunds(exp,st.cardId,card&&cardName(card)),linked=new Set(rows.map(r=>r.expenseRefundReceiptId).filter(Boolean));(exp.receipts||[]).filter(r=>!r.accountingExcluded&&linked.has(r.id)&&!available.some(a=>a.id===r.id)).forEach(r=>available.push(r));return Object.assign({},st,{reviewRevision:num(st.reviewRevision),refundReceipts:available.filter(r=>(!r.ownerOnly&&r.nature!=='PERSONAL')||canReviewPersonal(req)).map(r=>({id:r.id,date:r.date,amount:r.amount,nature:r.nature,reference:r.bankReference||'',source:r.source})),fileUrl:st.storedName?'/api/expenses/credit-cards/statements/'+encodeURIComponent(st.id)+'/file':'',cardName:card&&cardName(card),sourceMovement:sourceMovement(st),reviewedMovement:reviewedMovement(st),movementDifference:round2(reviewedMovement(st)-sourceMovement(st)),totals:cardAccounting.totals(rows),...discardReviewState(s,st,card,exp,req),rows});}
 function directCardPurchases(cardId){const exp=loadExpenses();return Object.values(exp.expenses||{}).flatMap(e=>{const posted=!!e.approvedAt||['approved','partially_paid','paid'].includes(String(e.status||''));if(!posted)return[];return(e.payments||[]).filter(p=>!p.accountingExcluded&&(p.creditCardId===cardId||e.creditCardId===cardId)).map(p=>({id:e.id+'/'+p.id,date:p.date,description:(e.vendor||e.particulars||e.id)+' · '+(e.particulars||'credit-card expense'),amount:num(p.amount),proof:p.proof||e.billPhoto||''}));});}
@@ -119,7 +127,7 @@ router.get('/api/expenses/credit-cards/statements',(req,res)=>{const s=load(),li
 router.get('/api/expenses/credit-cards/statements/:id/file',(req,res)=>{const s=load(),st=s.statements[req.params.id],c=st&&s.cards[st.cardId];if(!st||!st.storedName||!c||!visibleCard(req,c))return res.status(404).end();res.type(st.mimeType||path.extname(st.storedName));res.sendFile(path.join(FILE_DIR,st.storedName));});
 router.post('/api/expenses/credit-cards/statements/:id/review',(req,res)=>{
   const s=load(),st=s.statements[req.params.id],c=st&&s.cards[st.cardId],body=req.body||{};
-  if(!st||!c||!visibleCard(req,c)||st.status==='finalized')return res.status(400).json({success:false,error:'Statement is unavailable or finalized.'});
+  if(!st||!c||!visibleCard(req,c)||st.status!=='review')return res.status(400).json({success:false,error:'Statement is unavailable, archived or finalized. Restore an archived duplicate before reviewing it.'});
   if(!reviewRevisionMatches(st,body))return res.status(409).json({success:false,error:'This statement review changed or its revision is missing. Refresh it before saving; no review was overwritten.'});
   const items=Array.isArray(body.rows)?body.rows:[],ids=new Set((st.rows||[]).map(r=>r.id)),byId=new Map();
   if(!items.length)return res.status(400).json({success:false,error:'Choose the statement rows to review.'});
@@ -188,9 +196,32 @@ router.post('/api/expenses/credit-cards/statements/:id/discard-review',(req,res)
     res.json({success:true,statement:statementView(s,next,req)});
   }catch(error){res.status(error.status||409).json({success:false,error:error.message||'The saved review could not be discarded safely. No records were changed.'});}
 });
+for(const operation of ['archive','restore'])router.post('/api/expenses/credit-cards/statements/:id/'+operation+'-review',(req,res)=>{
+  try{
+    const body=req.body||{},policy=expenseModule.sourceCorrectionPolicy;
+    if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>!['reviewRevision','reason'].includes(key)))return res.status(400).json({success:false,error:'Supply only the exact review revision and archive/restore reason.'});
+    const reason=typeof body.reason==='string'?body.reason.trim():'';
+    if(reason.length<10||reason.length>2000)return res.status(400).json({success:false,error:'Explain the duplicate-review archive or restore in 10 to 2,000 characters.'});
+    if(!req.user||typeof req.user.username!=='string'||!req.user.username.trim())return res.status(403).json({success:false,error:'A verified signed-in reviewer is required. No review was changed.'});
+    if(!policy||typeof policy.read!=='function')throw new Error('The accounting protection service is unavailable. No review was changed.');
+    const snapshot=policy.read(),s=snapshot.cards,st=s&&s.statements&&s.statements[req.params.id],c=st&&s.cards&&s.cards[st.cardId];
+    if(!st||!c||!allowed(req)||!visibleCard(req,c))return res.status(403).json({success:false,error:'This card review is unavailable or inaccessible.'});
+    if(!reviewRevisionMatches(st,body))return res.status(409).json({success:false,error:'The duplicate review changed or its revision is missing. Refresh before archiving or restoring it.'});
+    const external=Object.fromEntries(Object.entries(snapshot.external||{}).filter(([file])=>!/(?:^|[\\/])credit-cards\.json$/i.test(file)));
+    assertDiscardReview(s,st,c,snapshot.store,req,external,operation);
+    const before=JSON.parse(JSON.stringify(st)),at=new Date().toISOString(),by=req.user.username;
+    const next=operation==='archive'?reviewArchives.archive(st,by,reason,at):reviewArchives.restore(st);
+    s.statements[st.id]=next;
+    audit(s,req,operation==='archive'?'STATEMENT_REVIEW_ARCHIVED':'STATEMENT_REVIEW_RESTORED',st.id,{reason,before,after:JSON.parse(JSON.stringify(next)),reviewRevision:next.reviewRevision},at);
+    const current=policy.read();
+    if(current.raw!==snapshot.raw||current.cardRaw!==snapshot.cardRaw||JSON.stringify(current.externalRaw)!==JSON.stringify(snapshot.externalRaw))return res.status(409).json({success:false,error:'The review or its accounting protection evidence changed. Refresh and check the duplicate review again.'});
+    bankAuthorityTransaction.commit(DATA_DIR,[{fileName:'expenses.json',before:snapshot.raw,after:snapshot.raw},{fileName:'credit-cards.json',before:snapshot.cardRaw,after:JSON.stringify(s)}]);
+    res.json({success:true,statement:statementView(s,next,req)});
+  }catch(error){res.status(error.status||409).json({success:false,error:error.message||'The duplicate review could not be changed safely. No records were changed.'});}
+});
 router.post('/api/expenses/credit-cards/statements/:id/finalize',(req,res)=>{
   const s=load(),st=s.statements[req.params.id],c=st&&s.cards[st.cardId];
-  if(!st||!c||!visibleCard(req,c)||st.status==='finalized')return res.status(400).json({success:false,error:'Statement is unavailable or already finalized.'});
+  if(!st||!c||!visibleCard(req,c)||st.status!=='review')return res.status(400).json({success:false,error:'Statement is unavailable, archived or already finalized. Restore an archived duplicate before reviewing it.'});
   if(!reviewRevisionMatches(st,req.body))return res.status(409).json({success:false,error:'This statement review changed or its revision is missing. Refresh and review it before finalizing.'});
   const exp=loadExpenses(),before=storeSnapshots(),canView=(nature,account)=>settlementSourceVisible(req,nature,account);
   for(const row of st.rows){
