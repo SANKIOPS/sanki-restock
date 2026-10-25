@@ -27,7 +27,7 @@ test('opening, switching and closing details retain the product rows and never r
   const products = ['a', 'b'].map(handle => ({ handle, variants: [{ sku: handle.toUpperCase(), availableQty: 1 }] }));
   const panels = [], rows = products.map(p => ({ dataset: { handle: p.handle }, label: {}, setAttribute(key, value) { this[key] = value; }, querySelector() { return this.label; }, insertAdjacentHTML(where, html) { panels.push({ html, remove() { panels.splice(panels.indexOf(this), 1); } }); } }));
   const host = { querySelectorAll: sel => sel === '.expanded-row' ? panels.slice() : rows, set innerHTML(value) { assert.fail('Product list was rebuilt while toggling details'); } };
-  const context = { document: { getElementById: () => host }, products, mode: 'all', expandedHandle: 'a', view, preserveRow: (_, change) => change(), expansionRow: p => p.handle, bindExpansion() {} };
+  const context = { document: { getElementById: () => host }, products, mode: 'all', filters: {}, expandedHandle: 'a', view, preserveRow: (_, change) => change(), expansionRow: p => p.handle, bindExpansion() {} };
   vm.runInNewContext(section('function findProductRow(', 'function bindProductRows('), context);
   context.updateExpansion(rows[0]); assert.equal(panels[0].html, 'a');
   context.expandedHandle = 'b'; context.updateExpansion(rows[1]); assert.equal(panels.length, 1); assert.equal(panels[0].html, 'b');

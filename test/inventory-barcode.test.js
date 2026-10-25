@@ -52,3 +52,35 @@ test('invalid identifiers never send a Shopify query', async () => {
 test('incomplete pagination fails instead of selecting an unconfirmed SKU', async () => {
   await assert.rejects(createLookup(async () => page([variant('001')], true))('001'), e => e.status === 502);
 });
+test('concurrent identical scans share the active Shopify read but a later scan checks fresh data', async () => {
+  let finish, calls = 0;
+  const lookup = createLookup(async () => {
+    calls++;
+    if (calls === 1) return new Promise(resolve => { finish = resolve; });
+    return page([variant('001', 'UPDATED')]);
+  });
+  const first = lookup('001'), second = lookup(' 001 ');
+  assert.equal(calls, 1);
+  finish(page([variant('001')]));
+  assert.equal((await first).sku, 'SKU1'); assert.equal((await second).sku, 'SKU1');
+  assert.equal((await lookup('001')).sku, 'UPDATED'); assert.equal(calls, 2);
+});
+test('a failed shared barcode read can be retried without retaining a rejected promise', async () => {
+  let calls = 0;
+  const lookup = createLookup(async () => { calls++; if (calls === 1) throw new Error('offline'); return page([variant('001')]); });
+  await assert.rejects(lookup('001'), /offline/);
+  assert.equal((await lookup('001')).sku, 'SKU1'); assert.equal(calls, 2);
+});
+test('a multi-page cursor cycle fails promptly rather than hanging barcode lookup', async () => {
+  let calls = 0;
+  const lookup = createLookup(async (_, variables) => {
+    calls++;
+    return page([variant('001')], true, variables.after === 'A' ? 'B' : 'A');
+  });
+  await assert.rejects(lookup('001'), e => e.status === 502); assert.equal(calls, 3);
+});
+test('a duplicate found on the first page fails without unnecessary later Shopify calls', async () => {
+  let calls = 0;
+  const lookup = createLookup(async () => { calls++; return page([variant('001'), variant('001', 'SKU2', 'v2')], true, 'more'); });
+  await assert.rejects(lookup('001'), e => e.status === 409); assert.equal(calls, 1);
+});
