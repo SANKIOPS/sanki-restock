@@ -141,6 +141,7 @@ function create(deps) {
         res.json({ success: true, entry: clone(record) });
       } catch (error) { replyError(res, error); }
   }
-  return { register, handlePatch, eligibility, evidence, kinds: KINDS };
+  // Authorize before read-only discovery projects any protected source fields.
+  return { register, handlePatch, eligibility, evidence, kinds: KINDS, authorizeTarget: target };
 }
 module.exports = { create };
