@@ -259,7 +259,7 @@ function receiptCategory(receiptType,value){
   const supplied=String(value||'').trim(),defaults={bank_interest:'Bank Interest Received',other_income:'Other Income',refund:'Refund Received',owner_contribution:'Owner Contribution',asset_sale:'Asset Sale',rental_income:'Rental Income',rental_security:'Rental Security Deposit'};
   return supplied||defaults[receiptType]||'';
 }
-function receiptLabel(receiptType){return{loan_received:'Loan received — repayable principal',product_sale:'Product sale',asset_sale:'Asset sale',bank_interest:'Bank interest received',refund:'Refund received',expense_refund:'Expense refund',refund_recovery:'Employee refund recovery',owner_contribution:'Owner contribution',other_income:'Other income',rental_income:'Rental income',rental_security:'Rental security deposit'}[receiptType]||'Money received';}
+function receiptLabel(receiptType){return{loan_received:'Loan received — repayable principal',product_sale:'Product sale',asset_sale:'Asset sale',bank_interest:'Bank interest received',refund:'Refund received',expense_refund:'Expense refund',refund_recovery:'Employee refund recovery',owner_contribution:'Owner contribution',other_income:'Other income',rental_income:'Rental income',rental_security:'Rental security deposit',rental_dealer_commission:'Dealer commission received',rental_documentation_fee:'Documentation / agreement fee received'}[receiptType]||'Money received';}
 function accountVisibleToReq(req,account){
   const name=canonicalAccountName(account),restricted=OWNER_ONLY_ACCOUNTS.some(value=>value.toLowerCase()===name.toLowerCase());
   const personalAccount=(ENTITY_ACCOUNTS.PERSONAL||[]).some(value=>value.toLowerCase()===name.toLowerCase());
@@ -2180,6 +2180,8 @@ function ownTransferEvidenceError(s,draft){
   return '';
 }
 function stagedOwnerPersonalTransferError(draft,store,req){
+  const tenantFeeError=require('./tenant-reconciliation-fees').evidenceError(store||loadStore(),draft);if(tenantFeeError)return tenantFeeError;
+  if(req&&Object.values(draft.resolutions||{}).some(value=>value&&value.rentalFeeId&&(!approvalNatures(req).includes(value.postingNature)||value.postingNature==='PERSONAL'&&!canManagePersonalAccounting(req))))return 'Your current accounting permissions no longer authorize a tenant fee in this review.';
   const assignmentError=reconciliationEntityAssignment.evidenceError(draft);if(assignmentError)return assignmentError;
   if(req&&Object.values(draft.entityAssignments||{}).some(value=>!approvalNatures(req).includes(value.nature)||value.nature==='PERSONAL'&&!canManagePersonalAccounting(req)))return 'Your current permissions no longer authorize a selected transaction entity.';
   const reportingError=receiptReportingEvidenceError(store||loadStore(),draft);if(reportingError)return reportingError;
@@ -2741,6 +2743,7 @@ router.post('/api/expenses', (req, res) => {
 // ── Edit ─────────────────────────────────────────────────────────
 const EXPENSE_METADATA_FIELDS = new Set(['vendor','particulars','ledger','type','editReason']);
 function canEditExpenseMetadata(req,e) {
+  if(e.rentalFeeId)return false;
   if(e.nonExpenseReimbursement||e.salaryAdvanceId)return false;
   return isAdmin(req) || e.status==='pending' && canApprove(req);
 }
@@ -2823,6 +2826,7 @@ function commitExpenseFinancialCorrection(snapshot,s,id){
   bankAuthorityTransaction.commit(DATA_DIR,[{fileName:'expenses.json',before:snapshot.raw,after:JSON.stringify(s)}]);
 }
 function editExpenseMetadata(s,req,e,b,editReason) {
+  if(e.rentalFeeId&&(['vendor','particulars','ledger','type'].some(key=>b[key]!=null&&String(b[key]).trim()!==String(e[key]||''))))return{status:409,error:'This expense belongs to a tenant fee review. Undo that pending review and record the correct fee details; the tenant link cannot be changed independently.'};
   const before=JSON.parse(JSON.stringify(e)),next=Object.assign({},e);
   if(b.vendor!=null){
     const vendor=String(b.vendor).trim();if(!vendor)return{status:400,error:'Vendor name is required.'};
@@ -3426,6 +3430,7 @@ function unpayBlockedReferences(s) {
   return refs;
 }
 function unpayBlockedReason(e,p,refs) {
+  if(e.rentalFeeId||p.rentalFeeId)return 'This payment is linked to a tenant fee. Undo its pending tenant fee review instead of removing the payment independently.';
   return p.bankReconciliationDraft||refs.has(e.id+'/'+p.id)
     ? 'This payment is linked to bank reconciliation. Correct or undo its reconciliation link before removing the payment.' : '';
 }
@@ -3656,6 +3661,7 @@ router.delete('/api/expenses/:id', (req, res) => {
   const s = loadStore();
   if (!s.expenses[req.params.id]) return res.status(404).json({ success: false, error: 'Not found.' });
   if (!canApproveExpenseNature(req, s.expenses[req.params.id])) return res.status(403).json({ success: false, error: 'You cannot delete this accounting entity.' });
+  if(s.expenses[req.params.id].rentalFeeId)return res.status(409).json({success:false,error:'This expense is linked to a tenant fee. Undo its pending tenant fee review instead of deleting the source independently.'});
   if(s.expenses[req.params.id].gokwikPostingId)return res.status(409).json({success:false,error:'This paid expense belongs to an approved GoKwik settlement and cannot be deleted independently. Correct descriptive categorization against the invoice instead.'});
   if(provisionalPaymentTotal(s.expenses[req.params.id])>0)return res.status(409).json({success:false,error:'A real payment is already recorded for this expense. Reject it and resolve the payment instead of deleting the money movement.'});
   if (expenseRefunds.hasSource(s,req.params.id)||expenseRefunds.hasCreditApplication(s,req.params.id)) return res.status(409).json({success:false,error:'This expense has a linked return/refund or redeemed refund credit. Reverse it in Refunds & Returns before deleting its source.'});
@@ -6121,6 +6127,7 @@ function setLedgerMovementExcluded(s,id,excluded,reason,user){
   return false;
 }
 function reconciliationExpenseNatureCorrectionError(s,expense,targetNature){
+  if(expense&&expense.rentalFeeId)return 'This expense belongs to a tenant fee review. Undo that pending review before changing its entity.';
   const target=reconciliationOwnershipNature(targetNature),ledger=String(expense&&expense.ledger||'').trim(),categoryAllowed=target==='PERSONAL'?PERSONAL_CATEGORIES.some(value=>value.toLowerCase()===ledger.toLowerCase()):pickableLedgers(s,target).some(value=>value.name.toLowerCase()===ledger.toLowerCase()&&!PERSONAL_CATEGORIES.some(personal=>personal.toLowerCase()===value.name.toLowerCase()));
   if(!target||!categoryAllowed)return 'The linked expense category “'+(ledger||'Uncategorised')+'” is not valid for '+(target||'the requested entity')+'. Correct its category in the expense first, then retag the bank row.';
   if(expense.nonExpenseReimbursement||expense.salaryAdvanceId||expense.paidAlready)return 'This linked expense is generated by, or participates in, a personal-funding/reimbursement workflow. Correct it in its source workflow before retagging the bank row.';
@@ -6139,7 +6146,7 @@ function reconciliationSourceNatureCorrectionPlan(s,row,targetNature){
     let found=false;
     for(const expense of Object.values(s.expenses||{}))for(const payment of [].concat(expense.payments||[],expense.reimbursementPayments||[]))if(expense.id+'/'+payment.id===id){found=true;const error=reconciliationExpenseNatureCorrectionError(s,expense,targetNature);if(error)unsupported.push({id,error});else add('expense',expense.id,expense,()=>{expense.nature=targetNature;});}
     if(found)return;
-    const receipt=(s.receipts||[]).find(value=>value.id===id);if(receipt){const repayments=(s.loanRepayments||[]).filter(value=>value.loanId===receipt.id);add('receipt',receipt.id,receipt,()=>{receipt.nature=targetNature;repayments.forEach(value=>{value.nature=targetNature;});},repayments.map(value=>value.id));return;}
+    const receipt=(s.receipts||[]).find(value=>value.id===id);if(receipt){if(receipt.rentalFeeId){unsupported.push({id,error:'This receipt belongs to a tenant fee review. Undo that pending review before changing its entity.'});return;}const repayments=(s.loanRepayments||[]).filter(value=>value.loanId===receipt.id);add('receipt',receipt.id,receipt,()=>{receipt.nature=targetNature;repayments.forEach(value=>{value.nature=targetNature;});},repayments.map(value=>value.id));return;}
     const repayment=(s.loanRepayments||[]).find(value=>value.id===id);if(repayment){const loan=(s.receipts||[]).find(value=>value.id===repayment.loanId);if(!loan){unsupported.push(id);return;}const repayments=(s.loanRepayments||[]).filter(value=>value.loanId===loan.id);add('loan',loan.id,loan,()=>{loan.nature=targetNature;repayments.forEach(value=>{value.nature=targetNature;});},repayments.map(value=>value.id));return;}
     const adjustment=(s.adjustments||[]).find(value=>value.id===id);if(adjustment){const linked=(s.reconciliationExpenses||[]).filter(value=>value.adjustmentId===adjustment.id);add('adjustment',adjustment.id,adjustment,()=>{adjustment.nature=targetNature;linked.forEach(value=>{value.nature=targetNature;});},linked.map(value=>value.id));return;}
     const advance=(s.vendorAdvances||[]).find(value=>value.id===id||String(value.paymentReference||'')===id);if(advance){if((advance.applications||[]).length){unsupported.push(id);return;}add('vendor_advance',advance.id,advance,()=>{advance.nature=targetNature;});return;}
@@ -6371,6 +6378,20 @@ router.post('/api/expenses/bank-statements/create-rental',(req,res)=>{
   if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});
   if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot record rental money for this reconciliation.'});
   if(!isOwner(req)&&!isPrashant(req))return res.status(403).json({success:false,error:'Only the Owner or Prashant can update the rental register.'});
+  const tenantFees=require('./tenant-reconciliation-fees');
+  if(tenantFees.isFeeKind(String(b.kind||''))){
+    try{
+      const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId),nature=reconciliationPostingNature(draft,b.rowId,row);
+      if(reconciliationEntityAssignment.stale(draft,b.rowId))return res.status(409).json({success:false,error:'This bank transaction changed after its entity assignment. Review its original evidence before recording a tenant fee.'});
+      if(nature&&(!approvalNatures(req).includes(nature)||nature==='PERSONAL'&&!canManagePersonalAccounting(req)))return res.status(403).json({success:false,error:'You cannot record tenant fees for the selected accounting entity.'});
+      const importPlan=bankFinalizationImportPlan(s,draft);if(importPlan.error)return res.status(409).json({success:false,error:importPlan.error});
+      if(!importPlan.rows.some(item=>'bank-'+item.index===b.rowId))return res.status(409).json({success:false,error:'This row is already covered by finalized bank evidence. Existing reconciliations cannot be changed.'});
+      const register=require('./rental-register').state(s),now=new Date().toISOString(),actor=req.user.username;
+      const result=tenantFees.record(s,{draft,row,body:b,register,nature,actor,now,canApproveExpense:canApprove(req)&&approvalNatures(req).includes(nature)&&(nature!=='PERSONAL'||canManagePersonalAccounting(req))});
+      const previousAudit=(s.auditLog||[]).slice();audit(s,req,'TENANT_FEE_FROM_BANK_RECONCILIATION',result.expense?'expense':'receipt',result.expense?result.expense.id:result.receipt.id,{nature,account:draft.account,after:result,note:String(b.note||'').trim(),draftId:draft.id,bankRowId:b.rowId,tenancyId:result.tenancy.id,rentalKind:result.rentalKind});if(s.auditLog.length!==previousAudit.length+1)s.auditLog=previousAudit.concat(s.auditLog.at(-1));
+      saveStore(s);return res.json(Object.assign(result,draftReconciliation(s,draft)));
+    }catch(error){return res.status(error.status||409).json({success:false,error:error.message||'The tenant fee could not be verified. Nothing was recorded.'});}
+  }
   const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId),bank=row&&row.bank,amount=num(bank&&bank.credit),kind=String(b.kind||''),note=String(b.note||'').trim();
   if((draft.resolutions||{})[b.rowId])return res.status(409).json({success:false,error:'This incoming bank transaction has already been recorded.'});
   if(row&&row.reversalReviewRequired)return res.status(409).json({success:false,error:'This credit is marked as a bank reversal. Review its matching debit instead of recording rent or security.'});
@@ -6512,6 +6533,7 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId),allowed=['bank_reversal_pair','accept_match','unmatch_suggestion','link_existing','link_multiple_existing','link_multiple_bank_entries','link_with_rounding','vendor_advance_split','create_adjustment','create_split_adjustment','create_internal_transfer','paytm_settlement','split_allocation','opening_vendor_payable_split','timing_difference','exclude'];
   if(!row)return res.status(404).json({success:false,error:'Difference was not found.'});
   if(!allowed.includes(b.action))return res.status(400).json({success:false,error:'Choose a valid resolution.'});
+  if(row.resolution&&row.resolution.rentalFeeId)return res.status(409).json({success:false,error:'Undo this pending tenant fee review before choosing a different transaction action.'});
   if(row.resolution&&(row.resolution.claimantTransferSelection||row.resolution.ownAccountTransfer||row.resolution.ownAccountSelection))return res.status(409).json({success:false,error:'Undo this account-transfer decision before choosing a different transaction action. Its transfer-only ownership must not be reused for an expense or receipt.'});
   let postingNature=reconciliationPostingNature(draft,b.rowId,row),expenseOwnershipChange=null,ownAccountTransfer=null,ownAccountSelection=null,claimantTransferSelection=null;const postingActions=['link_with_rounding','vendor_advance_split','create_adjustment','create_split_adjustment','create_internal_transfer','split_allocation','opening_vendor_payable_split','exclude'];
   if(isSharedBankReconciliationAccount(draft.account)&&postingNature==='SANKI'&&['create_adjustment','create_split_adjustment','create_internal_transfer'].includes(b.action))return res.status(409).json({success:false,error:'This SANKI entity comes from an existing vendor payment. Link that payment; it cannot authorize a new shared-bank expense, balance entry or transfer.'});
@@ -6744,6 +6766,15 @@ router.post('/api/expenses/bank-statements/create-expense',(req,res)=>{
   res.json(Object.assign({expense:s.expenses[id]},draftReconciliation(s,draft)));
 });
 router.post('/api/expenses/bank-statements/undo',(req,res)=>{const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot edit this reconciliation.'});const current=(draft.resolutions||{})[b.rowId];if(!current)return res.status(404).json({success:false,error:'This row has no draft decision to undo.'});if(current.action==='bank_reversal_pair'){const reason=String(b.reason||'').trim();if(!reason)return res.status(400).json({success:false,error:'Enter a reason for undoing this bank reversal pair.'});const previous={},ids=current.bankRowIds||[];ids.forEach(id=>{const paired=draft.resolutions[id];if(paired&&paired.action==='bank_reversal_pair'&&paired.groupId===current.groupId){previous[id]=paired;delete draft.resolutions[id];}});draft.decisionAudit=Array.isArray(draft.decisionAudit)?draft.decisionAudit:[];draft.decisionAudit.push({action:'undo_bank_reversal_pair',bankRowIds:ids,previous,reason,by:req.user.username,at:new Date().toISOString()});audit(s,req,'BANK_REVERSAL_PAIR_UNDONE','bank_reconciliation',draft.id,{nature:draft.nature,account:draft.account,bankRowIds:ids,before:previous,note:reason});saveStore(s);return res.json(draftReconciliation(s,draft));}
+  if(current.rentalFeeId){
+    if(!isOwner(req)&&!isPrashant(req))return res.status(403).json({success:false,error:'Only the Owner or Prashant can update the rental register.'});
+    if(!approvalNatures(req).includes(current.postingNature)||current.postingNature==='PERSONAL'&&!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'You cannot undo a tenant fee for this accounting entity.'});
+    try{
+      const note=String(b.reason||'').trim()||'Discarded this pending tenant fee review',result=require('./tenant-reconciliation-fees').undo(s,{draft,rowId:b.rowId,actor:req.user.username,now:new Date().toISOString(),reason:note}),previousAudit=(s.auditLog||[]).slice();
+      audit(s,req,'TENANT_FEE_REVIEW_UNDONE','tenant_fee',current.rentalFeeId,{nature:current.postingNature,account:draft.account,before:result.before,after:result.fee,note,draftId:draft.id,bankRowId:b.rowId});if(s.auditLog.length!==previousAudit.length+1)s.auditLog=previousAudit.concat(s.auditLog.at(-1));
+      saveStore(s);return res.json(draftReconciliation(s,draft));
+    }catch(error){return res.status(error.status||409).json({success:false,error:error.message||'The tenant fee cannot be undone safely.'});}
+  }
   if(current.rentalKind&&current.receiptId){
     const rental=require('./rental-register'),register=rental.state(s),ids=new Set(current.rentalRecordIds||[]),error=rental.receiptRemovalError(register,current.receiptId,current.rentalRecordIds||[]);
     if(error)return res.status(409).json({success:false,error});
@@ -7629,7 +7660,7 @@ const expenseRefundDeps = {
   claimant:reimbursementClaimantForExpense,card:resolveCreditCard,cardName:creditCardName,companyAccount:allowedCompanyAccount,
   ensureVendor:(s,n,name)=>registerVendorForNature(s,n,name,{tags:['Refund credit issuer']}),
   closedThrough:(s,n,a)=>String(((s.bankStatements||{})[bankStatementBookKey(n,a)]||{}).reconciledThrough||((s.cashReconciliations||[]).filter(r=>r.status==='approved'&&r.account===a).map(r=>r.verifiedThrough).sort().at(-1))||''),
-  receiptUsed:(s,id)=>require('./rental-register').receiptUsage(require('./rental-register').state(s),id)>0,
+  receiptUsed:(s,id)=>(s.receipts||[]).some(receipt=>receipt.id===id&&receipt.rentalFeeId)||require('./rental-register').receiptUsage(require('./rental-register').state(s),id)>0,
   movementLocked:(s,id)=>unpayBlockedReferences(s).has(id)||(s.reconciliationExpenses||[]).some(e=>e.expenseRefundReceiptId===id)||require('./rental-register').receiptUsage(require('./rental-register').state(s),id)>0||(s.receipts||[]).some(r=>r.id===id&&(s.cashReconciliations||[]).some(x=>x.status==='approved'&&x.account===r.account&&x.verifiedThrough>=r.date))
 };
 expenseRefundRoutes.register(router,expenseRefundDeps);
