@@ -7,16 +7,21 @@ function selectRange(reports,start,end){
     const candidates=reports.filter(r=>r.adId===id&&r.periodStart>=start&&r.periodEnd<=end);
     const exact=candidates.filter(r=>r.periodStart===start&&r.periodEnd===end).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''))[0];
     if(exact){selected.push(exact);continue;}
-    const groups=new Map();for(const r of candidates){const key=JSON.stringify([r.reportGoal,r.reportDestination,r.attributionSetting,r.resultIndicator]);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(r);}
+    // Explicit zero-delivery days have no result indicator in Meta exports.
+    // They can fill a range without inventing delivery or changing metric identity.
+    const neutral=r=>!r.resultIndicator&&r.spend===0&&r.impressions===0&&metrics.every(k=>r[k]==null||r[k]===0);
+    const emptyDays=candidates.filter(neutral),active=candidates.filter(r=>!neutral(r));
+    const groups=new Map();for(const r of active.length?active:candidates){const key=JSON.stringify([r.reportGoal,r.reportDestination,r.attributionSetting,r.resultIndicator]);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(r);}
     const covers=[];
-    for(const rows of groups.values()){
+    for(const group of groups.values()){
+      const identity=group[0],rows=[...group,...emptyDays.filter(r=>!group.includes(r)&&['reportGoal','reportDestination','attributionSetting'].every(k=>!r[k]||r[k]===identity[k]))];
       const memo=new Map();function cover(day){if(day>end)return [];if(memo.has(day))return memo.get(day);memo.set(day,null);for(const row of rows.filter(r=>r.periodStart===day).sort((a,b)=>a.periodEnd.localeCompare(b.periodEnd))){const tail=cover(nextDay(row.periodEnd));if(tail){const result=[row,...tail];memo.set(day,result);return result;}}return null;}
       const parts=cover(start);if(parts)covers.push(parts);
     }
     covers.sort((a,b)=>Math.max(...b.map(r=>Date.parse(r.updatedAt)||0))-Math.max(...a.map(r=>Date.parse(r.updatedAt)||0)));
     if(!covers.length){missing.push(id);continue;}
-    const parts=covers[0],row={...parts[0],periodStart:start,periodEnd:end,combinedRows:parts.length};
-    for(const k of metrics)row[k]=k==='reach'?null:parts.every(r=>r[k]!=null)?parts.reduce((n,r)=>n+r[k],0):null;
+    const parts=covers[0],row={...(parts.find(r=>!neutral(r))||parts[0]),periodStart:start,periodEnd:end,combinedRows:parts.length};
+    for(const k of metrics)row[k]=k==='reach'?null:parts.every(r=>r[k]!=null||neutral(r))?parts.reduce((n,r)=>n+(r[k]??0),0):null;
     selected.push(row);
   }
   return {selected,missing};
