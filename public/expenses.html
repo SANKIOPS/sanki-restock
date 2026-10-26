@@ -277,6 +277,21 @@
     <div class="proof-tools"><button type="button" id="proofZoomOut" aria-label="Zoom out">−</button><button type="button" id="proofReset" aria-label="Reset zoom">↺</button><button type="button" id="proofZoomIn" aria-label="Zoom in">＋</button><button type="button" id="proofClose" aria-label="Close">×</button></div>
   </div>
 
+  <dialog id="saleCreditDlg"><div class="dlg">
+    <h3>Correct replacement payment to store credit</h3>
+    <p id="scSummary" class="sub"></p>
+    <p class="sub">This corrects the app's payment classification only. It preserves both orders and the original cash receipt. Adjust the customer's Shopify credit separately; this form does not debit that wallet.</p>
+    <label>Original returned order number<input id="scOriginal" placeholder="e.g. #1234" autocomplete="off"></label>
+    <label>Store credit used ₹<input id="scAmount" type="number" step="0.01" min="0.01" readonly></label>
+    <label>Correction reason — required<textarea id="scReason" rows="3" placeholder="Explain the exchange and why no new cash was received"></textarea></label>
+    <div id="scPreview" class="sub"></div>
+    <div id="scMsg" class="msg" role="status"></div>
+    <div class="expense-actions">
+      <button type="button" class="btn primary" id="scReview">Review correction</button>
+      <button type="button" class="btn green" id="scSave" disabled>Submit for Owner approval</button>
+      <button type="button" class="btn ghost" onclick="document.getElementById('saleCreditDlg').close()">Close</button>
+    </div>
+  </div></dialog>
   <dialog id="spendingCategoryDlg"><div class="dlg">
     <h3>Add spending category</h3>
     <p class="sub">Create an approved category without leaving the Spending dashboard. It will be available everywhere expenses are categorized.</p>
@@ -2400,6 +2415,51 @@
     function managedLedgerEditKind(x){return !!x&&(x.kind==='receipt'||x.kind==='expense'||x.kind==='personal_expense'||x.kind==='transfer'&&x.classification!=='money_exchange');}
     function canEditManagedLedgerRow(x){return cfg.isAdmin===true&&cfg.claimantOnly===false&&cfg.canEditLedgerTransactions===true&&managedLedgerEditKind(x)&&x.editable===true&&x.canEditLedgerTransaction===true&&!x.privacyRedacted&&!x.financialFieldsLocked&&!x.approvalPending&&!x.ledgerEditBlockedReason;}
     function entryEditButton(x,account){if(!cfg.isAdmin)return'';ledgerEditRows[x.id]={row:x,account:account,nature:selectedNature};if(x.kind==='sale'&&x.editableSale)return'<button class="btn ghost mini" onclick="correctSaleAllocation(\''+esc(x.id)+'\')">'+(cfg.isOwner?'Correct split':'Request correction')+'</button>';if(managedLedgerEditKind(x))return canEditManagedLedgerRow(x)?'<button class="btn ghost mini" onclick="editLedgerEntry(\''+esc(x.id)+'\')">Edit</button>':cfg.claimantOnly===false&&!x.privacyRedacted&&typeof x.ledgerEditBlockedReason==='string'&&x.ledgerEditBlockedReason?'<span class="muted ledger-edit-locked"><small>'+esc(x.ledgerEditBlockedReason)+'</small></span>':'';if(!cfg.isOwner)return'';if(x.classification==='money_exchange')return'<button class="btn ghost mini" onclick="editExchange(\''+esc(x.id)+'\')">Edit</button>';if(x.kind==='opening')return'<button class="btn ghost mini" onclick="openOpeningBalance(\''+esc(account)+'\','+Number(x.credit||0)+')">Edit</button>';return x.editable?'<button class="btn ghost mini" onclick="editLedgerEntry(\''+esc(x.id)+'\')">Edit</button>'+(x.deletable?' <button class="btn ghost mini" onclick="deleteLedgerAdjustment(\''+esc(x.id)+'\')">Delete</button>':''):'';}
+    var saleCreditSavedDetails=entryDetails;
+    entryDetails=function(x){
+      if(x.kind!=='sale_store_credit_correction')return saleCreditSavedDetails(x);
+      var correction=x.appStoreCreditCorrection||{};
+      return '<div class="claim-meta" style="margin-top:6px"><span>Cash ₹0 · Store credit '+fmt(x.storeCreditAmount)+'</span><span>Original returned order #'+esc(String(x.originalOrderNumber||'').replace(/^#/,''))+'</span></div><div class="muted">'+esc(x.reason||'')+'</div><div class="muted">Requested by '+esc(correction.requestedBy||'—')+' · Approved by '+esc(correction.approvedBy||'—')+' · '+esc(String(correction.approvedAt||'').replace('T',' ').slice(0,16))+'</div><div class="'+(x.stale?'neg':'muted')+'">'+(x.stale?'Source evidence changed — review required.':'Owner-approved app correction. Shopify wallet adjustment remains pending outside this app.')+'</div>';
+    };
+    var saleCreditSavedEditButton=entryEditButton;
+    entryEditButton=function(x,account){return saleCreditSavedEditButton(x,account)+(cfg.isAdmin&&x.kind==='sale'&&x.editableSale&&account==='Counter Cash'?'<button class="btn ghost mini" onclick="openStoreCreditCorrection(\''+esc(x.id)+'\')">Store-credit exchange</button>':'');};
+    var storeCreditCorrectionId='',storeCreditCorrectionPreview=null,storeCreditCorrectionBusy=false;
+    function resetStoreCreditPreview(){storeCreditCorrectionPreview=null;el('scSave').disabled=true;el('scPreview').textContent='';el('scMsg').textContent='';}
+    window.openStoreCreditCorrection=function(id){
+      var saved=ledgerEditRows[id];if(storeCreditCorrectionBusy||!cfg.isAdmin||!saved||saved.account!=='Counter Cash'||!saved.row.editableSale)return;
+      storeCreditCorrectionId=String(id);resetStoreCreditPreview();el('scSummary').textContent='Replacement order #'+String(saved.row.orderNumber||id).replace(/^#/,'')+' · '+fmt(saved.row.gross||saved.row.credit);
+      el('scOriginal').value='';el('scAmount').value=Number(saved.row.gross||saved.row.credit||0).toFixed(2);el('scReason').value='';
+      el('scSave').textContent=cfg.isOwner?'Confirm app correction':'Submit for Owner approval';el('saleCreditDlg').showModal();
+    };
+    el('scOriginal').oninput=resetStoreCreditPreview;el('scReason').oninput=resetStoreCreditPreview;
+    el('scReview').onclick=async function(){
+      if(storeCreditCorrectionBusy)return;resetStoreCreditPreview();
+      var payload={saleId:storeCreditCorrectionId,originalOrderNumber:el('scOriginal').value.trim(),storeCreditAmount:Number(el('scAmount').value),reason:el('scReason').value.trim()};
+      if(!payload.originalOrderNumber||!payload.reason){el('scMsg').textContent='Enter the original returned order and a correction reason.';return;}
+      storeCreditCorrectionBusy=true;el('scReview').disabled=true;el('scOriginal').disabled=true;el('scReason').disabled=true;
+      try{
+        var d=await api('/api/expenses/sale-store-credit-corrections/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        if(!d.success){el('scMsg').textContent=d.error||'Could not review this correction.';return;}
+        if(d.already){el('scMsg').textContent=d.approved?'This app correction is already approved.':'This correction is already awaiting Owner approval.';return;}
+        if(typeof d.previewFingerprint!=='string'||!d.previewFingerprint.trim()||!d.proposal){el('scMsg').textContent='The server did not return a verified preview. Nothing was saved.';return;}
+        storeCreditCorrectionPreview={payload:payload,fingerprint:d.previewFingerprint};
+        el('scPreview').textContent='Replacement #'+String(d.proposal.orderNumber).replace(/^#/,'')+': cash ₹0 · store credit '+fmt(d.proposal.storeCreditAmount)+' from returned order #'+String(d.proposal.originalOrderNumber).replace(/^#/,'')+'. No bank/Paytm receipt or cash refund will be created. '+(d.ownerApprovalRequired?'Balances change only after Owner approval.':'Confirm to apply this correction to the app.');
+        el('scSave').disabled=false;
+      }catch(error){el('scMsg').textContent='Could not load a verified preview. '+(error.message||'');}
+      finally{storeCreditCorrectionBusy=false;el('scReview').disabled=false;el('scOriginal').disabled=false;el('scReason').disabled=false;}
+    };
+    el('scSave').onclick=async function(){
+      if(storeCreditCorrectionBusy||!storeCreditCorrectionPreview)return;
+      storeCreditCorrectionBusy=true;el('scSave').disabled=true;
+      try{
+        var payload=Object.assign({},storeCreditCorrectionPreview.payload,{previewFingerprint:storeCreditCorrectionPreview.fingerprint}),d=await api('/api/expenses/sale-store-credit-corrections',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        if(!d.success){resetStoreCreditPreview();el('scMsg').textContent=d.error||'The correction was not saved.';return;}
+        var message=d.approved?'App correction saved: cash ₹0, store credit '+fmt(d.correction.storeCreditAmount)+'. Shopify wallet adjustment remains for you to complete.':'Correction '+d.request.id+' sent for Owner approval. Cash and incentives remain unchanged until approved.';
+        storeCreditCorrectionPreview=null;el('scMsg').textContent=message;setMsg(message,true);
+        await Promise.all([loadCash(),loadAccountLedger(),loadConfig().then(syncApprovalsTab)]);
+      }catch(error){storeCreditCorrectionPreview=null;el('scMsg').textContent='Save outcome could not be confirmed. Refresh and check existing corrections before retrying. '+(error.message||'');}
+      finally{storeCreditCorrectionBusy=false;}
+    };
     window.correctSaleAllocation=async function(id){
       var saved=ledgerEditRows[id],x=saved&&saved.row;if(!x)return;
       var saleId=String(id).replace(/\/NONCASH$/,''),gross=Number(x.gross||x.credit||0),current=x.cashAmount!=null?Number(x.cashAmount):(saved.account==='Counter Cash'?Number(x.credit||0):0),cashAmount;
@@ -2458,7 +2518,7 @@
       finally{ledgerEditBusy=false;}
     };
     window.deleteLedgerAdjustment=function(id){var saved=ledgerEditRows[id],x=saved&&saved.row;if(!x||x.kind!=='adjustment')return;var reason=prompt('Reason for deleting '+id+' — required');if(!reason||!reason.trim())return;if(!confirm('Delete '+id+' permanently from the ledger? Its audit history will be retained.'))return;api('/api/expenses/ledger-entry/'+encodeURIComponent(id),{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:reason.trim()})}).then(function(d){if(!d.success){setMsg(d.error||'Could not delete adjustment.',false);return;}setMsg(id+' deleted; the reason and original entry remain in the audit log.',true);loadCash();loadAccountLedger();});};
-    function ledgerReconciliationLabel(x){var warning=x&&x.bankMovementAuthority&&x.bankMovementAuthority.sourceChanged?'<div class="neg"><small>Source changed after reconciliation. Verified bank amount/date retained; review the source evidence.</small></div>':'';if(x&&x.paytmReconciliation)return ReconciliationStatus.paytmLedgerRow(x.paytmReconciliation)+warning;var r=x&&x.reconciliation;if(!r)return'<div class="muted">Not reconciled</div>'+warning;return'<div class="pos"><b>'+(r.sourceAccountConfirmed?'✓ Source-bank confirmed':'✓ Reconciled')+'</b> · '+esc(r.bankDate||'')+'</div><div class="muted">'+(r.sourceAccountConfirmed?esc(r.sourceAccount||'')+' · ':'')+esc(r.reconciliationId||'')+(r.bankReference?' · '+esc(r.bankReference):'')+'</div>'+warning;}
+    function ledgerReconciliationLabel(x){if(x&&x.kind==='sale_store_credit_correction')return '<div class="'+(x.stale?'neg':'pos')+'"><small>'+(x.stale?'Correction evidence needs review':'App correction approved · no new cash receipt')+'</small></div>';var warning=x&&x.bankMovementAuthority&&x.bankMovementAuthority.sourceChanged?'<div class="neg"><small>Source changed after reconciliation. Verified bank amount/date retained; review the source evidence.</small></div>':'';if(x&&x.paytmReconciliation)return ReconciliationStatus.paytmLedgerRow(x.paytmReconciliation)+warning;var r=x&&x.reconciliation;if(!r)return'<div class="muted">Not reconciled</div>'+warning;return'<div class="pos"><b>'+(r.sourceAccountConfirmed?'✓ Source-bank confirmed':'✓ Reconciled')+'</b> · '+esc(r.bankDate||'')+'</div><div class="muted">'+(r.sourceAccountConfirmed?esc(r.sourceAccount||'')+' · ':'')+esc(r.reconciliationId||'')+(r.bankReference?' · '+esc(r.bankReference):'')+'</div>'+warning;}
     function loadCounterCashReconciliation(currentBalance,quiet){
       var host=el('cashReconciliationPanel');if(!host)return Promise.resolve();host.dataset.currentBalance=String(currentBalance);var token=++cashStatusGeneration;
       return api('/api/expenses/cash-reconciliations',{cache:'no-store'}).then(function(d){
@@ -3291,6 +3351,7 @@
         var rows = d.requests.map(function(r){
           var detail = r.kind==='ledger' ? ('<span class="tag">'+esc((r.meta&&r.meta.type)||'variable')+'</span>')
                                          : r.kind==='counter_cash_adjustment' ? ('<span class="muted" style="font-size:11px">'+esc((r.meta&&r.meta.direction)==='deduct'?'Deduct':'Add')+' '+fmt(r.meta&&r.meta.amount)+' · '+esc(r.meta&&r.meta.date||'')+'<br>'+esc(r.meta&&r.meta.note||'')+'</span>')
+                                         : r.kind==='sale_store_credit' ? ('<span class="muted" style="font-size:11px">Replacement #'+esc(String(r.meta.orderNumber).replace(/^#/,''))+' · Cash ₹0 · Store credit '+fmt(r.meta.storeCreditAmount)+' from returned order #'+esc(String(r.meta.originalOrderNumber).replace(/^#/,''))+'<br>'+esc(r.meta.reason||'')+'<br>Shopify wallet adjustment remains pending outside this app.</span>')
                                          : r.kind==='sale_split' ? ('<span class="muted" style="font-size:11px">Total '+fmt(r.meta.gross)+' · Cash '+fmt(r.meta.cashAmount)+' · Non-cash '+fmt(r.meta.nonCashAmount)+'<br>'+esc(r.meta.reason||'')+'</span>')
                                          : (r.meta&&r.meta.details ? '<span class="muted" style="font-size:11px">'+esc(r.meta.details)+'</span>' : '');
           var requested = r.kind==='vendor'
@@ -3299,7 +3360,7 @@
           return '<tr><td data-label="Kind"><span class="tag">'+esc(r.kind)+'</span></td>'+
             '<td data-label="Requested">'+requested+'</td>'+
             '<td class="muted" data-label="By" style="font-size:11px">'+esc(r.by||'')+'<br>'+esc((r.at||'').slice(0,10))+'</td>'+
-            '<td data-label="">'+((r.kind==='sale_split'||r.kind==='counter_cash_adjustment')&&!cfg.isOwner?'<span class="muted">Owner approval required</span>':'<button class="btn mini green" onclick="decideReq(\''+r.id+'\',true,'+(r.kind==='vendor'?'true':'false')+')">Approve</button> '+
+            '<td data-label="">'+((r.kind==='sale_split'||r.kind==='sale_store_credit'||r.kind==='counter_cash_adjustment')&&!cfg.isOwner?'<span class="muted">Owner approval required</span>':'<button class="btn mini green" onclick="decideReq(\''+r.id+'\',true,'+(r.kind==='vendor'?'true':'false')+')">Approve</button> '+
                 '<button class="btn mini ghost" onclick="decideReq(\''+r.id+'\',false)">Reject</button>')+'</td></tr>';
         }).join('');
         el('atable').innerHTML = '<table class="resp"><thead><tr><th>Kind</th><th>Requested</th><th>By</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
