@@ -296,6 +296,17 @@ async function runSync(opts = {}) {
   } finally { _syncing = false; }
 }
 
+async function refreshAccountingCustomerEvidence(options = {}) {
+  if (_syncing) throw Object.assign(new Error('Shopify order sync is already running. Retry customer verification after it finishes.'),{status:409});
+  _syncing = true;
+  try {
+    return await require('./shopify-customer-evidence').refresh({
+      filePath:ORDERS_PATH,client:shopifyClient,store:SHOPIFY_STORE,
+      orderIds:options.orderIds,actor:options.actor,validate:options.validate
+    });
+  } finally { _syncing = false; }
+}
+
 // ── Read + filter ────────────────────────────────────────────────
 function mergedList(store) {
   return Object.values(store.orders).map(o => {
@@ -558,4 +569,4 @@ function startAutoSync() {
   setInterval(tick, every);
 }
 
-module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance, syncVelocityPayouts, syncLogistics, syncGoKwik, startGoKwikSync };
+module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance, syncVelocityPayouts, syncLogistics, syncGoKwik, startGoKwikSync, refreshAccountingCustomerEvidence };
