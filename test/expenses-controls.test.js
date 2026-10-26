@@ -3296,7 +3296,8 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html,/populatePaymentSource\(e\.nature\|\|'SANKI',true\)/);
   assert.match(html,/Refreshing paying accounts/);
   assert.match(html,/<label>Expense entity<\/label><select id="lg_expense_nature"><option value="">All<\/option>/);
-  assert.match(html,/expenseNature='\+encodeURIComponent\(el\('lg_expense_nature'\)\.value\)/);
+  assert.match(html,/expenseNature=el\('lg_expense_nature'\)\.value/);
+  assert.match(html,/expenseNature='\+encodeURIComponent\(expenseNature\)/);
   assert.match(html,/id="editPayingAccount"/);
   assert.match(html,/paymentAccount:el\('editPayingAccount'\)\.value/);
 });

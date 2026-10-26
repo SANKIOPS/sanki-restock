@@ -4451,6 +4451,28 @@ router.post('/api/expenses/sale-store-credit-corrections/preview',(req,res)=>{
     res.json({success:true,proposal,previewFingerprint:storeCreditPreviewFingerprint(proposal),ownerApprovalRequired:!isOwner(req)});
   }catch(error){res.status(error.status||409).json({success:false,error:error.message});}
 });
+router.post('/api/expenses/sale-store-credit-corrections/refresh-customers',async(req,res)=>{
+  if(!canCorrectStoreCreditSale(req))return res.status(403).json({success:false,error:'SANKI Admin or Owner access to Counter Cash is required.'});
+  try{
+    const s=loadStore(),input=req.body||{},saleId=String(input.saleId||''),orders=storeCreditOrdersSnapshot(),replacement=orders[saleId.replace(/^SHOPIFY\//,'')],number=String(input.originalOrderNumber||'').trim().replace(/^#/,'');
+    const originals=Object.values(orders).filter(order=>String(order.orderNumber||order.number||order.name||'').replace(/^#/,'')===number);
+    if(!/^SHOPIFY\/\d+$/.test(saleId)||!replacement||originals.length!==1||String(originals[0].id)===String(replacement.id))return res.status(400).json({success:false,error:'Choose the existing replacement sale and one distinct original returned order.'});
+    if(!salesLedgerEntries(s).some(row=>row.id===saleId&&row.account===DEFAULT_COUNTER_CASH))return res.status(409).json({success:false,error:'This replacement is not an available Counter Cash receipt. Review its existing payment source first.'});
+    const selectedIds=[String(replacement.id),String(originals[0].id)];
+    const validate=(before,after)=>{
+      if(fs.existsSync(path.join(DATA_DIR,'.bank-authority-transaction.json')))throw Object.assign(new Error('An accounting transaction needs recovery before refreshing customer evidence.'),{status:409});
+      const current=JSON.parse(fs.readFileSync(EXP_PATH,'utf8'));
+      if(!current||typeof current!=='object'||Array.isArray(current))throw Object.assign(new Error('The accounting source cannot be verified safely.'),{status:409});
+      const changedIds=selectedIds.filter(id=>String(before[id].customer&&before[id].customer.id||'')!==String(after[id].customer&&after[id].customer.id||''));
+      const references=record=>record&&changedIds.some(id=>String(record.orderId)===id||String(record.originalOrderId)===id||record.saleId==='SHOPIFY/'+id);
+      if(Object.values(current.saleStoreCreditCorrections||{}).some(references)||(current.requests||[]).some(request=>request.status==='pending'&&request.kind==='sale_store_credit'&&references(request.meta)))throw Object.assign(new Error('These customer identities are already used by a saved correction. Review that correction before refreshing its source.'),{status:409});
+      const incentives=fs.existsSync(INCENTIVES_PATH)?JSON.parse(fs.readFileSync(INCENTIVES_PATH,'utf8')):{};
+      require('./incentives').assertStoreCreditCorrectionSafe(Object.values(before).map(order=>saleStoreCreditCorrections.projectOrder(order,current,before)),Object.values(after).map(order=>saleStoreCreditCorrections.projectOrder(order,current,after)),incentives);
+    };
+    const result=await require('./orders').refreshAccountingCustomerEvidence({orderIds:selectedIds,actor:req.user.username,validate});
+    res.json(result);
+  }catch(error){res.status(error.status||409).json({success:false,error:error.message||'Could not refresh verified Shopify customer evidence.'});}
+});
 router.post('/api/expenses/sale-store-credit-corrections',(req,res)=>{
   if(!canCorrectStoreCreditSale(req))return res.status(403).json({success:false,error:'SANKI Admin or Owner access to Counter Cash is required.'});
   try{

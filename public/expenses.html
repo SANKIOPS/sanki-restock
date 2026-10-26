@@ -277,17 +277,20 @@
     <div class="proof-tools"><button type="button" id="proofZoomOut" aria-label="Zoom out">−</button><button type="button" id="proofReset" aria-label="Reset zoom">↺</button><button type="button" id="proofZoomIn" aria-label="Zoom in">＋</button><button type="button" id="proofClose" aria-label="Close">×</button></div>
   </div>
 
-  <dialog id="saleCreditDlg"><div class="dlg">
+  <dialog id="saleCreditDlg" style="width:min(680px,94vw);max-width:94vw"><div class="dlg">
     <h3>Correct replacement payment to store credit</h3>
     <p id="scSummary" class="sub"></p>
     <p class="sub">This corrects the app's payment classification only. It preserves both orders and the original cash receipt. Adjust the customer's Shopify credit separately; this form does not debit that wallet.</p>
-    <label>Original returned order number<input id="scOriginal" placeholder="e.g. #1234" autocomplete="off"></label>
-    <label>Store credit used ₹<input id="scAmount" type="number" step="0.01" min="0.01" readonly></label>
-    <label>Correction reason — required<textarea id="scReason" rows="3" placeholder="Explain the exchange and why no new cash was received"></textarea></label>
+    <div class="grid">
+      <div class="fld"><label for="scOriginal">Original returned order number</label><input id="scOriginal" placeholder="e.g. #1234" autocomplete="off"></div>
+      <div class="fld"><label for="scAmount">Store credit used ₹</label><input id="scAmount" type="number" step="0.01" min="0.01" readonly></div>
+      <div class="fld full"><label for="scReason">Correction reason — required</label><textarea id="scReason" rows="4" style="width:100%;min-height:104px" placeholder="Explain the exchange and why no new cash was received"></textarea></div>
+    </div>
     <div id="scPreview" class="sub"></div>
     <div id="scMsg" class="msg" role="status"></div>
     <div class="expense-actions">
       <button type="button" class="btn primary" id="scReview">Review correction</button>
+      <button type="button" class="btn ghost" id="scRefresh">Refresh Shopify customer data</button>
       <button type="button" class="btn green" id="scSave" disabled>Submit for Owner approval</button>
       <button type="button" class="btn ghost" onclick="document.getElementById('saleCreditDlg').close()">Close</button>
     </div>
@@ -2434,6 +2437,16 @@
       el('scSave').textContent=cfg.isOwner?'Confirm app correction':'Submit for Owner approval';el('saleCreditDlg').showModal();
     };
     el('scOriginal').oninput=resetStoreCreditPreview;el('scReason').oninput=resetStoreCreditPreview;
+    el('scRefresh').onclick=async function(){
+      if(storeCreditCorrectionBusy)return;
+      var original=el('scOriginal').value.trim();if(!original){el('scMsg').textContent='Enter the original returned order number first.';return;}
+      resetStoreCreditPreview();storeCreditCorrectionBusy=true;el('scReview').disabled=true;el('scRefresh').disabled=true;el('scOriginal').disabled=true;el('scReason').disabled=true;
+      try{
+        var d=await api('/api/expenses/sale-store-credit-corrections/refresh-customers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({saleId:storeCreditCorrectionId,originalOrderNumber:original})});
+        el('scMsg').textContent=d.success?'Shopify customer match verified. Review the correction again before submitting.':d.error||'Could not verify the Shopify customer match.';
+      }catch(error){el('scMsg').textContent='The customer refresh could not be confirmed. Verify its result before retrying. '+(error.message||'');}
+      finally{storeCreditCorrectionBusy=false;el('scReview').disabled=false;el('scRefresh').disabled=false;el('scOriginal').disabled=false;el('scReason').disabled=false;}
+    };
     el('scReview').onclick=async function(){
       if(storeCreditCorrectionBusy)return;resetStoreCreditPreview();
       var payload={saleId:storeCreditCorrectionId,originalOrderNumber:el('scOriginal').value.trim(),storeCreditAmount:Number(el('scAmount').value),reason:el('scReason').value.trim()};

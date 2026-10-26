@@ -218,3 +218,23 @@ test('quiet refresh joins manually selected period B while the URL still contain
   assert.equal(ui.context.location.searchParams.get('draft'), periodB);
   assert.match(ui.nodes.bs_table.innerHTML, /BRD-MANUAL-PERIOD-B/);
 });
+
+test('selected nonempty expense entity is encoded from its own request snapshot', async () => {
+  const ui = harness();
+  ui.nodes.lg_expense_nature.value = 'SAMAST';
+  ui.context.loadAccountLedger();
+  const samast = ui.requests('account-ledger')[0];
+  assert.equal(new URL(samast.url, 'https://example.test').searchParams.get('expenseNature'), 'SAMAST');
+  assert.ok(samast.url.includes('&expenseNature=' + encodeURIComponent('SAMAST') + '&'));
+  ui.nodes.lg_expense_nature.value = 'PERSONAL';
+  ui.context.loadAccountLedger();
+  const personal = ui.requests('account-ledger')[1];
+  assert.equal(new URL(personal.url, 'https://example.test').searchParams.get('expenseNature'), 'PERSONAL');
+  assert.ok(personal.url.includes('&expenseNature=' + encodeURIComponent('PERSONAL') + '&'));
+  assert.equal(new URL(samast.url, 'https://example.test').searchParams.get('expenseNature'), 'SAMAST', 'the earlier request keeps its original selected entity');
+  personal.resolve({ ...ledgerResponse(), balance: 222 }); await flush();
+  const content = ui.nodes.ledgerTable.innerHTML;
+  samast.resolve({ ...ledgerResponse(), balance: 111 }); await flush();
+  assert.equal(ui.nodes.ledgerTable.innerHTML, content, 'an obsolete entity response cannot replace the currently selected entity');
+  assert.equal(ui.nodes.lg_expense_nature.value, 'PERSONAL');
+});
