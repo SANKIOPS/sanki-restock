@@ -7741,6 +7741,19 @@ const expenseRefundDeps = {
   movementLocked:(s,id)=>unpayBlockedReferences(s).has(id)||(s.reconciliationExpenses||[]).some(e=>e.expenseRefundReceiptId===id)||require('./rental-register').receiptUsage(require('./rental-register').state(s),id)>0||(s.receipts||[]).some(r=>r.id===id&&(s.cashReconciliations||[]).some(x=>x.status==='approved'&&x.account===r.account&&x.verifiedThrough>=r.date))
 };
 expenseRefundRoutes.register(router,expenseRefundDeps);
+// Read-only reference lookup. Reuse existing permissions and correction
+// previews; this workspace never migrates, stages or writes accounting data.
+const manageTransactionCardReader=require('./credit-card-payment-corrections').create({policy:()=>sourceCorrectionPolicy});
+const manageTransactionLookupPolicy={
+  ...sourceCorrectionPolicy,
+  canViewExpense,canAccessExpense:canManageRestrictedExpense,
+  ledgerEditor:ledgerTransactionEditor,
+  cardEntries:(snapshot,req,cardId)=>manageTransactionCardReader.listPayments(snapshot,req,cardId,sourceCorrectionPolicy),
+  authorizeRefund:(req,record,snapshot)=>require('./manage-transaction-refund-access')(req,record,snapshot,{
+    ...sourceCorrectionPolicy,canViewExpense,canAccessExpense:canManageRestrictedExpense
+  })
+};
+require('./manage-transactions').create(manageTransactionLookupPolicy).register(router);
 router.use(modelCalendar.createRouter({loadStore,saveStore,audit}));
 
 // Registered after the named GET routes so /list, /config and other

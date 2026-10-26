@@ -90,6 +90,14 @@
       if (!result.success) throw new Error(result.error || 'Payments are unavailable.');
       heading.textContent = 'Correct existing payments · ' + result.card.name;
       if (!result.entries.length) return status('No accessible recorded card payments or legacy settlement transfers were found.', false);
+      if (options.sourceId) {
+        var requested = result.entries.filter(function(entry) { return entry.id === options.sourceId; });
+        if (requested.length !== 1) return status('The requested payment is unavailable or inaccessible. No other payment was selected.', true);
+        if (!requested[0].editable) { node('strong', requested[0].id, entriesHost); return status('Locked: ' + requested[0].blockedReason, true); }
+        status('Review this exact existing payment. No records have changed.', false);
+        choose(requested[0]);
+        return;
+      }
       status('Choose an existing payment. Protected records explain why they are locked.', false);
       result.entries.forEach(function(entry) {
         var box = node('div', null, entriesHost); box.style.cssText = 'border:1px solid #d6dde6;padding:12px;margin:8px 0;border-radius:8px';
