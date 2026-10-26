@@ -105,7 +105,7 @@ function buildRestorePlan(state, input, helpers) {
   const oppositeBook = state.bankStatements && state.bankStatements[helpers.bookKey('PERSONAL', oppositeAccount)], oppositeMatches = Object.values(oppositeBook && oppositeBook.transactions || {}).filter(item => item.id === oppositeEvidence[0].identity);
   if (oppositeMatches.length !== 1 || !exactBank(oppositeMatches[0], oppositeAccount, transfer, helpers) || helpers.bankSignature(oppositeMatches[0]) !== oppositeEvidence[0].signature || helpers.bankReference(oppositeMatches[0]) !== selected.reference) fail('The opposite-side physical statement row is missing or no longer agrees with its verified link.');
   const oppositeBank = oppositeMatches[0];
-  const oppositeHistory = matchingHistoryRows(oppositeBook, oppositeBank, helpers).filter(({ row }) => row.bank.transactionId === oppositeBank.id && helpers.bankSignature(row.bank) === helpers.bankSignature(oppositeBank));
+  const oppositeHistory = matchingHistoryRows(oppositeBook, oppositeBank, helpers).filter(({ row }) => (!text(row.bank.transactionId) || row.bank.transactionId === oppositeBank.id) && helpers.bankSignature(row.bank) === helpers.bankSignature(oppositeBank));
   if (oppositeHistory.length !== 1) fail('The opposite-bank statement must contain one exact finalized bank record for this transfer.');
   const oppositeHistoryRecord = oppositeHistory[0];
   const oppositeAlreadyLinked = linkedIds(oppositeHistoryRecord.row).includes(transfer.id);

@@ -117,6 +117,7 @@ test('Owner restores both sides when the exact opposite finalized bank row was a
     const row = state.bankStatements['PERSONAL|' + receiving].imports[0].reconciliationRows[0];
     row.linkedRecordIds = [];
     row.ledger = {};
+    delete row.bank.transactionId;
     row.decision = 'Reviewed bank record without ledger link';
     row.reason = 'The linked transfer was later excluded';
     state.transfers[0].bankReconciliationEvidence = { recordId: 'BST-SYNTHETIC-RESTORE-ORIGIN', description: row.bank.description, reference };
