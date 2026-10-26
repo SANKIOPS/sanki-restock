@@ -67,7 +67,7 @@ test('restored salary context cannot expose a restricted payment-only screen or 
 });
 test('saved reconciliation period is restored by a read only request, not a posting',async()=>{
   const ctx=browser('https://example.test/expenses.html?tab=cash&draft=BST-123');const fields=new Map(),calls=[];
-  ctx.el=id=>{if(!fields.has(id))fields.set(id,{value:id==='bs_account'?'IndusInd Bank 8181':'',style:{},textContent:'',innerHTML:''});return fields.get(id);};
+  ctx.el=id=>{if(!fields.has(id))fields.set(id,{value:['bs_account','lg_account'].includes(id)?'IndusInd Bank 8181':'',style:{},textContent:'',innerHTML:''});return fields.get(id);};
   ctx.bankNature='SANKI';ctx.bankStatementLoadGeneration=0;ctx.bankDraftSwitcher=()=>'';ctx.renderBankHistory=()=>'';ctx.esc=String;ctx.fmt=String;
   ctx.api=async(url,options)=>{calls.push({url,options});return{success:true,transactions:[],imports:[],draftOptions:[],draft:{draftId:'BST-123'}};};
   ctx.renderBankReconciliation=d=>ctx.SankiNavigation.set({draft:d.draftId});
