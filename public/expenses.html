@@ -277,13 +277,15 @@
     <div class="proof-tools"><button type="button" id="proofZoomOut" aria-label="Zoom out">−</button><button type="button" id="proofReset" aria-label="Reset zoom">↺</button><button type="button" id="proofZoomIn" aria-label="Zoom in">＋</button><button type="button" id="proofClose" aria-label="Close">×</button></div>
   </div>
 
-  <dialog id="saleCreditDlg"><div class="dlg">
+  <dialog id="saleCreditDlg" style="width:min(680px,94vw);max-width:94vw"><div class="dlg">
     <h3>Correct replacement payment to store credit</h3>
     <p id="scSummary" class="sub"></p>
     <p class="sub">This corrects the app's payment classification only. It preserves both orders and the original cash receipt. Adjust the customer's Shopify credit separately; this form does not debit that wallet.</p>
-    <label>Original returned order number<input id="scOriginal" placeholder="e.g. #1234" autocomplete="off"></label>
-    <label>Store credit used ₹<input id="scAmount" type="number" step="0.01" min="0.01" readonly></label>
-    <label>Correction reason — required<textarea id="scReason" rows="3" placeholder="Explain the exchange and why no new cash was received"></textarea></label>
+    <div class="grid">
+      <div class="fld"><label for="scOriginal">Original returned order number</label><input id="scOriginal" placeholder="e.g. #1234" autocomplete="off"></div>
+      <div class="fld"><label for="scAmount">Store credit used ₹</label><input id="scAmount" type="number" step="0.01" min="0.01" readonly></div>
+      <div class="fld full"><label for="scReason">Correction reason — required</label><textarea id="scReason" rows="4" style="width:100%;min-height:104px" placeholder="Explain the exchange and why no new cash was received"></textarea></div>
+    </div>
     <div id="scPreview" class="sub"></div>
     <div id="scMsg" class="msg" role="status"></div>
     <div class="expense-actions">
