@@ -133,3 +133,38 @@ test('retained requester and Owner approval identity and date are displayed safe
   assert.match(details,/Requested by admin &lt;reviewer&gt;/);assert.match(details,/Approved by owner &amp; approver/);assert.match(details,/2026-10-26 10:12/);assert.match(details,/Owner-approved app correction/);assert.match(details,/wallet adjustment remains pending outside this app/);assert.doesNotMatch(details,/wallet (?:debited|completed|adjusted)/i);assert.equal(JSON.stringify(row),before);
   const absent=ui.context.entryDetails({...row,appStoreCreditCorrection:{}});assert.match(absent,/Requested by —.*Approved by —/);assert.doesNotMatch(absent,/undefined|null/);
 });
+
+test('customer refresh requires the original order number and never looks up an empty source',async()=>{
+  const ui=setup({owner:false});ui.open();ui.el('scOriginal').value='  ';await ui.el('scRefresh').onclick();assert.equal(ui.calls.length,0);assert.match(ui.el('scMsg').textContent,/original returned order number first/);assert.equal(ui.el('scSave').disabled,true);assert.equal(ui.messages.length,0);
+});
+
+test('customer refresh sends only selected immutable sale ID and source order number',async()=>{
+  const ui=setup({owner:false,respond:()=>({success:true,updated:1,customerMatchVerified:true})});ui.open();ui.fill();
+  ui.el('scAmount').value='999999.99';ui.el('customerId').value='untrusted-customer';ui.el('walletAmount').value='999999.99';ui.el('scReason').value='Not evidence for customer identity';
+  await ui.el('scRefresh').onclick();assert.equal(ui.calls.length,1);assert.equal(ui.calls[0].url,saveUrl+'/refresh-customers');assert.equal(ui.calls[0].request.method,'POST');assert.deepEqual(ui.calls[0].body,{saleId,originalOrderNumber:'#2902'});assert.deepEqual(Object.keys(ui.calls[0].body).sort(),['originalOrderNumber','saleId']);assert.equal(ui.el('scSave').disabled,true);assert.equal(ui.messages.length,0);
+});
+
+test('successful customer refresh invalidates prior preview and still requires review then Owner approval',async()=>{
+  const ui=setup({owner:false,respond:url=>url===saveUrl+'/refresh-customers'?{success:true,updated:1,customerMatchVerified:true}:url===previewUrl?{success:true,proposal:{orderNumber:'2903',originalOrderNumber:'2902',storeCreditAmount:2499},previewFingerprint:'fresh-customer-preview',ownerApprovalRequired:true}:{success:true,approved:false,request:{id:'RQ-REFRESHED',status:'pending'}}});
+  await ui.preview();assert.equal(ui.el('scSave').disabled,false);const original=ui.el('scOriginal').value,explanation=ui.el('scReason').value;
+  await ui.el('scRefresh').onclick();assert.equal(ui.el('scSave').disabled,true);assert.equal(ui.el('scPreview').textContent,'');assert.match(ui.el('scMsg').textContent,/customer match verified.*Review.*again/);assert.equal(ui.el('scOriginal').value,original);assert.equal(ui.el('scReason').value,explanation);
+  await ui.el('scSave').onclick();assert.equal(ui.calls.length,2);assert.equal(ui.messages.length,0);assert.deepEqual(ui.refreshes,[]);
+  await ui.el('scReview').onclick();await ui.el('scSave').onclick();assert.equal(ui.calls.length,4);assert.deepEqual(ui.calls.map(call=>call.url),[previewUrl,saveUrl+'/refresh-customers',previewUrl,saveUrl]);assert.equal(ui.calls[3].body.previewFingerprint,'fresh-customer-preview');assert.match(ui.el('scMsg').textContent,/RQ-REFRESHED.*Owner approval/);assert.match(ui.el('scMsg').textContent,/Cash and incentives remain unchanged until approved/);assert.doesNotMatch(ui.el('scMsg').textContent,/App correction saved/);
+});
+
+test('failed or uncertain customer refresh preserves entered fields but cannot save using old preview',async()=>{
+  for(const uncertain of [false,true]){
+    const ui=setup({owner:false,respond:url=>{
+      if(url===previewUrl)return{success:true,proposal:{orderNumber:'2903',originalOrderNumber:'2902',storeCreditAmount:2499},previewFingerprint:'old-preview',ownerApprovalRequired:true};
+      if(uncertain)throw new Error('Lookup connection lost');return{success:false,error:'Shopify returned different customer identities.'};
+    }});
+    await ui.preview();const original=ui.el('scOriginal').value,explanation=ui.el('scReason').value;await ui.el('scRefresh').onclick();assert.equal(ui.el('scOriginal').value,original);assert.equal(ui.el('scReason').value,explanation);assert.equal(ui.el('scSave').disabled,true);assert.equal(ui.el('scPreview').textContent,'');
+    assert.match(ui.el('scMsg').textContent,uncertain?/refresh could not be confirmed.*Verify its result before retrying/:/different customer identities/);await ui.el('scSave').onclick();assert.equal(ui.calls.length,2);assert.equal(ui.messages.length,0);assert.deepEqual(ui.refreshes,[]);
+  }
+});
+
+test('in-flight customer refresh blocks duplicate refresh, preview, save and switching sale',async()=>{
+  let finish;const ui=setup({owner:false,respond:()=>new Promise(resolve=>{finish=resolve;})});ui.open();ui.fill();const refreshing=ui.el('scRefresh').onclick();assert.equal(ui.calls.length,1);assert.equal(ui.el('scRefresh').disabled,true);assert.equal(ui.el('scOriginal').disabled,true);assert.equal(ui.el('scReason').disabled,true);
+  await ui.el('scRefresh').onclick();await ui.el('scReview').onclick();await ui.el('scSave').onclick();ui.context.window.openStoreCreditCorrection('SHOPIFY/other');assert.equal(ui.calls.length,1);assert.match(ui.el('scSummary').textContent,/#2903/);
+  finish({success:true,updated:1,customerMatchVerified:true});await refreshing;assert.equal(ui.el('scRefresh').disabled,false);assert.equal(ui.el('scOriginal').disabled,false);assert.equal(ui.el('scReason').disabled,false);assert.equal(ui.el('scSave').disabled,true);assert.equal(ui.messages.length,0);
+});
