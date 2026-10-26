@@ -30,11 +30,20 @@ function setup(options = {}) {
     if (options.applyError) return { success: false, error: options.applyError };
     return { success: true, audit: { id: 'AUD-SYNTHETIC' } };
   };
-  const dialog = ui.open({ document, api, cardId: 'CC-SYNTHETIC', onApplied: event => events.push(event) });
+  const dialog = ui.open({ document, api, cardId: 'CC-SYNTHETIC', sourceId: options.sourceId, onApplied: event => events.push(event) });
   const find = text => dialog.querySelectorAll('*').find(el => el.textContent === text), field = label => dialog.querySelectorAll('input,textarea').find(el => el.attributes['aria-label'] === label);
   return { dialog, body, calls, events, find, field };
 }
 function fill(h) { h.field('Amount ₹').value = '99.63'; h.field('Amount ₹').dispatch('input'); h.field('Correction reason and source evidence (required)').value = 'Verified the synthetic source amount'; h.field('Correction reason and source evidence (required)').dispatch('input'); }
+
+test('Manage exact card-payment link opens only its permitted editor without writing', async () => {
+  const h=setup({sourceId:source.id});await flush();assert.ok(h.field('Amount ₹'));assert.equal(h.calls.length,1);assert.equal(h.find('Apply this audited correction'),undefined);
+});
+test('Manage missing, duplicate or locked card-payment targets never fall back to another payment', async () => {
+  for(const options of [{sourceId:'payment:CCP-MISSING'},{sourceId:source.id,entries:[clone(source),clone(source)]},{sourceId:source.id,entries:[{id:source.id,editable:false,blockedReason:'Pending Owner approval'}]}]){
+    const h=setup(options);await flush();assert.equal(h.field('Amount ₹'),undefined);assert.equal(h.find('Review correction'),undefined);assert.equal(h.calls.length,1);
+  }
+});
 test('change selection emits only editable changed fields, never identity or account data', () => { assert.deepEqual(ui.changesFor(source, { ...source, amount: '99.63', account: 'Forged', cardId: 'Forged' }), { amount: '99.63' }); assert.deepEqual(ui.changesFor(source, { ...source, amount: '100' }), {}); });
 test('list is read-only and correction requires preview followed by a separate explicit Apply', async () => {
   const h = setup(); await flush(); assert.equal(h.dialog.shown, true); assert.equal(h.calls.length, 1); assert.equal(h.calls[0].request.cache, 'no-store'); assert.equal(h.find('Apply this audited correction'), undefined);

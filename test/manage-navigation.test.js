@@ -72,15 +72,15 @@ test('only existing Admin finance tabs appear and retired approvals navigation i
   for (const key of ['payables', 'reimbursements', 'audit', 'receivables', 'creditcards', 'approvals']) assert.equal(cashVerifier.includes(key), false, key);
 });
 
-test('Manage transaction edit actions advertise only the explicit server capability without changing destinations', () => {
+test('Manage transaction lookup replaces the generic ledger shortcut only for explicitly authorized editors', () => {
   const allowed = items(catalog(prashant, { ...config, isOwner: false, canEditLedgerTransactions: true })).find(item => item.key === 'transactions');
-  assert.equal(allowed.href, '/expenses.html?tab=cash');
+  assert.equal(allowed.href, '/manage.html?section=transactions');
   assert.ok(allowed.actions.includes('Edit permitted payments, transfers and receipts'));
   assert.match(allowed.description, /Protected entries remain locked/);
   for (const value of [undefined, false, 'true']) {
     const denied = items(catalog(owner, { ...config, canEditLedgerTransactions: value })).find(item => item.key === 'transactions');
     assert.deepEqual(denied.actions, ['Account ledgers', 'Review transactions', 'Reconcile account']);
-    assert.equal(denied.href, allowed.href);
+    assert.equal(denied.href, '/expenses.html?tab=cash');
   }
 });
 

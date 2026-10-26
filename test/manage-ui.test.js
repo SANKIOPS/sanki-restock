@@ -47,6 +47,16 @@ function harness({ cfg, modules, route, url = 'https://sanki.example/manage.html
   return { app, nodes, calls, config, win, events, async init(section) { await app.init(); if (section) await app.showTool(section); } };
 }
 
+test('transaction workspace opens directly only with exact Manage capability, without loading or changing transactions', async () => {
+  const h=harness({cfg:{canEditLedgerTransactions:true},url:'https://sanki.example/manage.html?section=transactions'});let loaded=0;
+  h.win.SankiManageTransactions={create(_doc,_win,config,_request,onBusy){assert.equal(config.canEditLedgerTransactions,true);return{load(){loaded++;return Promise.resolve(true);}};}};
+  await h.init();assert.equal(loaded,1);assert.equal(h.nodes.transactionWorkspace.hidden,false);assert.equal(h.nodes.groupWorkspace.hidden,true);assert.equal(h.nodes.toolTitle.textContent,'Manage transactions');
+  assert.equal(h.calls.some(call=>call.endpoint.includes('/transactions')||call.options.method),false);
+  for(const cfg of [{canEditLedgerTransactions:false},{canEditLedgerTransactions:true,isAdmin:false},{canEditLedgerTransactions:true,claimantOnly:true}]){
+    const denied=harness({cfg});await denied.init();assert.equal(await denied.app.showTool('transactions'),false);assert.equal(denied.nodes.transactionWorkspace.hidden,true);
+  }
+});
+
 test('Manage is one shared hub; existing financial forms remain untouched and category shortcut uses hub', () => {
   assert.match(expenseHtml, /data-t="manage" id="manageHubTab"/);
   assert.match(expenseHtml, /if\(tab==='manage'\) return openManageHub\(\)/);
