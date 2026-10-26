@@ -18,6 +18,7 @@ const claimantPolicy = require('./expense-claimant-policy');
 const ledgerConnections = require('./expense-ledger-connections');
 const transferReimbursements = require('./transfer-reimbursement-links');
 const velocityCodAccounting = require('./velocity-cod-accounting');
+const saleStoreCreditCorrections = require('./sale-store-credit-corrections');
 // ═══════════════════════════════════════════════════════════════
 // Expenses — the money-OUT side of in-app accounting, built around SANKI's
 // real "runner" process and made leakage-proof by PROOF at every gate.
@@ -1366,13 +1367,18 @@ function saveStore(s, options = {}) {
   // Once a reconciliation records the ledger's original date, later views may
   // expose the authoritative bank date as the row date. Never let a subsequent
   // save replace the audit/undo date with that displayed bank date.
-  try {
-    const persisted=JSON.parse(fs.readFileSync(EXP_PATH,'utf8'));
+  let persisted=null;
+  try { persisted=JSON.parse(fs.readFileSync(EXP_PATH,'utf8')); }
+  catch(error){if(error.code!=='ENOENT')throw error;}
+  if(persisted){
+    // A slow provider lookup must not replace newer approved corrections,
+    // approval requests or their audit records with its earlier snapshot.
+    saleStoreCreditCorrections.assertPreserved(s,persisted);
     Object.entries(s.bankDateOverrides||{}).forEach(([id,current])=>{
       const previous=persisted.bankDateOverrides&&persisted.bankDateOverrides[id];
       if(current&&previous&&current.reconciliationDraft===previous.reconciliationDraft&&previous.originalDate)current.originalDate=previous.originalDate;
     });
-  } catch {}
+  }
   // Failed atomic writes must not leave partial files behind and make every
   // later accounting save fail.
   const dir=path.dirname(EXP_PATH),prefix=path.basename(EXP_PATH)+'.tmp-';
@@ -1394,7 +1400,7 @@ function audit(s, req, action, subjectType, subjectId, data) {
   s.auditLog=Array.isArray(s.auditLog)?s.auditLog:[];s.auditSeq=(s.auditSeq||0)+1;
   const details=data||{},headers=req&&req.headers||{},header=name=>req&&typeof req.get==='function'?req.get(name):headers[String(name).toLowerCase()],forwarded=String(header('x-forwarded-for')||'').split(',')[0].trim(),ip=forwarded||String(req&&req.ip||req&&req.socket&&req.socket.remoteAddress||details.ip||''),userAgent=String(header('user-agent')||details.userAgent||''),device=details.device||(userAgent?/mobile|android|iphone/i.test(userAgent)?'Mobile':/ipad|tablet/i.test(userAgent)?'Tablet':'Desktop':(details.user?'Telegram':'Unknown'));
   const entry={id:'AUD-'+String(s.auditSeq).padStart(6,'0'),at:new Date().toISOString(),user:(req&&req.user&&req.user.username)||details.user||'system',action,subjectType,subjectId:String(subjectId||''),nature:normalizedNature(details.nature||'SANKI'),account:String(details.account||''),paymentId:String(details.paymentId||''),ip,device,userAgent:userAgent.slice(0,500),before:details.before==null?null:details.before,after:details.after==null?null:details.after,note:String(details.note||'')};
-  s.auditLog.push(entry);if(s.auditLog.length>10000)s.auditLog=s.auditLog.slice(-10000);return entry;
+  s.auditLog.push(entry);if(s.auditLog.length>10000){const keepFrom=s.auditLog.length-10000,protectedSubjects=saleStoreCreditCorrections.protectedAuditSubjects(s);s.auditLog=s.auditLog.filter((event,index)=>index>=keepFrom||String(event.action||'').startsWith('SALE_STORE_CREDIT')||protectedSubjects.has(event.subjectId));}return entry;
 }
 
 // Owner-only Telegram quick capture. The Telegram webhook has already verified
@@ -1561,7 +1567,11 @@ function salesLedgerEntries(accountingStore, options = {}) {
   try {
     const shop = JSON.parse(fs.readFileSync(ORDERS_PATH, 'utf8'));
     const velocityEvidence=velocityShipmentEvidence();
-    Object.values(shop.orders || {}).filter(x=>isOriginalPaymentOrder(x)||velocityCodAccounting.isPendingReceivableOrder(shop,x,velocityEvidence)).forEach(x => {
+    Object.values(shop.orders || {}).map(order=>saleStoreCreditCorrections.projectOrder(order,accountingStore||{},shop.orders||{})).filter(x=>isOriginalPaymentOrder(x)||velocityCodAccounting.isPendingReceivableOrder(shop,x,velocityEvidence)).forEach(x => {
+      // A full-credit replacement has no fresh receipt. Keep its audit row
+      // visible even if Shopify later omits or changes payment components;
+      // stale evidence must be reviewed instead of restoring cash or Paytm.
+      if(x.appStoreCreditCorrection)return;
       const gateways=(x.paymentGateways||[]).join(' ').toLowerCase(),cod=/cash\s*on\s*delivery|\bcod\b/.test(gateways),cash=!cod&&gateways.includes('cash'),storeCredit=/store\s*credit|gift\s*card/.test(gateways)||num((accountingStore&&accountingStore.paytmShopifyPayments||{})[x.id]?.storeCreditAmount)>0,paytm=/paytm/.test(gateways),orderNo=String(x.orderNumber||x.name||x.id||'').replace(/\D/g,'').replace(/^0+/,''),gross=num(x.total),baseId='SHOPIFY/'+x.id,override=allocationOverrides[baseId],explicitCash=x.cashAmount!=null?num(x.cashAmount):(x.cashPaidAmount!=null?num(x.cashPaidAmount):null);
       // These are accounting exclusions only. This module only reads the cached
       // Shopify order and never changes the customer's Shopify store-credit balance.
@@ -1595,7 +1605,7 @@ function salesLedgerEntries(accountingStore, options = {}) {
         const components=new Map();successful.forEach(tx=>{const key=bucket(tx),row=components.get(key)||{amount:0,gateway:String(tx.gateway||tx.payment_gateway||key),transactionIds:[],manualCashCollected:false};row.amount=roundMoney(row.amount+num(tx.amount));row.transactionIds.push(String(tx.id||''));if(key==='cod'&&(tx.manualPaymentGateway===true||String(tx.userId||tx.user_id||'')||/manually.*paid|marked.*paid/i.test(String(tx.message||''))))row.manualCashCollected=true;components.set(key,row);});
         const embeddedRefunds=verifiedTransactions.filter(tx=>String(tx.kind||'').toLowerCase()==='refund'&&(!tx.status||String(tx.status).toLowerCase()==='success'));
         const refundKeys=new Set(),allRefunds=[...embeddedRefunds,...(x.refundTransactions||[])].filter(tx=>{if(!(num(tx.amount)>0))return false;const key=String(tx.id||'')||[tx.parentId||tx.parent_id||'',tx.gateway||tx.payment_gateway||'',tx.amount,tx.processedAt||tx.processed_at||''].join('|');if(refundKeys.has(key))return false;refundKeys.add(key);return true;});
-        if(!options.originalReceipts)allRefunds.forEach(tx=>{const parent=byId.get(String(tx.parentId||tx.parent_id||'')),key=parent?bucket(parent):bucket(tx);if(key==='store_credit')return;const row=components.get(key);if(row)row.amount=roundMoney(Math.max(0,row.amount-num(tx.amount)));});
+        if(!options.originalReceipts)allRefunds.forEach(tx=>{if(bucket(tx)==='store_credit')return;const parent=byId.get(String(tx.parentId||tx.parent_id||'')),key=parent?bucket(parent):bucket(tx);if(key==='store_credit')return;const row=components.get(key);if(row)row.amount=roundMoney(Math.max(0,row.amount-num(tx.amount)));});
         const common={orderId:String(x.id),orderNumber:orderNo||String(x.name||x.id),date,gross,paymentGateways:x.paymentGateways||[],description:'Shopify payment component · '+(x.name||x.id)+' · '+(x.channel||''),cashAmount:num(components.get('cash')&&components.get('cash').amount),nonCashAmount:roundMoney(Array.from(components.entries()).filter(([key])=>!['cash','store_credit'].includes(key)).reduce((sum,[,row])=>sum+num(row.amount),0)),refundAmount:x.moneyRefunded!=null?num(x.moneyRefunded):num(x.refundAmount)};
         const routes={cash:DEFAULT_COUNTER_CASH,paytm:PAYTM_CLEARING_ACCOUNT,cod:VELOCITY_CLEARING_ACCOUNT,gokwik:gokwikAccounting.CLEARING,other:nonCashDefault};let sequence=0;
         components.forEach((component,key)=>{if(key==='store_credit'||!(component.amount>0))return;const id=key==='cash'?baseId:(key==='paytm'||key==='gokwik'&&/\bupi\b/i.test(component.gateway)?baseId+'/NONCASH':baseId+'/PAYMENT-'+(++sequence)),account=key==='cod'&&component.manualCashCollected?DEFAULT_COUNTER_CASH:(routes[key]||nonCashDefault),amount=num(componentAmountOverrides[id]&&componentAmountOverrides[id].amount)||component.amount,gokwikOriginalAccount=key==='gokwik'&&/\bupi\b/i.test(component.gateway)?PAYTM_CLEARING_ACCOUNT:WEBSITE_SALES_ACCOUNT;rows.push(Object.assign({id,account,amount,gokwikOriginalAccount,originalAmount:component.amount,componentAmountOverride:componentAmountOverrides[id]||null,allocationPart:key,gateway:component.gateway,manualCashCollected:component.manualCashCollected,shopifyTransactionIds:component.transactionIds},common));});
@@ -1660,7 +1670,7 @@ const PRASHANT_FUNDING_ACCOUNTS=['IndusInd Bank 8181','Prashant Axis 3645'];
 function personalFundingRows(s){return Array.isArray(s.prashantPersonalFundings)?s.prashantPersonalFundings:[];}
 function personalFundingDue(f){return roundMoney(num(f.amount)-(f.repayments||[]).reduce((sum,p)=>sum+num(p.amount),0));}
 
-function reconciliationIssues(s, nature, account) {
+function reconciliationIssues(s, nature, account, throughDate) {
   const issues = [], seen = new Set();
   (s.transfers || []).filter(x => {
     const fromNature=normalizedNature(x.fromNature||x.nature),toNature=normalizedNature(x.toNature||x.nature);
@@ -1672,6 +1682,7 @@ function reconciliationIssues(s, nature, account) {
     if (x.fromAccount === x.toAccount) issues.push({ code:'same_account_transfer', reference:x.id || '(missing)', message:'Transfer source and destination are the same.' });
     if (!x.proof && !x.bankStatementEvidence && !(x.bankReconciliationEvidence&&x.bankReconciliationEvidence.draftId)) issues.push({ code:'missing_transfer_proof', reference:x.id || '(missing)', message:'Transfer proof is missing.' });
   });
+  if(nature==='SANKI'&&(!account||account===DEFAULT_COUNTER_CASH)){const message=storeCreditSourceReviewIssue(s,throughDate);if(message)issues.push({code:'store_credit_source_changed',reference:DEFAULT_COUNTER_CASH,message});}
   return issues;
 }
 function latestApprovedCashReconciliation(s, throughDate) {
@@ -2289,7 +2300,7 @@ function paytmReportView(s) {
   const roundingSales = paytmReceiptEvidenceRows(s);
   const payouts=summarizePayouts(transactions);
   const bankMatches=payouts.map(payout=>Object.assign({},payout,matchPayoutBank(s,payout))).sort((a,b)=>String((b.settledDate||b.payoutDate||'')+b.payoutId).localeCompare(String((a.settledDate||a.payoutDate||'')+a.payoutId)));
-  const orders=Object.values((()=>{try{return JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};}catch{return {};}})()).filter(isOriginalPaymentOrder);
+  const orders=Object.values((()=>{try{return JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};}catch{return {};}})()).filter(isOriginalPaymentOrder).filter(order=>!(s.saleStoreCreditCorrections||{})['SHOPIFY/'+order.id]&&!(s.requests||[]).some(request=>request.kind==='sale_store_credit'&&request.status==='pending'&&request.meta&&(String(request.meta.orderId)===String(order.id)||request.meta.saleId==='SHOPIFY/'+order.id)));
   const orderMatches=transactions.map(tx=>{
     if(tx.isCustomerPayment===false)return {transactionId:tx.transactionId,orderMatch:'Paytm adjustment — not a Shopify sale',orderCandidates:[]};
     const suffix=transactionSuffix(tx.transactionId),byId=orders.filter(order=>suffix&&(String(order.note||'').match(/\d{6,}/g)||[]).some(token=>token.endsWith(suffix)));
@@ -2884,7 +2895,7 @@ require('./expense-opening-balances').registerOpeningBalances(router, {
   accounts: (req,s,nature) => visibleAccountsForReq(req,ledgerAccountsForNature(s,nature)),
   bookKey: bankStatementBookKey
 });
-const RESERVED_POST = new Set(['expense-refunds', 'rentals', 'requests', 'accounts', 'settings', 'balances', 'transfers', 'exchanges', 'receipts', 'sales-refunds', 'sale-allocation', 'receivables', 'vendors', 'custom-ledgers', 'category-groups', 'upload', 'batch-pay', 'cash-reconciliations']);
+const RESERVED_POST = new Set(['expense-refunds', 'rentals', 'requests', 'accounts', 'settings', 'balances', 'transfers', 'exchanges', 'receipts', 'sales-refunds', 'sale-allocation', 'sale-store-credit-corrections', 'receivables', 'vendors', 'custom-ledgers', 'category-groups', 'upload', 'batch-pay', 'cash-reconciliations']);
 router.post('/api/expenses/:id', (req, res, next) => {
   if (RESERVED_POST.has(req.params.id)) return next();
   if (!canApprove(req)) return res.status(403).json({ success:false, error:'Claimants cannot edit submitted expenses. Ask an approver to make the correction.' });
@@ -3359,6 +3370,14 @@ router.get('/api/expenses/reconciliation-reminders',(req,res)=>{
   res.json({success:true,requiredThrough,cadenceDays,pendingCount:policyReminders.filter(x=>x.attentionRequired).length,reminders:policyReminders});
 });
 
+router.use('/api/expenses/cash-reconciliations',(req,res,next)=>{
+  if(req.method!=='POST'||!isOwner(req)&&!isPrashant(req)||String(req.body&&req.body.decision||'')==='reject')return next();
+  try{
+    const s=loadStore(),row=(s.cashReconciliations||[]).find(item=>item.id===String(req.path||'').split('/')[1]),through=String(req.body&&req.body.verifiedThrough||row&&row.verifiedThrough||''),issue=storeCreditSourceReviewIssue(s,through);
+    if(issue)return res.status(409).json({success:false,error:issue});
+    next();
+  }catch(error){return res.status(error.status||409).json({success:false,error:error.message});}
+});
 router.get('/api/expenses/cash-reconciliations',(req,res)=>{
   if(!isOwner(req)&&!isPrashant(req)&&!(isAdmin(req)&&approvalNatures(req).includes('SANKI')&&accountVisibleToReq(req,DEFAULT_COUNTER_CASH)))return res.status(403).json({success:false,error:'Owner or Prashant only.'});const s=loadStore();res.json({success:true,...cashVerificationView(s.cashReconciliations||[],date=>recordedAccountBalance(s,'SANKI',DEFAULT_COUNTER_CASH,date))});
 });
@@ -4310,8 +4329,8 @@ router.get('/api/expenses/balances', (req, res) => {
     const opening = num(openingMap[name]);
     const spent = round0(period.paidOut[name] || 0),topups=round0(period.adj[name]||0),transferredIn=round0(period.transferIn[name]||0),transferredOut=round0(period.transferOut[name]||0),received=round0(period.collected[name]||0),excludedBankIn=roundMoney(period.bankTruthIn[name]||0),excludedBankOut=roundMoney(period.bankTruthOut[name]||0);
     const applyBankTruth=!usesCompanyAdjustedBankTruth(nature,name),calculatedBalance=opening+num(closing.adj[name])+num(closing.collected[name])+num(closing.transferIn[name])-num(closing.transferOut[name])-num(closing.paidOut[name])+(applyBankTruth?num(closing.bankTruthIn[name])-num(closing.bankTruthOut[name]):0),statementBalance=isBankLedgerName(name)?recordedAccountBalance(s,nature,name,to):calculatedBalance,holds=(s.restrictedFunds||[]).filter(x=>x.active!==false&&normalizedNature(x.nature)===nature&&x.account===name&&(!to||String(x.effectiveDate||'')<=to)),restrictedAmount=holds.reduce((sum,x)=>sum+num(x.amount),0),periodRestricted=holds.filter(x=>(!from||String(x.effectiveDate||'')>=from)&&(!to||String(x.effectiveDate||'')<=to)).reduce((sum,x)=>sum+num(x.amount),0),closingBalance=statementBalance-restrictedAmount;
-    const issues = reconciliationIssues(s, nature, name),cashVerification=nature==='SANKI'&&name===DEFAULT_COUNTER_CASH?latestApprovedCashReconciliation(s,to):null;
-    const exact=isBankLedgerName(name)||name===gokwikAccounting.CLEARING,money=v=>exact?Math.round(num(v)*100)/100:round0(v);return { name, opening: money(opening), topups, received, transferredIn, transferredOut, spent, excludedBankIn:money(excludedBankIn), excludedBankOut:money(excludedBankOut), periodNet:money(topups+received+transferredIn-transferredOut-spent+(applyBankTruth?excludedBankIn-excludedBankOut:0)-periodRestricted), statementBalance:money(statementBalance), restrictedAmount:money(restrictedAmount), restrictedFunds:holds, balance:money(closingBalance), closingAsOf:to||'today', reconciled:cashVerification?true:issues.length===0, reconciledThrough:cashVerification&&cashVerification.verifiedThrough||'', reconciledBy:cashVerification&&(cashVerification.approvedBy||cashVerification.requestedBy)||'', reconciliationIssues:cashVerification?[]:issues, recordWarnings:issues };
+    const issues = reconciliationIssues(s, nature, name,to),cashVerification=nature==='SANKI'&&name===DEFAULT_COUNTER_CASH?latestApprovedCashReconciliation(s,to):null;
+    const exact=isBankLedgerName(name)||name===gokwikAccounting.CLEARING,money=v=>exact?Math.round(num(v)*100)/100:round0(v);return { name, opening: money(opening), topups, received, transferredIn, transferredOut, spent, excludedBankIn:money(excludedBankIn), excludedBankOut:money(excludedBankOut), periodNet:money(topups+received+transferredIn-transferredOut-spent+(applyBankTruth?excludedBankIn-excludedBankOut:0)-periodRestricted), statementBalance:money(statementBalance), restrictedAmount:money(restrictedAmount), restrictedFunds:holds, balance:money(closingBalance), closingAsOf:to||'today', reconciled:issues.some(issue=>issue.code==='store_credit_source_changed')?false:cashVerification?true:issues.length===0, reconciledThrough:cashVerification&&cashVerification.verifiedThrough||'', reconciledBy:cashVerification&&(cashVerification.approvedBy||cashVerification.requestedBy)||'', reconciliationIssues:cashVerification?issues.filter(issue=>issue.code==='store_credit_source_changed'):issues, recordWarnings:issues };
   });
   res.json({ success: true, accounts });
 });
@@ -4371,6 +4390,78 @@ function shopifySaleForAllocation(saleId){
   if(!id.startsWith('SHOPIFY/'))return null;
   try{const shop=JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')),order=(shop.orders||{})[id.slice(8)];if(!order)return null;return{id,order,gross:roundMoney(num(order.total)-num(order.refundAmount)),date:String(order.processedAt||order.createdAt||'').slice(0,10)};}catch{return null;}
 }
+function storeCreditOrdersSnapshot(){
+  const parsed=JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8'));
+  if(!parsed.orders||typeof parsed.orders!=='object'||Array.isArray(parsed.orders))throw Object.assign(new Error('Shopify order evidence is unavailable. No correction was saved.'),{status:409});
+  return parsed.orders;
+}
+function canCorrectStoreCreditSale(req){
+  return isAdmin(req)&&approvalNatures(req).includes('SANKI')&&accountVisibleToReq(req,DEFAULT_COUNTER_CASH);
+}
+function storeCreditSourceReviewIssue(s,through){
+  if(!Object.keys(s.saleStoreCreditCorrections||{}).length)return '';
+  const rows=saleStoreCreditCorrections.auditRows(s,storeCreditOrdersSnapshot()).filter(row=>row.stale&&(!through||row.date<=through));
+  return rows.length?'Store-credit correction source evidence changed for '+rows.map(row=>'#'+String(row.orderNumber).replace(/^#/,'')).join(', ')+'. Review the correction before finalizing Counter Cash.':'';
+}
+function storeCreditPreviewFingerprint(proposal){
+  return crypto.createHash('sha256').update(JSON.stringify(proposal)).digest('hex');
+}
+function storeCreditSameIntent(record,input){
+  return String(record.saleId)===String(input.saleId)&&String(record.originalOrderNumber).replace(/^#/,'')===String(input.originalOrderNumber||'').trim().replace(/^#/,'')&&num(record.storeCreditAmount)===Number(input.storeCreditAmount)&&record.reason===String(input.reason||'').trim();
+}
+function existingStoreCreditCorrection(s,input){
+  const correction=(s.saleStoreCreditCorrections||{})[String(input.saleId||'')];
+  if(correction){
+    if(!storeCreditSameIntent(correction,input))throw Object.assign(new Error('This sale already has a different approved store-credit correction. Review its existing audit record.'),{status:409});
+    return {success:true,approved:true,already:true,correction};
+  }
+  const request=(s.requests||[]).find(r=>r.status==='pending'&&r.kind==='sale_store_credit'&&r.meta&&r.meta.saleId===input.saleId);
+  if(request){
+    if(!storeCreditSameIntent(request.meta,input))throw Object.assign(new Error('A different store-credit correction for this sale is already awaiting Owner approval.'),{status:409});
+    return {success:true,approved:false,already:true,request};
+  }
+  return null;
+}
+function assertStoreCreditCorrectionUnlocked(s,orders,proposal){
+  const id=proposal.saleId,date=String(orders[proposal.orderId].processedAt||orders[proposal.orderId].createdAt||'').slice(0,10),matches=ref=>ref===id||ref.startsWith(id+'/');
+  if(Array.from(unpayBlockedReferences(s)).some(ref=>matches(String(ref))))throw Object.assign(new Error('This sale is linked to a reconciliation. Reopen or undo its source reconciliation before correcting its payment method.'),{status:409});
+  const through=[String(((s.bankStatements||{})[bankStatementBookKey('SANKI',DEFAULT_COUNTER_CASH)]||{}).reconciledThrough||''),...(s.cashReconciliations||[]).filter(row=>row.status==='approved'&&row.account===DEFAULT_COUNTER_CASH).map(row=>String(row.verifiedThrough||''))].sort().at(-1);
+  if(through&&date<=through)throw Object.assign(new Error('Counter Cash is already verified through '+through+'. Review the closed cash verification before correcting this receipt.'),{status:409});
+  if(Object.values(s.paytmRoundingReviews||{}).some(review=>String(review.orderId)===proposal.orderId))throw Object.assign(new Error('This sale has an audited rounding receipt. Reverse its rounding treatment before correcting its payment method.'),{status:409});
+  const incentiveState=fs.existsSync(INCENTIVES_PATH)?JSON.parse(fs.readFileSync(INCENTIVES_PATH,'utf8')):{};
+  const before=Object.values(orders).map(order=>saleStoreCreditCorrections.projectOrder(order,s,orders)),candidate=Object.assign({},s,{saleStoreCreditCorrections:Object.assign({},s.saleStoreCreditCorrections,{[id]:proposal})}),after=Object.values(orders).map(order=>saleStoreCreditCorrections.projectOrder(order,candidate,orders));
+  require('./incentives').assertStoreCreditCorrectionSafe(before,after,incentiveState);
+}
+function approveStoreCreditCorrection(s,req,orders,proposal,requestedBy,requestId){
+  const now=new Date().toISOString(),record=Object.assign({},proposal,{requestedBy:requestedBy||req.user.username,approvedBy:req.user.username,approvedAt:now,approvalRequestId:requestId||'',revision:1});
+  s.saleStoreCreditCorrections=Object.assign({},s.saleStoreCreditCorrections,{[proposal.saleId]:record});
+  audit(s,req,'SALE_STORE_CREDIT_CORRECTED','sale',proposal.saleId,{nature:'SANKI',account:DEFAULT_COUNTER_CASH,before:{paymentTransactions:orders[proposal.orderId].paymentTransactions||[],cashAmount:proposal.gross},after:record,note:proposal.reason});
+  return record;
+}
+router.get('/api/expenses/sale-store-credit-corrections',(req,res)=>{
+  if(!canCorrectStoreCreditSale(req))return res.status(403).json({success:false,error:'SANKI Admin or Owner access to Counter Cash is required.'});
+  try{const s=loadStore();res.json({success:true,corrections:saleStoreCreditCorrections.auditRows(s,storeCreditOrdersSnapshot())});}
+  catch(error){res.status(error.status||409).json({success:false,error:error.message});}
+});
+router.post('/api/expenses/sale-store-credit-corrections/preview',(req,res)=>{
+  if(!canCorrectStoreCreditSale(req))return res.status(403).json({success:false,error:'SANKI Admin or Owner access to Counter Cash is required.'});
+  try{
+    const s=loadStore(),input=req.body||{},existing=existingStoreCreditCorrection(s,input);if(existing)return res.json(existing);
+    const orders=storeCreditOrdersSnapshot(),proposal=saleStoreCreditCorrections.prepare(orders,s,input);assertStoreCreditCorrectionUnlocked(s,orders,proposal);
+    res.json({success:true,proposal,previewFingerprint:storeCreditPreviewFingerprint(proposal),ownerApprovalRequired:!isOwner(req)});
+  }catch(error){res.status(error.status||409).json({success:false,error:error.message});}
+});
+router.post('/api/expenses/sale-store-credit-corrections',(req,res)=>{
+  if(!canCorrectStoreCreditSale(req))return res.status(403).json({success:false,error:'SANKI Admin or Owner access to Counter Cash is required.'});
+  try{
+    const s=loadStore(),input=req.body||{},existing=existingStoreCreditCorrection(s,input);if(existing)return res.json(existing);
+    const orders=storeCreditOrdersSnapshot(),proposal=saleStoreCreditCorrections.prepare(orders,s,input);assertStoreCreditCorrectionUnlocked(s,orders,proposal);
+    if(!input.previewFingerprint||input.previewFingerprint!==storeCreditPreviewFingerprint(proposal))return res.status(409).json({success:false,error:'The correction evidence changed or was not previewed. Review a fresh preview before saving.'});
+    if(isOwner(req)){const correction=approveStoreCreditCorrection(s,req,orders,proposal);saveStore(s);return res.json({success:true,approved:true,correction});}
+    s.reqSeq=num(s.reqSeq)+1;const request={id:'RQ-'+String(s.reqSeq).padStart(4,'0'),kind:'sale_store_credit',name:'Store-credit exchange #'+String(proposal.orderNumber).replace(/^#/,''),nature:'SANKI',meta:proposal,status:'pending',by:req.user.username,at:new Date().toISOString(),decidedBy:null,decidedAt:null};
+    s.requests=s.requests||[];s.requests.push(request);audit(s,req,'SALE_STORE_CREDIT_CORRECTION_REQUESTED','request',request.id,{nature:'SANKI',account:DEFAULT_COUNTER_CASH,after:request,note:proposal.reason});saveStore(s);res.json({success:true,approved:false,request});
+  }catch(error){res.status(error.status||409).json({success:false,error:error.message});}
+});
 function applySaleAllocation(s,req,sale,cashAmount,reason,requestedBy){
   const before=(s.saleAllocationOverrides||{})[sale.id]||null,now=new Date().toISOString(),paytmBound=paytmSalesInScope(sale.date)&&(/paytm/i.test((sale.order.paymentGateways||[]).join(' '))||String(sale.order.channel||'').toLowerCase()==='pos'),nonCashAccount=paytmBound?PAYTM_CLEARING_ACCOUNT:(sale.date>=SHOPIFY_DIRECT_TO_AXIS_FROM?DEFAULT_SALES_BANK:PAYTM_CLEARING_ACCOUNT),record={saleId:sale.id,orderId:String(sale.order.id),orderNumber:String(sale.order.orderNumber||sale.order.name||sale.order.id),gross:sale.gross,cashAmount:roundMoney(cashAmount),nonCashAmount:roundMoney(sale.gross-cashAmount),cashAccount:DEFAULT_COUNTER_CASH,nonCashAccount,reason,requestedBy:requestedBy||req.user.username,approvedBy:req.user.username,approvedAt:now};
   s.saleAllocationOverrides=s.saleAllocationOverrides||{};s.saleAllocationOverrides[sale.id]=record;
@@ -4381,6 +4472,7 @@ router.post('/api/expenses/sale-allocation',(req,res)=>{
   if(!isAdmin(req))return res.status(403).json({success:false,error:'Only Admin or Owner can correct a sale allocation.'});
   const s=loadStore(),b=req.body||{},sale=shopifySaleForAllocation(b.saleId),cashAmount=roundMoney(b.cashAmount),reason=String(b.reason||'').trim();
   if(!sale)return res.status(404).json({success:false,error:'Shopify sale not found.'});
+  if((s.saleStoreCreditCorrections||{})[sale.id]||(s.requests||[]).some(r=>r.status==='pending'&&r.kind==='sale_store_credit'&&r.meta&&r.meta.saleId===sale.id))return res.status(409).json({success:false,error:'This sale has a store-credit correction. Review that correction instead of overwriting its payment method.'});
   if(Object.values(s.paytmRoundingReviews||{}).some(review=>String(review.orderId)===String(sale.order.id)))return res.status(409).json({success:false,error:'This sale has an audited rounding receipt. Reverse its rounding treatment before changing the payment split.'});
   if(cashAmount<0||cashAmount>sale.gross||!reason)return res.status(400).json({success:false,error:'Cash amount must be between ₹0 and the sale total, and a reason is required.'});
   if((s.bankDateOverrides||{})[sale.id]||(s.bankDateOverrides||{})[sale.id+'/NONCASH'])return res.status(409).json({success:false,error:'This sale allocation is already reconciled. Reopen its reconciliation before correcting the split.'});
@@ -4792,6 +4884,10 @@ router.get('/api/expenses/account-ledger', (req, res) => {
       Object.values(daily).forEach(x=>{const saleKeys=new Set(x.sales.flatMap(s=>[s.orderNumber,s.orderId,s.id]).map(v=>String(v||'').replace(/^#/,'').replace(/^SHOPIFY\//,''))),linkedSettlements=(s.paytmSettlements||[]).filter(st=>(x.forcedSettlements||[]).includes(st.id)||(st.orderIds||[]).some(id=>saleKeys.has(String(id).replace(/^#/,'').replace(/^SHOPIFY\//,'')))||Math.abs(num(st.grossAmount)-x.total)<.01),knownCharges=Math.round(linkedSettlements.reduce((n,st)=>n+num(st.chargeAmount),0)*100)/100,unknownCharges=Math.round(linkedSettlements.reduce((n,st)=>n+Math.max(0,num(st.grossAmount)-num(st.netAmount)-num(st.chargeAmount)),0)*100)/100,hasIndividualSales=x.sales.some(sale=>!String(sale.id||'').startsWith('SETTLEMENT/'));entries.push({id:'PAYTM-RECEIPTS/'+x.date,date:x.date,kind:'paytm_customer_receipts',description:'Daily Paytm sales summary',credit:hasIndividualSales?0:roundMoney(x.total),debit:0,connectedSales:x.sales,paytmSummary:{gross:roundMoney(x.total),knownCharges,unknownCharges,settlementIds:linkedSettlements.map(st=>st.id)}});});
     }else automaticSales.forEach(x=>entries.push({id:x.id,date:x.date,kind:'sale',description:x.description,credit:num(x.amount),debit:0,orderId:x.orderId||'',orderNumber:x.orderNumber||'',gross:num(x.gross||x.amount),cashAmount:x.cashAmount,nonCashAmount:x.nonCashAmount,allocationPart:x.allocationPart||'',saleAllocation:x.saleAllocation||null,editableSale:String(x.id||'').startsWith('SHOPIFY/')}));
   }
+  if(nature==='SANKI'&&account===DEFAULT_COUNTER_CASH&&Object.keys(s.saleStoreCreditCorrections||{}).length){
+    const orders=storeCreditOrdersSnapshot();
+    saleStoreCreditCorrections.auditRows(s,orders).forEach(row=>entries.push(Object.assign({},row,{entity:'SANKI',account:DEFAULT_COUNTER_CASH,description:'Shopify replacement #'+String(row.orderNumber).replace(/^#/,'')+' · store credit from #'+String(row.originalOrderNumber).replace(/^#/,''),reference:row.saleId||'SHOPIFY/'+row.orderId,editable:false})));
+  }
   const postedPaytmKeys=new Set((s.paytmPayoutPostings||[]).flatMap(item=>[String(item.settlementId||''),String(item.payoutId||'')]));
   const pendingPaytmSettlements=nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT?(s.paytmVerifiedSettlements||[]).filter(x=>!postedPaytmKeys.has(String(x.settlementId||''))&&!postedPaytmKeys.has(String(x.payoutId||''))).concat(reviewedUnpostedSettlements(s,paytmReceiptEvidenceRows(s))):[];
   if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT)(s.paytmSettlements||[]).filter(x=>!legacyPaytmSettlementIsCovered(s,x,pendingPaytmSettlements)).forEach(x=>{
@@ -4848,14 +4944,14 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   // never exposed as a transaction row in this ledger.
   const visible = ordered.filter(x => (x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to))) && (account!==PAYTM_CLEARING_ACCOUNT||x.kind==='opening'||String(x.date||'')>=PAYTM_START_DATE) && (!expenseNature || !x.entity || x.entity===expenseNature))
     .sort((a,b) => a.kind === 'opening' ? 1 : (b.kind === 'opening' ? -1 : (String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)))));
-  const issues = creditCard?[]:reconciliationIssues(s, nature, account),reconciliation=ledgerReconciliationStatus(s,nature,account),cashVerification=nature==='SANKI'&&account===DEFAULT_COUNTER_CASH?latestApprovedCashReconciliation(s,to):null;if(cashVerification){reconciliation.through=cashVerification.verifiedThrough;reconciliation.last={at:cashVerification.approvedAt||cashVerification.requestedAt||'',by:cashVerification.approvedBy||cashVerification.requestedBy||'',through:cashVerification.verifiedThrough,physicalCashBalance:cashVerification.countedBalance,ledgerBalance:cashVerification.ledgerBalance,difference:cashVerification.difference,manualCashVerification:true};}visible.forEach(x=>{let status=reconciliation.index.get(x.id);if(!status&&x.linkedEntryIds&&x.linkedEntryIds.length){const childStatuses=x.linkedEntryIds.map(id=>reconciliation.index.get(id));if(childStatuses.every(Boolean)&&new Set(childStatuses.map(item=>item.reconciliationId)).size===1)status=childStatuses[0];}if(status){x.reconciliation=status;x.rawReference=x.reference||x.id;x.reference=x.rawReference+' · ✓ Reconciled '+(status.bankDate||'')+' · '+status.reconciliationId;}});
+  const issues = creditCard?[]:reconciliationIssues(s, nature, account,to),reconciliation=ledgerReconciliationStatus(s,nature,account),cashVerification=nature==='SANKI'&&account===DEFAULT_COUNTER_CASH?latestApprovedCashReconciliation(s,to):null;if(cashVerification){reconciliation.through=cashVerification.verifiedThrough;reconciliation.last={at:cashVerification.approvedAt||cashVerification.requestedAt||'',by:cashVerification.approvedBy||cashVerification.requestedBy||'',through:cashVerification.verifiedThrough,physicalCashBalance:cashVerification.countedBalance,ledgerBalance:cashVerification.ledgerBalance,difference:cashVerification.difference,manualCashVerification:true};}visible.forEach(x=>{let status=reconciliation.index.get(x.id);if(!status&&x.linkedEntryIds&&x.linkedEntryIds.length){const childStatuses=x.linkedEntryIds.map(id=>reconciliation.index.get(id));if(childStatuses.every(Boolean)&&new Set(childStatuses.map(item=>item.reconciliationId)).size===1)status=childStatuses[0];}if(status){x.reconciliation=status;x.rawReference=x.reference||x.id;x.reference=x.rawReference+' · ✓ Reconciled '+(status.bankDate||'')+' · '+status.reconciliationId;}});
   const balanceRows=ordered.filter(x=>x.kind==='opening'||!to||!x.date||String(x.date)<=to),asOfRunning=balanceRows.length?num(balanceRows.at(-1).balance):(openingEntry?num(openingEntry.balance):0),finalBalance=preciseBalance?Math.round(asOfRunning*100)/100:round0(asOfRunning),restrictedFunds=(s.restrictedFunds||[]).filter(x=>x.active!==false&&normalizedNature(x.nature)===nature&&x.account===account&&(!to||String(x.effectiveDate||'')<=to)),restrictedAmount=roundMoney(restrictedFunds.reduce((sum,x)=>sum+num(x.amount),0)),statementBalance=roundMoney(finalBalance+restrictedAmount);
   const providerStatement=nature==='SANKI'&&account===gokwikAccounting.CLEARING?require('./gokwik-statement').buildStatement(ordered,s,{from,to,expenseNature,recordedBalance:finalBalance}):null;
   const paytmProjection=nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT?paytmLedgerStatus.buildProjection(s,paytmReceiptEvidenceRows(s),{to:to||indiaBusinessDate()}):null;
   if(paytmProjection){visible.forEach(row=>{const status=paytmProjection.forRow(row);if(status)row.paytmReconciliation=status;});reconciliation.through=paytmProjection.coverage.overallReconciledThrough;const last=paytmProjection.coverage.lastVerified;reconciliation.last=last&&reconciliation.through?{at:last.at,by:last.by,through:reconciliation.through,paytmReportVerified:true}:null;}
   let editSnapshot=null,editReadError='';try{editSnapshot=readLedgerEditSnapshot();editSnapshot.evidence=ledgerTransactionEditor.evidence(editSnapshot.store,editSnapshot.external);}catch(error){editReadError=error.message;}
   visible.forEach(entry=>{if(!ledgerTransactionEditor.kinds.has(entry.kind))return;Object.assign(entry,entry.editable===false||entry.privacyRedacted||entry.reconciliation?{canEditLedgerTransaction:false,ledgerEditBlockedReason:'This movement is protected by its source workflow or reconciliation.'}:editReadError?{canEditLedgerTransaction:false,ledgerEditBlockedReason:editReadError}:ledgerTransactionEditor.eligibility(editSnapshot.store,req,{id:entry.id,kind:entry.kind,nature,account},editSnapshot.external,editSnapshot.evidence));});
-  res.json({ success:true, account, nature, expenseNature, entries:visible, bankMovementAuthorityConflicts:authoritativeEntries.bankMovementAuthorityConflicts||[], ...(providerStatement?{providerStatement}:{}),...(paytmProjection?{paytmCoverage:paytmProjection.coverage}:{}), balance:Math.abs(finalBalance)<.005?0:finalBalance, statementBalance, restrictedAmount, restrictedFunds, reconciled:cashVerification?true:issues.length===0&&(!paytmProjection||!paytmProjection.coverage.pendingSettlements&&!paytmProjection.coverage.pendingReceipts), reconciliationIssues:cashVerification?[]:issues, recordWarnings:issues, reconciledThrough:reconciliation.through, lastReconciliation:reconciliation.last });
+  res.json({ success:true, account, nature, expenseNature, entries:visible, bankMovementAuthorityConflicts:authoritativeEntries.bankMovementAuthorityConflicts||[], ...(providerStatement?{providerStatement}:{}),...(paytmProjection?{paytmCoverage:paytmProjection.coverage}:{}), balance:Math.abs(finalBalance)<.005?0:finalBalance, statementBalance, restrictedAmount, restrictedFunds, reconciled:issues.some(issue=>issue.code==='store_credit_source_changed')?false:cashVerification?true:issues.length===0&&(!paytmProjection||!paytmProjection.coverage.pendingSettlements&&!paytmProjection.coverage.pendingReceipts), reconciliationIssues:cashVerification?issues.filter(issue=>issue.code==='store_credit_source_changed'):issues, recordWarnings:issues, reconciledThrough:reconciliation.through, lastReconciliation:reconciliation.last });
 });
 
 function statementDate(v){
@@ -7057,6 +7153,7 @@ router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{
 });
 
 function bankFinalizationImportPlan(s,draft){
+  if(draft&&draft.account===DEFAULT_COUNTER_CASH){const issue=storeCreditSourceReviewIssue(s,String(draft.summary&&draft.summary.to||''));if(issue)return {error:issue};}
   const book=draft&&(s.bankStatements||{})[bankStatementBookKey(draft.nature,draft.account)]||{},rebuildImportIds=new Set(draft&&draft.reconstructedFromFinalized&&draft.reconstructedFromFinalized.importIds||[]),transactions=draft&&draft.transactions||[];
   if(rebuildImportIds.size)return{rows:transactions.map((row,index)=>({row,index})),rebuildImportIds,from:String(draft.summary&&draft.summary.from||'')};
   const cutoff=String(book.reconciledThrough||''),historicalGap=!!cutoff&&String(draft.summary&&draft.summary.to||'')<=cutoff,priorRows=Object.values(book.transactions||{}).filter(row=>historicalGap?(!draft.summary.from||String(row.date||'')>=String(draft.summary.from))&&(!draft.summary.to||String(row.date||'')<=String(draft.summary.to)):String(row.date||'')===cutoff),eligible=transactions.map((row,index)=>({row,index})).filter(item=>!cutoff||historicalGap||String(item.row.date||'')>=cutoff),overlapItems=eligible.filter(item=>cutoff&&(historicalGap||String(item.row.date||'')===cutoff)),matched=matchFinalizedBankRows(priorRows,overlapItems.map(item=>item.row)),matchedIndexes=new Set(Array.from(matched.matches.keys()).map(index=>overlapItems[index].index)),rows=eligible.filter(item=>!matchedIndexes.has(item.index));
@@ -7539,7 +7636,7 @@ router.post('/api/expenses/requests/:id/decide', (req, res) => {
   const r = (s.requests || []).find(x => x.id === req.params.id);
   if (!r) return res.status(404).json({ success: false, error: 'Request not found.' });
   if (r.kind === 'ledger' && !isOwner(req)) return res.status(403).json({success:false,error:'Only the Owner can manage categories.'});
-  if (r.kind === 'sale_split' && !isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can approve a sale allocation correction.' });
+  if (['sale_split','sale_store_credit'].includes(r.kind) && !isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can approve a sale allocation correction.' });
   if (r.kind === 'counter_cash_adjustment' && !isOwner(req)) return res.status(403).json({success:false,error:'Only the Owner can approve a Counter Cash adjustment.'});
   if (!(isAdmin(req) || (r.kind === 'vendor' && canApprove(req)))) {
     return res.status(403).json({ success: false, error: r.kind === 'vendor' ? 'Only an approver/admin can decide vendor requests.' : 'Admin approval only.' });
@@ -7547,9 +7644,18 @@ router.post('/api/expenses/requests/:id/decide', (req, res) => {
   if (r.status !== 'pending') return res.json({ success: true, request: r });
   const approve = !!(req.body || {}).approve;
   if (approve) {
-    if (r.kind === 'sale_split') {
+    if(r.kind==='sale_store_credit'){
+      if(!canCorrectStoreCreditSale(req))return res.status(403).json({success:false,error:'SANKI Owner access to Counter Cash is required.'});
+      try{
+        const orders=storeCreditOrdersSnapshot(),proposal=saleStoreCreditCorrections.prepare(orders,s,r.meta||{},{excludeRequestId:r.id});
+        if(proposal.sourceFingerprint!==r.meta.sourceFingerprint||proposal.originalFingerprint!==r.meta.originalFingerprint)return res.status(409).json({success:false,error:'The source evidence changed after this request. Review a fresh correction before approval.'});
+        assertStoreCreditCorrectionUnlocked(s,orders,proposal);r.correction=approveStoreCreditCorrection(s,req,orders,proposal,r.by,r.id);
+      }catch(error){return res.status(error.status||409).json({success:false,error:error.message});}
+    } else if (r.kind === 'sale_split') {
       const sale=shopifySaleForAllocation(r.meta&&r.meta.saleId),cashAmount=roundMoney(r.meta&&r.meta.cashAmount),reason=String(r.meta&&r.meta.reason||'').trim();
       if(!sale)return res.status(404).json({success:false,error:'The Shopify sale linked to this request no longer exists.'});
+      if((s.saleStoreCreditCorrections||{})[sale.id])return res.status(409).json({success:false,error:'This sale has an approved store-credit correction. Its payment method cannot be overwritten by a cash-split request.'});
+      if(Object.values(s.paytmRoundingReviews||{}).some(review=>String(review.orderId)===String(sale.order.id)))return res.status(409).json({success:false,error:'This sale has an audited rounding receipt. Reverse its rounding treatment before changing the payment split.'});
       if(cashAmount<0||cashAmount>sale.gross||!reason)return res.status(400).json({success:false,error:'The requested allocation is no longer valid.'});
       if((s.bankDateOverrides||{})[sale.id]||(s.bankDateOverrides||{})[sale.id+'/NONCASH'])return res.status(409).json({success:false,error:'This sale allocation was reconciled after the request. Reopen reconciliation before approving it.'});
       r.allocation=applySaleAllocation(s,req,sale,cashAmount,reason,r.by);

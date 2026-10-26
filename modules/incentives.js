@@ -4,10 +4,12 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const exclusions = require('./incentive-exclusions');
+const saleStoreCreditCorrections = require('./sale-store-credit-corrections');
 
 const DATA_DIR = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..');
 const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json');
 const INCENTIVES_PATH = process.env.INCENTIVES_PATH || path.join(DATA_DIR, 'incentives.json');
+const EXPENSES_PATH = path.join(DATA_DIR, 'expenses.json');
 const RATE = 0.02;
 const DAILY_THRESHOLD = 10000;
 const EXCLUDED_CUSTOMERS = [
@@ -32,7 +34,20 @@ const allowed = req => roles(req).some(role => ['owner', 'admin', 'accounting'].
 function blankState(){ return { revision:0, reviews:{}, approvals:{}, payments:[], paymentSeq:0, audit:[] }; }
 function readJson(file, fallback){ try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function writeJson(file, value){ const tmp=file+'.tmp-'+process.pid+'-'+Date.now();fs.writeFileSync(tmp,JSON.stringify(value,null,2));fs.renameSync(tmp,file); }
-function loadOrders(){ const store=readJson(ORDERS_PATH,{orders:{}});return Object.values(store.orders || {}); }
+function loadOrders(){
+  const store=readJson(ORDERS_PATH,{orders:{}});let accounting={};
+  // Read the shared payment correction without loading the expenses module:
+  // its ordinary loader can run migrations and must not run from this view.
+  try{
+    if(fs.existsSync(path.join(DATA_DIR,'.bank-authority-transaction.json')))throw new Error('Pending accounting recovery.');
+    accounting=JSON.parse(fs.readFileSync(EXPENSES_PATH,'utf8'));
+    if(!accounting||typeof accounting!=='object'||Array.isArray(accounting))throw new Error('Invalid accounting evidence.');
+  }catch(error){
+    if(error.code!=='ENOENT'){const blocked=new Error('App payment corrections cannot be read safely. Complete their protected source workflow before reviewing or approving incentives.');blocked.status=409;throw blocked;}
+  }
+  const orders=Object.values(store.orders || {});
+  return orders.map(order=>saleStoreCreditCorrections.projectOrder(order,accounting,orders));
+}
 function loadState(){ return Object.assign(blankState(), readJson(INCENTIVES_PATH, blankState())); }
 function saveState(state){ writeJson(INCENTIVES_PATH, state); }
 
@@ -96,13 +111,20 @@ function buildRecords(orders, state){
   (orders || []).filter(order=>String(order.channel || '').toUpperCase()==='POS').forEach(order=>{
     const review=(state.reviews || {})[String(order.id)] || {},parsed=parseSalespeople(order.note),salespersons=Array.isArray(review.salespersons)?review.salespersons.filter(name=>SALESPERSONS.some(person=>person.name===name)):parsed.salespersons;
     const manualExclusion=(state.exclusions||{})[String(order.id)]||{},manuallyExcluded=manualExclusion.excluded===true;
-    const customerExclusion=excludedCustomer(order),noSalesperson=review.noSalesperson===true||!!customerExclusion||manuallyExcluded,transactions=(order.paymentTransactions || []).filter(successfulReceipt),groups=new Map();
+    const correction=order.appStoreCreditCorrection||null,customerExclusion=excludedCustomer(order),noSalesperson=review.noSalesperson===true||!!customerExclusion||manuallyExcluded,transactions=(order.paymentTransactions || []).filter(successfulReceipt),groups=new Map();
     if(!transactions.length){
       const date=String(order.processedAt || order.createdAt || '').slice(0,10);groups.set(date,[]);
     } else transactions.forEach(tx=>{const date=receiptDate(tx,order);if(!groups.has(date))groups.set(date,[]);groups.get(date).push(tx);});
     groups.forEach((rows,date)=>{
       if(!validDate(date))return;
-      const mapped=rows.map(tx=>{const automaticMode=classifyGateway(tx.gateway),effectiveMode=(review.gatewayModes || {})[String(tx.id)] || automaticMode;return {id:String(tx.id || ''),gateway:String(tx.gateway || ''),amount:money(tx.amount),automaticMode,effectiveMode};});
+      const mapped=rows.map(tx=>{
+        const automaticMode=classifyGateway(tx.gateway),corrected=!!tx.appStoreCreditCorrection;
+        // The audited source correction takes precedence over an older tender
+        // review. A separate incentive review cannot turn replacement credit
+        // back into a second cash receipt.
+        const effectiveMode=corrected?'store_credit':(review.gatewayModes || {})[String(tx.id)] || automaticMode;
+        return {id:String(tx.id || ''),gateway:String(tx.gateway || ''),amount:money(tx.amount),automaticMode,effectiveMode,...(corrected?{appStoreCreditCorrection:tx.appStoreCreditCorrection}:{})};
+      });
       const sum=mode=>money(mapped.filter(tx=>tx.effectiveMode===mode).reduce((total,tx)=>total+tx.amount,0)),cash=sum('cash'),upiCard=sum('upi_card'),storeCredit=sum('store_credit'),otherExcluded=sum('excluded'),unknown=sum('unknown'),eligible=money(cash+upiCard),totalReceived=money(mapped.reduce((total,tx)=>total+tx.amount,0));
       const recordOnlySalespersons=salespersons.filter(name=>!incentiveEligible(name)),recordOnly=!noSalesperson&&salespersons.length>0&&recordOnlySalespersons.length===salespersons.length;
       // Record-only orders cannot create a payable, so tender review is not
@@ -112,14 +134,19 @@ function buildRecords(orders, state){
       // an incentive liability. Preserve the warning data in the order itself,
       // but do not force the already-reviewed exclusion back into Needs review.
       const issues=[];if(!recordOnly&&!noSalesperson&&!rows.length)issues.push('Payment transactions have not been synced from Shopify.');if(!noSalesperson&&!salespersons.length)issues.push(parsed.suggestions.length?'Confirm the suggested salesperson spelling.':'Salesperson was not found in the order note.');if(!recordOnly&&!noSalesperson&&unknown>0)issues.push('Classify '+mapped.filter(tx=>tx.effectiveMode==='unknown').map(tx=>tx.gateway||'unnamed gateway').join(', ')+'.');
+      if(correction&&correction.stale)issues.push('The saved store-credit replacement evidence changed. Review its protected payment correction; no incentive is eligible until verified.');
       const portions=splitMoney(eligible,salespersons.length),recordOnlyAmount=noSalesperson?0:money(salespersons.reduce((total,name,index)=>total+(!incentiveEligible(name)?portions[index]:0),0)),incentiveEligibleAmount=noSalesperson?0:money(eligible-recordOnlyAmount);
       let exclusionReason='';if(manuallyExcluded)exclusionReason='Manually excluded: '+(manualExclusion.reason||'incentive exclusion');else if(customerExclusion)exclusionReason=customerExclusion.name+': customer orders excluded from incentives';else if(noSalesperson)exclusionReason='Confirmed: no eligible salesperson';else if(recordOnlySalespersons.length)exclusionReason=recordOnlySalespersons.join(' + ')+': former employee — record only; no incentive payable on their share.';else if(!issues.length&&eligible<=0)exclusionReason=storeCredit>0&&storeCredit===totalReceived?'Store credit only':'No eligible cash, UPI or card-machine receipt';
-      const status=recordOnly?'record_only':issues.length?'needs_review':(noSalesperson||eligible<=0?'excluded':'ready');
+      if(correction){
+        const original=correction.originalOrderNumber?'#'+String(correction.originalOrderNumber).replace(/^#+/,''):'the original order',reason='Replacement using store credit from '+original+'; no new cash, UPI or card-machine receipt.';
+        exclusionReason=[reason,correction.reason,['pending','pending_external_user_action'].includes(correction.walletStatus)?'Shopify wallet debit pending; no wallet change was made by this correction.':'',exclusionReason].filter(Boolean).join(' ');
+      }
+      const status=correction&&correction.stale?'needs_review':recordOnly?'record_only':issues.length?'needs_review':(noSalesperson||eligible<=0?'excluded':'ready');
       records.push({
         id:String(order.id)+'|'+date,orderId:String(order.id),orderNumber:String(order.name || order.number || order.id),customerName:String(order.customer&&order.customer.name || ''),receiptDate:date,
         salespersons,noSalesperson,reviewNoSalesperson:review.noSalesperson===true,manuallyExcluded,manualExclusion:manuallyExcluded?manualExclusion:null,recordOnly,recordOnlySalespersons,salespersonSuggestions:parsed.suggestions,matchConfidence:Array.isArray(review.salespersons)?'reviewed':parsed.confidence,transactionReference:parsed.reference,
         billAmount:money(order.total),totalReceived,cashAmount:cash,upiCardAmount:upiCard,storeCreditAmount:storeCredit,otherExcludedAmount:otherExcluded,unknownAmount:unknown,eligibleTenderAmount:eligible,eligibleAmount:incentiveEligibleAmount,recordOnlyAmount,
-        refundAmount:money(order.refundAmount),orderNote:String(order.note || ''),transactions:mapped,reviewStatus:status,reviewIssues:issues,exclusionReason,reviewedAt:review.reviewedAt || '',reviewedBy:review.reviewedBy || ''
+        refundAmount:money(order.refundAmount),orderNote:String(order.note || ''),transactions:mapped,reviewStatus:status,reviewIssues:issues,exclusionReason,reviewedAt:review.reviewedAt || '',reviewedBy:review.reviewedBy || '',...(correction?{appStoreCreditCorrection:correction}:{})
       });
     });
   });
@@ -170,6 +197,20 @@ function calculate(orders,state){
     day.records.forEach(({share})=>{share.approvalStatus=share.qualifies?day.approvalStatus:'not_eligible';});
   });
   return {records,daily};
+}
+
+function assertStoreCreditCorrectionSafe(beforeOrders,afterOrders,state){
+  const before=new Map(calculate(beforeOrders,state).daily.map(day=>[day.key,day])),after=new Map(calculate(afterOrders,state).daily.map(day=>[day.key,day]));
+  const protectedKeys=new Set([...Object.keys(state.approvals||{}),...Object.keys(state.approvalRevisions||{}),...(state.exclusionAdjustments||[]).map(row=>row.approvalKey).filter(Boolean)]);
+  const snapshot=day=>({
+    eligibleAmount:money(day&&day.eligibleAmount),incentiveBaseAmount:money(day&&day.incentiveBaseAmount),carriedQualifiedAmount:money(day&&day.carriedQualifiedAmount),thresholdMet:!!(day&&day.thresholdMet),incentive:money(day&&day.incentive),unresolved:!!(day&&day.unresolved),
+    qualificationSources:day&&day.qualificationSources||[],qualificationReviewDates:day&&day.qualificationReviewDates||[],
+    receipts:(day&&day.records||[]).map(({record,share})=>({id:record.id,orderId:record.orderId,receiptDate:record.receiptDate,eligibleAmount:share.eligibleAmount,incentive:share.incentive,qualifies:share.qualifies,qualificationDate:share.qualificationDate,inheritedQualification:share.inheritedQualification}))
+  });
+  for(const key of protectedKeys)if(JSON.stringify(snapshot(before.get(key)))!==JSON.stringify(snapshot(after.get(key)))){
+    const error=new Error('This payment correction affects approved or paid incentive evidence for '+key+'. Resolve the affected incentive through its protected review workflow first. Existing approvals and payments were not changed.');error.status=409;throw error;
+  }
+  return true;
 }
 
 function ledgerView(state){
@@ -243,4 +284,4 @@ function createRouter(deps={}){
 }
 
 const router=createRouter();
-module.exports={router,createRouter,parseSalespeople,classifyGateway,buildRecords,calculate,buildView,ledgerView,constants:{RATE,DAILY_THRESHOLD,SALESPERSONS,PAYING_ACCOUNTS}};
+module.exports={router,createRouter,parseSalespeople,classifyGateway,buildRecords,calculate,buildView,ledgerView,assertStoreCreditCorrectionSafe,constants:{RATE,DAILY_THRESHOLD,SALESPERSONS,PAYING_ACCOUNTS}};

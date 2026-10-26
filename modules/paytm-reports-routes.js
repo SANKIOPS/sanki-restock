@@ -31,21 +31,30 @@ function registerPaytmReports(router, deps) {
     const order = (orders ? orders() : []).find(x => String(x.id) === orderId || String(x.orderNumber || x.number || '').replace(/\D/g, '') === orderId);
     if (!order || !/^\d+$/.test(String(order.id))) return res.status(404).json({ success: false, error: 'Choose a synced Shopify order with a numeric order ID.' });
     if (!shopifyClient || !shopifyStore) return res.status(503).json({ success: false, error: 'Shopify connection is not configured.' });
-    const store = loadStore();
-    if (Object.values(store.paytmRoundingReviews || {}).some(review => String(review.orderId) === String(order.id))) return res.status(409).json({ success: false, error: 'This order has an audited rounding receipt. Reverse its rounding treatment before changing the payment split.' });
-    if ((store.paytmPayoutPostings || []).some(x => (x.orderIds || []).includes(String(order.id)))) return res.status(409).json({ success: false, error: 'This order is in a posted payout. Correct the posting before changing its payment split.' });
+    let store = loadStore();
+    const assertAvailable=()=>{
+      let message='';
+      if((store.saleStoreCreditCorrections||{})['SHOPIFY/'+order.id]||(store.requests||[]).some(request=>request.kind==='sale_store_credit'&&request.status==='pending'&&request.meta&&(String(request.meta.orderId)===String(order.id)||request.meta.saleId==='SHOPIFY/'+order.id)))message='This order has an approved or pending store-credit exchange correction. Review its source correction before syncing a different payment method.';
+      else if(Object.values(store.paytmRoundingReviews||{}).some(review=>String(review.orderId)===String(order.id)))message='This order has an audited rounding receipt. Reverse its rounding treatment before changing the payment split.';
+      else if((store.paytmPayoutPostings||[]).some(posting=>(posting.orderIds||[]).map(String).includes(String(order.id))))message='This order is in a posted payout. Correct the posting before changing its payment split.';
+      if(message)throw Object.assign(new Error(message),{status:409});
+    };
     try {
+      assertAvailable();
       const response = await shopifyClient.request(`https://${shopifyStore}/admin/api/2024-01/orders/${order.id}/transactions.json`);
       if (!response.ok) throw new Error(`Shopify payment lookup failed (${response.status}).`);
       const body = await response.json(), summary = summarizeShopifyPayments(body.transactions);
       if (!summary.transactions.length) throw new Error('Shopify returned no successful sale/capture payment components. Keep this order under manual review.');
+      // The network request can overlap an Owner's correction or approval.
+      // Update the latest store, then recheck every payment-source lock.
+      store=loadStore();assertAvailable();
       store.paytmShopifyPayments = store.paytmShopifyPayments || {};
       const before = store.paytmShopifyPayments[order.id] || null;
       store.paytmShopifyPayments[order.id] = { ...summary, by: req.user.username, at: new Date().toISOString() };
       audit(store, req, 'PAYTM_SHOPIFY_PAYMENTS_SYNCED', 'shopify_order', String(order.id), { nature: 'SANKI', account: CLEARING, before, after: store.paytmShopifyPayments[order.id] });
       saveStore(store);
       res.json({ success: true, summary: store.paytmShopifyPayments[order.id], view: view(store) });
-    } catch (error) { res.status(502).json({ success: false, error: error.message || 'Could not verify Shopify payment components.' }); }
+    } catch (error) { res.status(error.status||502).json({ success: false, error: error.message || 'Could not verify Shopify payment components.' }); }
   });
   router.post('/api/expenses/paytm-reports/preview', upload.array('reports', 20), (req, res) => {
     if (deny(req, res)) return;
