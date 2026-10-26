@@ -171,7 +171,7 @@ function buildRestorePlan(state, input, helpers) {
     if (otherPhysical && list(otherPhysical.evidence).some(item => [transfer.fromAccount, transfer.toAccount].includes(item.account) && item.reference === selected.reference && item.date === transfer.date)) fail('An active transfer already claims this bank identity. Link or correct it instead of restoring a duplicate.');
     if (sameRoute) {
       const sameSide = list(otherPhysical && otherPhysical.evidence).filter(item => item.account === selected.account && item.direction === selected.direction);
-      if (!otherPhysical || list(otherPhysical.invalidAccounts).length || sameSide.length !== 1 || !referenceIsStrong(sameSide[0].reference) || sameSide[0].reference === selected.reference) fail('Another active same-date/amount transfer has ambiguous bank evidence. Review it before restoring this record.');
+      if (!otherPhysical || list(otherPhysical.invalidAccounts).includes(selected.account) || sameSide.length !== 1 || !referenceIsStrong(sameSide[0].reference) || sameSide[0].reference === selected.reference) fail('Another active same-date/amount transfer has ambiguous bank evidence. Review it before restoring this record.');
     }
   }
   for (const approval of Object.values(state.bankReconciliationApprovals || {})) if (approval.status === 'pending' && affectedDrafts.has(approval.draftId)) fail('An affected statement is awaiting Owner approval. Withdraw that request before restoring a transfer.');

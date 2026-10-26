@@ -139,6 +139,18 @@ test('Owner restores both sides when the exact opposite finalized bank row was a
   assert.deepEqual(after.bankTruthMovements, before.bankTruthMovements);
 });
 
+test('a different verified same-bank UPI reference distinguishes another same-date and same-amount transfer', async () => {
+  reset(state => {
+    const other = { ...clone(state.transfers[0]), id: 'TR-SYNTHETIC-DISTINCT', accountingExcluded: false, accountingExclusion: null, reconciliationDraft: 'BRD-SYNTHETIC-DISTINCT-SOURCE', bankRowId: 'bank-0' };
+    state.transfers.push(other);
+    state.bankReconciliationDrafts['BRD-SYNTHETIC-DISTINCT-SOURCE'] = { id: 'BRD-SYNTHETIC-DISTINCT-SOURCE', nature: 'SAMAST', account: source, transactions: [{ date, description: 'UPI/900000006124/DR/Synthetic distinct transfer', reference: '900000006124', debit: amount, credit: 0 }], resolutions: { 'bank-0': { action: 'link_existing', appId: other.id, postingNature: 'PERSONAL' } } };
+    state.bankReconciliationDrafts['BRD-SYNTHETIC-DISTINCT-OPPOSITE'] = { id: 'BRD-SYNTHETIC-DISTINCT-OPPOSITE', nature: 'PERSONAL', account: receiving, transactions: [{ date, description: 'UPI/900000006124/Synthetic invalid opposite copy', reference: '900000006124', debit: 0, credit: amount + 1 }], resolutions: { 'bank-0': { action: 'link_existing', appId: other.id, postingNature: 'PERSONAL' } } };
+  });
+  const reviewed = await preview();
+  assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+  assert.equal(reviewed.body.plan.transfer.id, transferId);
+});
+
 for (const changed of [
   { name: 'stale transfer amount', mutate: s => { s.transfers[0].amount += 1; } },
   { name: 'stale exclusion reason', mutate: s => { s.transfers[0].accountingExclusion.reason = 'Changed by another reviewer'; } },
