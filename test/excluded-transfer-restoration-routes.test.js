@@ -154,12 +154,26 @@ test('a different verified same-bank UPI reference distinguishes another same-da
 for (const changed of [
   { name: 'stale transfer amount', mutate: s => { s.transfers[0].amount += 1; } },
   { name: 'stale exclusion reason', mutate: s => { s.transfers[0].accountingExclusion.reason = 'Changed by another reviewer'; } },
-  { name: 'changed actual bank row', mutate: s => { s.bankReconciliationDrafts[draftId].transactions[0].reference = '900000006124'; } },
-  { name: 'new pending Owner request', mutate: s => { s.bankReconciliationApprovals['BRA-SYNTHETIC-PENDING'] = { id: 'BRA-SYNTHETIC-PENDING', draftId, status: 'pending' }; } }
+  { name: 'changed actual bank row', mutate: s => { s.bankReconciliationDrafts[draftId].transactions[0].reference = '900000006124'; } }
 ]) test(changed.name + ' rejects Owner apply without saving anything', async () => {
   reset(); const reviewed = await preview(); assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
   const state = read(); changed.mutate(state); write(state); const before = bytes();
   const result = await apply(reviewed.body.plan.fingerprint); assert.equal(result.status, 409, JSON.stringify(result.body)); assert.equal(bytes(), before);
+});
+
+test('restoration supersedes an affected pending Owner approval and requires corrected resubmission', async () => {
+  reset(state => { state.bankReconciliationApprovals['BRA-SYNTHETIC-PENDING'] = { id: 'BRA-SYNTHETIC-PENDING', draftId, status: 'pending', requestedBy: 'prashant' }; });
+  const beforePreview = bytes(), reviewed = await preview();
+  assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+  assert.equal(bytes(), beforePreview, 'preview must not withdraw the approval');
+  assert.deepEqual(reviewed.body.plan.approvalsToSupersede, ['BRA-SYNTHETIC-PENDING']);
+  const result = await apply(reviewed.body.plan.fingerprint);
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  const after = read(), approval = after.bankReconciliationApprovals['BRA-SYNTHETIC-PENDING'];
+  assert.equal(approval.status, 'superseded');
+  assert.equal(approval.supersededBy, 'synthetic-owner');
+  assert.match(approval.supersededReason, /Submit the updated reconciliation again/);
+  assert.equal(after.transfers[0].accountingExcluded, false);
 });
 
 for (const change of [{ confirm: false }, { confirm: undefined }, { reason: '' }, { reason: 'yes' }, { fingerprint: 'forged' }, { transferId: 'TR-SYNTHETIC-DOES-NOT-EXIST' }]) test('invalid explicit apply request is atomic: ' + JSON.stringify(change), async () => {

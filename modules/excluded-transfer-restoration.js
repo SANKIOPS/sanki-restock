@@ -75,7 +75,7 @@ function buildRestorePlan(state, input, helpers) {
   assertHelpers(helpers);
   const intent = normalizeIntent(input), draft = state.bankReconciliationDrafts && state.bankReconciliationDrafts[intent.draftId];
   if (!draft || draft.id !== intent.draftId) fail('This reconciliation draft is unavailable. Refresh the statement.');
-  if (draft.originalStatementPeriod || ['awaiting_approval', 'pending_approval', 'finalized'].includes(draft.status)) fail('This reconciliation is locked or awaiting approval. Withdraw its approval request before restoring an entry.');
+  if (draft.originalStatementPeriod || draft.status === 'finalized') fail('This reconciliation is finalized or locked for statement recovery. Correct that protected workflow first.');
   const transfers = list(state.transfers).filter(item => item.id === intent.transferId);
   if (transfers.length !== 1) fail('The excluded transfer ID is missing or duplicated.');
   const transfer = transfers[0];
@@ -106,9 +106,11 @@ function buildRestorePlan(state, input, helpers) {
   if (oppositeMatches.length !== 1 || !exactBank(oppositeMatches[0], oppositeAccount, transfer, helpers) || helpers.bankSignature(oppositeMatches[0]) !== oppositeEvidence[0].signature || helpers.bankReference(oppositeMatches[0]) !== selected.reference) fail('The opposite-side physical statement row is missing or no longer agrees with its verified link.');
   const oppositeBank = oppositeMatches[0];
   const oppositeHistory = matchingHistoryRows(oppositeBook, oppositeBank, helpers).filter(({ row }) => (!text(row.bank.transactionId) || row.bank.transactionId === oppositeBank.id) && helpers.bankSignature(row.bank) === helpers.bankSignature(oppositeBank));
-  if (oppositeHistory.length !== 1) fail('The opposite-bank statement must contain one exact finalized bank record for this transfer.');
-  const oppositeHistoryRecord = oppositeHistory[0];
-  const oppositeAlreadyLinked = linkedIds(oppositeHistoryRecord.row).includes(transfer.id);
+  if (!oppositeHistory.length) fail('The opposite-bank statement must contain an exact finalized bank record for this transfer.');
+  const linkedOppositeHistory = oppositeHistory.filter(({ row }) => linkedIds(row).includes(transfer.id));
+  if (!linkedOppositeHistory.length && oppositeHistory.length !== 1) fail('The opposite-bank statement contains multiple unlinked finalized copies. Correct that history before restoring this transfer.');
+  const oppositeHistoryRecord = linkedOppositeHistory[0] || oppositeHistory[0];
+  const oppositeAlreadyLinked = !!linkedOppositeHistory.length;
   const oppositeCorrectable = !oppositeAlreadyLinked && oppositeHistoryRecord.row.resolutionAction !== 'bank_reversal_pair' && !/timing difference|failed payment/i.test(String(oppositeHistoryRecord.row.decision || '')) && !linkedIds(oppositeHistoryRecord.row).some(id => id !== transfer.id);
   if (!oppositeAlreadyLinked && !oppositeCorrectable) fail('The opposite-bank finalized record has another claim or a conflicting decision.');
 
@@ -174,13 +176,14 @@ function buildRestorePlan(state, input, helpers) {
       if (!otherPhysical || list(otherPhysical.invalidAccounts).includes(selected.account) || sameSide.length !== 1 || !referenceIsStrong(sameSide[0].reference) || sameSide[0].reference === selected.reference) fail('Another active same-date/amount transfer has ambiguous bank evidence. Review it before restoring this record.');
     }
   }
-  for (const approval of Object.values(state.bankReconciliationApprovals || {})) if (approval.status === 'pending' && affectedDrafts.has(approval.draftId)) fail('An affected statement is awaiting Owner approval. Withdraw that request before restoring a transfer.');
+  const approvalsToSupersede = Object.values(state.bankReconciliationApprovals || {}).filter(approval => approval && approval.status === 'pending' && affectedDrafts.has(approval.draftId)).map(approval => approval.id);
   for (const id of affectedDrafts) {
     const affected = state.bankReconciliationDrafts[id];
-    if (affected && (affected.originalStatementPeriod || ['awaiting_approval', 'pending_approval', 'finalized'].includes(affected.status))) fail('An affected statement is locked or awaiting approval.');
+    if (affected && (affected.originalStatementPeriod || affected.status === 'finalized')) fail('An affected statement is finalized or locked for statement recovery.');
+    if (affected && ['awaiting_approval', 'pending_approval'].includes(affected.status) && !Object.values(state.bankReconciliationApprovals || {}).some(approval => approval && approval.draftId === id && approval.status === 'pending')) fail('An affected statement has an inconsistent approval lock. Review it before restoring this transfer.');
   }
   const oppositeCorrection = oppositeCorrectable ? { bookKey: helpers.bookKey('PERSONAL', oppositeAccount), recordId: oppositeHistoryRecord.record.id, rowId: oppositeHistoryRecord.row.id } : null;
-  const result = { version: VERSION, intent, alreadyRestored: false, transfer: { id: transfer.id, date: transfer.date, amount: transfer.amount, fromAccount: transfer.fromAccount, toAccount: transfer.toAccount }, exclusion: clone(transfer.accountingExclusion), selected, opposite: { ...clone(oppositeEvidence[0]), transactionId: oppositeBank.id }, oppositeCorrection, exclusionsToClear };
+  const result = { version: VERSION, intent, alreadyRestored: false, transfer: { id: transfer.id, date: transfer.date, amount: transfer.amount, fromAccount: transfer.fromAccount, toAccount: transfer.toAccount }, exclusion: clone(transfer.accountingExclusion), selected, opposite: { ...clone(oppositeEvidence[0]), transactionId: oppositeBank.id }, oppositeCorrection, exclusionsToClear, approvalsToSupersede };
   result.fingerprint = hash({ version: VERSION, intent, state });
   return result;
 }
@@ -195,7 +198,14 @@ function applyRestorePlan(state, plan, actor, helpers) {
   const current = buildRestorePlan(state, intent, helpers);
   if (current.alreadyRestored || current.fingerprint !== plan.fingerprint) fail('The transfer, exclusion or bank evidence changed after preview. Refresh and review it again; nothing was changed.');
   const transfer = state.transfers.find(item => item.id === intent.transferId), draft = state.bankReconciliationDrafts[intent.draftId], before = clone(transfer), selectedExclusion = draft.matchingExclusions && draft.matchingExclusions[intent.rowId];
-  const history = { version: VERSION, fingerprint: current.fingerprint, intent, selected: clone(current.selected), opposite: clone(current.opposite), previousExclusion: clone(transfer.accountingExclusion), previousMatchingExclusion: selectedExclusion ? clone(selectedExclusion) : null, clearedDecisions: current.exclusionsToClear.map(item => ({ ...item, previous: clone(state.bankReconciliationDrafts[item.draftId].resolutions[item.rowId]) })), reason, by: user, at };
+  const history = { version: VERSION, fingerprint: current.fingerprint, intent, selected: clone(current.selected), opposite: clone(current.opposite), previousExclusion: clone(transfer.accountingExclusion), previousMatchingExclusion: selectedExclusion ? clone(selectedExclusion) : null, clearedDecisions: current.exclusionsToClear.map(item => ({ ...item, previous: clone(state.bankReconciliationDrafts[item.draftId].resolutions[item.rowId]) })), supersededApprovals: current.approvalsToSupersede.map(id => clone(state.bankReconciliationApprovals[id])), reason, by: user, at };
+  for (const id of current.approvalsToSupersede) {
+    const approval = state.bankReconciliationApprovals[id];
+    if (!approval || approval.status !== 'pending') fail('An affected Owner approval changed after preview. Refresh and review it again; nothing was changed.');
+    approval.status = 'superseded'; approval.supersededAt = at; approval.supersededBy = user; approval.supersededReason = 'Excluded transfer ' + transfer.id + ' was restored and its exact bank links were corrected. Submit the updated reconciliation again.';
+    const affected = state.bankReconciliationDrafts[approval.draftId];
+    if (affected && ['awaiting_approval', 'pending_approval'].includes(affected.status)) affected.status = 'review';
+  }
   transfer.accountingExcluded = false;
   transfer.accountingExclusion = null;
   history.after = { identityHash: hash({ id: transfer.id, date: transfer.date, amount: transfer.amount, fromAccount: transfer.fromAccount, toAccount: transfer.toAccount, fromNature: transfer.fromNature || transfer.nature, toNature: transfer.toNature || transfer.nature, classification: transfer.classification || 'internal_transfer' }) };

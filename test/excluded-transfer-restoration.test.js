@@ -132,10 +132,18 @@ for (const [name, mutate] of [
   ['business classification', s => { s.transfers[0].fromNature = 'SANKI'; s.transfers[0].classification = 'owner_withdrawal'; }],
   ['existing confirmed fee dependency', s => { s.transfers[0].confirmedBankSplit = { principal: amount, charge: 5.9, gross: amount + 5.9, chargeId: 'ADJ-SYNTHETIC-FEE' }; }],
   ['selected row has another saved decision', s => { s.bankReconciliationDrafts[draftId].resolutions['bank-0'] = { action: 'exclude', reason: 'Keep this bank movement excluded' }; }],
-  ['pending Owner review', s => { s.bankReconciliationApprovals['BRA-SYNTHETIC-PENDING'] = { id: 'BRA-SYNTHETIC-PENDING', draftId, status: 'pending' }; }],
   ['locked source statement recovery', s => { s.bankReconciliationDrafts[draftId].originalStatementPeriod = { from: date, to: date }; }],
   ['protected financial dependency', s => { s.syntheticProtectionError = 'Synthetic linked refund/payment dependency must be resolved explicitly.'; }]
 ]) test('restoration fails closed for ' + name, () => rejected(mutate));
+
+test('restoration supersedes a pending Owner review instead of leaving a deadlock', () => {
+  const state = fixture(); state.bankReconciliationApprovals['BRA-SYNTHETIC-PENDING'] = { id: 'BRA-SYNTHETIC-PENDING', draftId, status: 'pending', requestedBy: 'prashant' };
+  const prepared = plan(state); assert.deepEqual(prepared.approvalsToSupersede, ['BRA-SYNTHETIC-PENDING']);
+  apply(state, prepared);
+  assert.equal(state.bankReconciliationApprovals['BRA-SYNTHETIC-PENDING'].status, 'superseded');
+  assert.equal(state.bankReconciliationApprovals['BRA-SYNTHETIC-PENDING'].supersededBy, actor.user);
+  assert.equal(state.transfers[0].accountingExcluded, false);
+});
 
 test('two same-day current-bank UTR occurrences are ambiguous and cannot restore', () => rejected(s => {
   s.bankReconciliationDrafts[draftId].transactions.push({ ...s.bankReconciliationDrafts[draftId].transactions[0], balance: 6499.5 });
