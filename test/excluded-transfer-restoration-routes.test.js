@@ -112,6 +112,32 @@ test('Owner apply restores one existing transfer and stages its exact link witho
   assert.equal(replay.status, 200, JSON.stringify(replay.body)); assert.equal(replay.body.alreadyRestored, true); assert.equal(bytes(), saved, 'HTTP replay must not save another audit or money movement');
 });
 
+test('Owner restores both sides when the exact opposite finalized bank row was also excluded', async () => {
+  const before = reset(state => {
+    const row = state.bankStatements['PERSONAL|' + receiving].imports[0].reconciliationRows[0];
+    row.linkedRecordIds = [];
+    row.ledger = {};
+    row.decision = 'Reviewed bank record without ledger link';
+    row.reason = 'The linked transfer was later excluded';
+    state.transfers[0].bankReconciliationEvidence = { recordId: 'BST-SYNTHETIC-RESTORE-ORIGIN', description: row.bank.description, reference };
+  });
+  const reviewed = await preview();
+  assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+  assert.equal(reviewed.body.plan.oppositeCorrection.recordId, 'BST-SYNTHETIC-RESTORE-ORIGIN');
+  const result = await apply(reviewed.body.plan.fingerprint);
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  const after = read(), row = after.bankStatements['PERSONAL|' + receiving].imports[0].reconciliationRows[0];
+  assert.equal(after.transfers.length, 1);
+  assert.equal(after.transfers[0].accountingExcluded, false);
+  assert.deepEqual(row.linkedRecordIds, [transferId]);
+  assert.equal(row.ledger.id, transferId);
+  assert.equal(row.corrected, true);
+  assert.equal(row.correctionHistory.at(-1).type, 'restore_excluded_transfer');
+  assert.deepEqual(after.expenses, before.expenses);
+  assert.deepEqual(after.receipts, before.receipts);
+  assert.deepEqual(after.bankTruthMovements, before.bankTruthMovements);
+});
+
 for (const changed of [
   { name: 'stale transfer amount', mutate: s => { s.transfers[0].amount += 1; } },
   { name: 'stale exclusion reason', mutate: s => { s.transfers[0].accountingExclusion.reason = 'Changed by another reviewer'; } },

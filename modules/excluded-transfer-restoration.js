@@ -51,9 +51,10 @@ function matchingHistoryRows(book, bank, helpers) {
   const ref = helpers.bankReference(bank);
   return list(book && book.imports).filter(record => record.finalizedAt).flatMap(record => [...list(record.reconciliationRows), ...list(record.carriedReconciliationRows)].filter(row => row.bank && row.bank.date === bank.date && helpers.bankReference(row.bank) === ref).map(row => ({ record, row })));
 }
-function assertNoForeignFinalizedClaim(book, bank, transfer, account, helpers) {
+function assertNoForeignFinalizedClaim(book, bank, transfer, account, helpers, correctableRow) {
   for (const { row } of matchingHistoryRows(book, bank, helpers)) {
-    if (!exactBank(row.bank, account, transfer, helpers) || helpers.bankSignature(row.bank) !== helpers.bankSignature(bank) || row.resolutionAction === 'bank_reversal_pair' || /excluded|timing difference|failed payment/i.test(String(row.decision || '')) || linkedIds(row).some(id => id !== transfer.id)) fail('Finalized bank history has conflicting evidence, an exclusion or another ledger claim. Correct that history before restoring this transfer.');
+    const correctingThisExactRow = row === correctableRow && !linkedIds(row).some(id => id !== transfer.id);
+    if (!exactBank(row.bank, account, transfer, helpers) || helpers.bankSignature(row.bank) !== helpers.bankSignature(bank) || row.resolutionAction === 'bank_reversal_pair' || /timing difference|failed payment/i.test(String(row.decision || '')) || /excluded/i.test(String(row.decision || '')) && !correctingThisExactRow || linkedIds(row).some(id => id !== transfer.id)) fail('Finalized bank history has conflicting evidence, an exclusion or another ledger claim. Correct that history before restoring this transfer.');
   }
 }
 function replayState(state, intent, fingerprint, helpers) {
@@ -104,7 +105,12 @@ function buildRestorePlan(state, input, helpers) {
   const oppositeBook = state.bankStatements && state.bankStatements[helpers.bookKey('PERSONAL', oppositeAccount)], oppositeMatches = Object.values(oppositeBook && oppositeBook.transactions || {}).filter(item => item.id === oppositeEvidence[0].identity);
   if (oppositeMatches.length !== 1 || !exactBank(oppositeMatches[0], oppositeAccount, transfer, helpers) || helpers.bankSignature(oppositeMatches[0]) !== oppositeEvidence[0].signature || helpers.bankReference(oppositeMatches[0]) !== selected.reference) fail('The opposite-side physical statement row is missing or no longer agrees with its verified link.');
   const oppositeBank = oppositeMatches[0];
-  if (!matchingHistoryRows(oppositeBook, oppositeBank, helpers).some(({ row }) => row.bank.transactionId === oppositeBank.id && linkedIds(row).includes(transfer.id))) fail('The opposite-bank statement must retain its finalized link to this exact transfer ID.');
+  const oppositeHistory = matchingHistoryRows(oppositeBook, oppositeBank, helpers).filter(({ row }) => row.bank.transactionId === oppositeBank.id && helpers.bankSignature(row.bank) === helpers.bankSignature(oppositeBank));
+  if (oppositeHistory.length !== 1) fail('The opposite-bank statement must contain one exact finalized bank record for this transfer.');
+  const oppositeHistoryRecord = oppositeHistory[0];
+  const oppositeAlreadyLinked = linkedIds(oppositeHistoryRecord.row).includes(transfer.id);
+  const oppositeCorrectable = !oppositeAlreadyLinked && oppositeHistoryRecord.row.resolutionAction !== 'bank_reversal_pair' && !/timing difference|failed payment/i.test(String(oppositeHistoryRecord.row.decision || '')) && !linkedIds(oppositeHistoryRecord.row).some(id => id !== transfer.id);
+  if (!oppositeAlreadyLinked && !oppositeCorrectable) fail('The opposite-bank finalized record has another claim or a conflicting decision.');
 
   for (const account of [transfer.fromAccount, transfer.toAccount]) {
     const book = state.bankStatements && state.bankStatements[helpers.bookKey('PERSONAL', account)];
@@ -112,7 +118,7 @@ function buildRestorePlan(state, input, helpers) {
     if (stored.length > 1 || stored.some(item => !exactBank(item, account, transfer, helpers))) fail('The statement contains ambiguous or contradictory physical transactions for this UPI reference.');
     const expected = account === draft.account ? bank : oppositeBank;
     if (stored.some(item => helpers.bankSignature(item) !== helpers.bankSignature(expected))) fail('Stored bank evidence differs from this reviewed transaction.');
-    assertNoForeignFinalizedClaim(book, expected, transfer, account, helpers);
+    assertNoForeignFinalizedClaim(book, expected, transfer, account, helpers, account === oppositeAccount && oppositeCorrectable ? oppositeHistoryRecord.row : null);
   }
   // Current bank-truth consumers count the complete collection, even when a
   // row carries accountingExcluded. Do not flag a BTR as excluded and pretend
@@ -173,7 +179,8 @@ function buildRestorePlan(state, input, helpers) {
     const affected = state.bankReconciliationDrafts[id];
     if (affected && (affected.originalStatementPeriod || ['awaiting_approval', 'pending_approval', 'finalized'].includes(affected.status))) fail('An affected statement is locked or awaiting approval.');
   }
-  const result = { version: VERSION, intent, alreadyRestored: false, transfer: { id: transfer.id, date: transfer.date, amount: transfer.amount, fromAccount: transfer.fromAccount, toAccount: transfer.toAccount }, exclusion: clone(transfer.accountingExclusion), selected, opposite: { ...clone(oppositeEvidence[0]), transactionId: oppositeBank.id }, exclusionsToClear };
+  const oppositeCorrection = oppositeCorrectable ? { bookKey: helpers.bookKey('PERSONAL', oppositeAccount), recordId: oppositeHistoryRecord.record.id, rowId: oppositeHistoryRecord.row.id } : null;
+  const result = { version: VERSION, intent, alreadyRestored: false, transfer: { id: transfer.id, date: transfer.date, amount: transfer.amount, fromAccount: transfer.fromAccount, toAccount: transfer.toAccount }, exclusion: clone(transfer.accountingExclusion), selected, opposite: { ...clone(oppositeEvidence[0]), transactionId: oppositeBank.id }, oppositeCorrection, exclusionsToClear };
   result.fingerprint = hash({ version: VERSION, intent, state });
   return result;
 }
@@ -193,6 +200,16 @@ function applyRestorePlan(state, plan, actor, helpers) {
   transfer.accountingExclusion = null;
   history.after = { identityHash: hash({ id: transfer.id, date: transfer.date, amount: transfer.amount, fromAccount: transfer.fromAccount, toAccount: transfer.toAccount, fromNature: transfer.fromNature || transfer.nature, toNature: transfer.toNature || transfer.nature, classification: transfer.classification || 'internal_transfer' }) };
   transfer.restorationHistory = list(transfer.restorationHistory); transfer.restorationHistory.push(history);
+  if (current.oppositeCorrection) {
+    const correction = current.oppositeCorrection, book = state.bankStatements[correction.bookKey], record = list(book && book.imports).find(item => item.id === correction.recordId);
+    const row = record && [...list(record.reconciliationRows), ...list(record.carriedReconciliationRows)].find(item => item.id === correction.rowId);
+    if (!row) fail('The opposite-bank finalized record changed after preview. Refresh and review it again; nothing was changed.');
+    const previous = clone(row), bank = row.bank || {}, direction = correction.bookKey.endsWith('|' + transfer.fromAccount) ? 'debit' : 'credit';
+    row.linkedRecordIds = [transfer.id];
+    row.ledger = { id: transfer.id, date: transfer.date, description: 'Restored internal transfer · ' + transfer.fromAccount + ' to ' + transfer.toAccount, reference: current.selected.reference, debit: direction === 'debit' ? transfer.amount : 0, credit: direction === 'credit' ? transfer.amount : 0 };
+    row.decision = 'Corrected finalized link · restored excluded transfer'; row.reason = reason; row.resolvedBy = user; row.resolvedAt = at; row.corrected = true;
+    row.correctionHistory = list(row.correctionHistory); row.correctionHistory.push({ type: 'restore_excluded_transfer', before: previous, after: { linkedRecordIds: clone(row.linkedRecordIds), ledger: clone(row.ledger), decision: row.decision }, reason, by: user, at, restorationFingerprint: current.fingerprint });
+  }
   for (const item of history.clearedDecisions) {
     const other = state.bankReconciliationDrafts[item.draftId]; delete other.resolutions[item.rowId];
     other.decisionAudit = list(other.decisionAudit); other.decisionAudit.push({ action: 'restore_excluded_transfer', rowId: item.rowId, transferId: transfer.id, previous: clone(item.previous), reason, by: user, at, restorationFingerprint: current.fingerprint });
