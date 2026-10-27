@@ -15,6 +15,7 @@ const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = req
 const { applyAxisArshpreetReimbursementDuplicateRepair } = require('../modules/expenses');
 const { applyArshpreetSep01SalaryAdvanceRepair } = require('../modules/expenses');
 const { applyUmairSep13GroupedAdvanceCorrection } = require('../modules/expenses');
+const { applyIcici0992Sep06ReversalRepair } = require('../modules/expenses');
 const { applyCashCounterMissingEntries } = require('../modules/expenses');
 const { applyAxis3448PaytmBankTruthSettlements } = require('../modules/expenses');
 const { stagePaytmSettlementsFromAxisDraft } = require('../modules/expenses');
@@ -56,6 +57,13 @@ test('compact UPI RVS narration pairs a failed debit with its returned credit',(
   assert.equal(pairs.length,1);
   assert.deepEqual(pairs[0].bankRowIds,['bank-0','bank-1']);
   assert.equal(pairs[0].amount,300);
+});
+
+test('ICICI 0992 Sep 6 repair pairs the failed 300 debit and reversal while preserving the successful retry',()=>{
+  const draftId='BRD-ICICI0992-SEP06',store={oneTimeMigrations:{},auditLog:[],auditSeq:0,receipts:[{id:'REC-00081',date:'2026-09-06',amount:300,account:'ICICI Bank 0992',from:'RVSLLUVKUS'}],bankDateOverrides:{'REC-00081':{bankDate:'2026-09-06',reconciliationDraft:draftId}},bankReconciliationLinks:{'REC-00081':{reconciliationDraft:draftId}},bankReconciliationApprovals:{APP:{id:'APP',draftId,status:'pending'}},bankReconciliationDrafts:{[draftId]:{id:draftId,nature:'PERSONAL',account:'ICICI Bank 0992',transactions:[{date:'2026-09-06',description:'UPI/RVSLLUVKUS/7982361268@axl/UPI/Kotak Mahi',reference:'7982361268',debit:0,credit:300},{date:'2026-09-06',description:'UPI/LUVKUSH/7982361268-2@i/UPI/INDUSIND B',reference:'7982361268',debit:300,credit:0},{date:'2026-09-06',description:'UPI/LUVKUSH/7982361268@axl/UPI/Kotak Mahi',reference:'7982361268',debit:300,credit:0}],resolutions:{'bank-0':{action:'link_existing',appId:'REC-00081'},'bank-1':{action:'create_expense',appId:'EX-01028/PAY-001',vendor:'Common Vendor',category:'Miscellaneous Expenses'}}}}};
+  assert.deepEqual(bankReversalPairCandidates(store.bankReconciliationDrafts[draftId].transactions).map(pair=>pair.bankRowIds),[['bank-2','bank-0']]);
+  assert.equal(applyIcici0992Sep06ReversalRepair(store),true);const draft=store.bankReconciliationDrafts[draftId];
+  assert.equal(draft.resolutions['bank-0'].action,'bank_reversal_pair');assert.equal(draft.resolutions['bank-2'].action,'bank_reversal_pair');assert.deepEqual(draft.resolutions['bank-0'].bankRowIds,['bank-2','bank-0']);assert.equal(draft.resolutions['bank-1'].appId,'EX-01028/PAY-001');assert.equal(store.receipts[0].accountingExcluded,true);assert.equal(store.bankDateOverrides['REC-00081'],undefined);assert.equal(store.bankReconciliationLinks['REC-00081'],undefined);assert.equal(store.bankReconciliationApprovals.APP.status,'superseded');assert.equal(applyIcici0992Sep06ReversalRepair(store),false);
 });
 
 test('ambiguous or unpaired marked bank reversals fail closed without fabricated transfers',()=>{

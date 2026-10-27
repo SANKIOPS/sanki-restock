@@ -1178,6 +1178,27 @@ function applyUmairSep13GroupedAdvanceCorrection(s,salaryStore){
   s.oneTimeMigrations[key]={appliedAt:now,result:'corrected_and_grouped',advanceId,amount,account,date,draftId:draft.id,rowIds,bankReferences,supersededApprovalIds:superseded};
   return {expensesChanged:true,salaryChanged,complete:true,draftId:draft.id,rowIds};
 }
+function applyIcici0992Sep06ReversalRepair(s){
+  const key='repair-icici-0992-sep06-300-failed-payment-reversal-v1',account='ICICI Bank 0992',date='2026-09-06',reference='7982361268',receiptId='REC-00081',successAppId='EX-01028/PAY-001',now=new Date().toISOString();
+  s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[key])return false;
+  const matches=[];Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>{if(canonicalAccountName(draft.account)!==account)return;const rows=(draft.transactions||[]).map((bank,index)=>({bank,index,rowId:'bank-'+index})).filter(row=>String(row.bank.date||'')===date&&reconciliationReference(row.bank.reference)===reference&&Math.abs(num(row.bank.debit)+num(row.bank.credit)-300)<.01);if(rows.length===3)matches.push({draft,rows});});
+  if(matches.length!==1)return false;
+  const {draft,rows}=matches[0],creditRows=rows.filter(row=>num(row.bank.credit)>0&&!num(row.bank.debit)&&bankNarrationIndicatesReversal(row.bank.description)),failedRows=rows.filter(row=>num(row.bank.debit)>0&&!num(row.bank.credit)&&new RegExp('(?:^|[/\\s])'+reference+'@','i').test(String(row.bank.description||''))),successRows=rows.filter(row=>num(row.bank.debit)>0&&!num(row.bank.credit)&&new RegExp('(?:^|[/\\s])'+reference+'-[0-9]+@','i').test(String(row.bank.description||'')));
+  if(creditRows.length!==1||failedRows.length!==1||successRows.length!==1)return false;
+  const credit=creditRows[0],failed=failedRows[0],success=successRows[0],successResolution=(draft.resolutions||{})[success.rowId];
+  if(!successResolution||successResolution.appId!==successAppId)return false;
+  const receipt=(s.receipts||[]).find(item=>item.id===receiptId),creditResolution=(draft.resolutions||{})[credit.rowId];
+  if(!receipt||Math.abs(num(receipt.amount)-300)>.01||canonicalAccountName(receipt.account)!==account||String(receipt.date||'').slice(0,10)!==date||!creditResolution||!resolutionLinkedAppIds(creditResolution).includes(receiptId))return false;
+  const before={creditResolution:JSON.parse(JSON.stringify(creditResolution)),failedResolution:(draft.resolutions||{})[failed.rowId]?JSON.parse(JSON.stringify(draft.resolutions[failed.rowId])):null,receipt:JSON.parse(JSON.stringify(receipt)),successResolution:JSON.parse(JSON.stringify(successResolution))},reason='Owner confirmed the ₹300 debit was a failed payment returned by the matching ₹300 bank reversal. The separate ₹300 retry remained the genuine expense '+successAppId+'.',groupId='BANK-REVERSAL-ICICI0992-20260906-7982361268';
+  setLedgerMovementExcluded(s,receiptId,true,'Incorrect incoming receipt: this bank credit is the return of failed debit reference '+reference+'.', 'gaganlambasanki');
+  draft.resolutions=draft.resolutions||{};[failed.rowId,credit.rowId].forEach(rowId=>{draft.resolutions[rowId]={action:'bank_reversal_pair',groupId,bankRowIds:[failed.rowId,credit.rowId],primaryRowId:failed.rowId,reference,amount:300,reason,remark:reason,by:'gaganlambasanki',at:now};});
+  if(s.bankDateOverrides&&s.bankDateOverrides[receiptId]&&s.bankDateOverrides[receiptId].reconciliationDraft===draft.id)delete s.bankDateOverrides[receiptId];
+  if(s.bankReconciliationLinks&&s.bankReconciliationLinks[receiptId]&&s.bankReconciliationLinks[receiptId].reconciliationDraft===draft.id)delete s.bankReconciliationLinks[receiptId];
+  draft.decisionAudit=Array.isArray(draft.decisionAudit)?draft.decisionAudit:[];draft.decisionAudit.push({action:'repair_failed_payment_reversal',bankRowIds:[failed.rowId,credit.rowId],previous:{[failed.rowId]:before.failedResolution,[credit.rowId]:before.creditResolution},reference,amount:300,reason,by:'gaganlambasanki',at:now});
+  s.bankReconciliationApprovals=s.bankReconciliationApprovals||{};const superseded=[];Object.values(s.bankReconciliationApprovals).filter(item=>item&&item.draftId===draft.id&&item.status==='pending').forEach(item=>{item.status='superseded';item.supersededAt=now;item.supersededBy='gaganlambasanki';item.supersededReason='The ₹300 failed-payment reversal pair was repaired from verified bank evidence.';superseded.push(item.id);});
+  audit(s,null,'BANK_REVERSAL_PAIR_DATA_REPAIRED','bank_reconciliation',draft.id,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:normalizedNature(draft.nature),account,before,after:{failedRowId:failed.rowId,creditRowId:credit.rowId,successRowId:success.rowId,successAppId,excludedReceiptId:receiptId,groupId},note:reason});
+  s.oneTimeMigrations[key]={appliedAt:now,result:'corrected',draftId:draft.id,failedRowId:failed.rowId,creditRowId:credit.rowId,successRowId:success.rowId,successAppId,excludedReceiptId:receiptId,supersededApprovalIds:superseded};return true;
+}
 function loadStore() {
   bankAuthorityTransaction.recover(DATA_DIR);
   let s;
@@ -1248,6 +1269,7 @@ function loadStore() {
     const umairAdvanceCorrection=applyUmairSep13GroupedAdvanceCorrection(s,arshpreetSalaryStore);
     if(umairAdvanceCorrection.salaryChanged)saveSalaryStore(arshpreetSalaryStore);
     if(umairAdvanceCorrection.expensesChanged)saveStore(s);
+    if(applyIcici0992Sep06ReversalRepair(s))saveStore(s);
     if(applyLgHistoricalPayment20260814(s))saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
     // only as balance adjustments. These postings affect spending/P&L only;
@@ -5480,8 +5502,15 @@ function bankReversalPairCandidates(transactions){
   });
   const pairs=[];
   groups.forEach((rows,reference)=>{
-    if(rows.length!==2||!rows.some(x=>x.bank.reversal===true||bankNarrationIndicatesReversal(x.bank.description)))return;
-    const debit=rows.find(x=>num(x.bank.debit)>0&&!num(x.bank.credit)),credit=rows.find(x=>num(x.bank.credit)>0&&!num(x.bank.debit));
+    const markedCredits=rows.filter(x=>num(x.bank.credit)>0&&!num(x.bank.debit)&&(x.bank.reversal===true||bankNarrationIndicatesReversal(x.bank.description)));
+    if(markedCredits.length!==1)return;
+    const credit=markedCredits[0],debits=rows.filter(x=>num(x.bank.debit)>0&&!num(x.bank.credit)&&Math.abs(num(x.bank.debit)-num(credit.bank.credit))<=.005&&String(credit.bank.date||'')>=String(x.bank.date||''));
+    let debit=debits.length===1?debits[0]:null;
+    // Some banks reuse the same numeric reference for a failed attempt, its
+    // reversal and a later successful retry. The original attempt retains the
+    // exact `reference@bank` handle, while the retry is suffixed (for example
+    // `reference-2@bank`). That exact evidence is safe to disambiguate.
+    if(!debit&&debits.length>1){const escaped=reference.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),exactHandle=new RegExp('(?:^|[/\\s])'+escaped+'@','i'),exact=debits.filter(x=>exactHandle.test(String(x.bank.description||'')));if(exact.length===1)debit=exact[0];}
     if(!debit||!credit||Math.abs(num(debit.bank.debit)-num(credit.bank.credit))>.005||String(credit.bank.date||'')<String(debit.bank.date||''))return;
     pairs.push({bankRowIds:['bank-'+debit.index,'bank-'+credit.index],debitRowId:'bank-'+debit.index,creditRowId:'bank-'+credit.index,reference,amount:roundMoney(debit.bank.debit)});
   });
@@ -5507,7 +5536,7 @@ function reconciliationDecisionConflicts(draft,movements){
   });
   const seen=new Set();claims.forEach((records,appId)=>{if(records.size<2)return;const bankRowIds=Array.from(new Set(Array.from(records.values()).flat())).sort(),key=bankRowIds.join('|');if(seen.has(key))return;seen.add(key);conflicts.push({type:'duplicate_ledger_link',appId,bankRowIds,message:'The same ledger payment is linked to multiple separate bank decisions. Undo the incorrect link before finalizing.'});});
   const pairCandidates=bankReversalPairCandidates(draft.transactions||[]);
-  bankReversalEvidenceGroups(draft.transactions||[]).forEach(group=>{const bankRowIds=group.map(x=>'bank-'+x.index);if(!pairCandidates.some(pair=>pair.bankRowIds.length===bankRowIds.length&&pair.bankRowIds.every(id=>bankRowIds.includes(id))))conflicts.push({type:'unpaired_bank_reversal',bankRowIds,reference:group[0].reference,message:'The statement marks a bank reversal, but its matching debit is missing, mismatched or ambiguous. Review the original bank evidence; do not classify it as new incoming money.'});});
+  bankReversalEvidenceGroups(draft.transactions||[]).forEach(group=>{const bankRowIds=group.map(x=>'bank-'+x.index),markedRowIds=group.filter(x=>x.bank.reversal===true||bankNarrationIndicatesReversal(x.bank.description)).map(x=>'bank-'+x.index);if(markedRowIds.some(id=>pairCandidates.filter(pair=>pair.bankRowIds.includes(id)).length!==1))conflicts.push({type:'unpaired_bank_reversal',bankRowIds,reference:group[0].reference,message:'The statement marks a bank reversal, but its matching debit is missing, mismatched or ambiguous. Review the original bank evidence; do not classify it as new incoming money.'});});
   pairCandidates.forEach(pair=>{
     const decisions=pair.bankRowIds.map(id=>(draft.resolutions||{})[id]),paired=decisions.every(r=>r&&r.action==='bank_reversal_pair')&&decisions.every(r=>r.groupId===decisions[0].groupId);
     if(decisions.some(Boolean)&&!paired)conflicts.push({type:'unreviewed_bank_reversal',bankRowIds:pair.bankRowIds,reference:pair.reference,message:'A failed payment and its bank reversal have separate decisions. Confirm the reversal pair before finalizing.'});
@@ -8020,6 +8049,7 @@ module.exports.applyAxisArshpreetReimbursementDuplicateRepair = applyAxisArshpre
 module.exports.applyArshpreetSep12SalaryAdvanceRepair = applyArshpreetSep12SalaryAdvanceRepair;
 module.exports.applyArshpreetSep01SalaryAdvanceRepair = applyArshpreetSep01SalaryAdvanceRepair;
 module.exports.applyUmairSep13GroupedAdvanceCorrection = applyUmairSep13GroupedAdvanceCorrection;
+module.exports.applyIcici0992Sep06ReversalRepair = applyIcici0992Sep06ReversalRepair;
 module.exports.applyIndus8181TransferDateCorrection = applyIndus8181TransferDateCorrection;
 module.exports.applyIndus8181Sep15DebitDateCorrection = applyIndus8181Sep15DebitDateCorrection;
 module.exports.applyIndus8181Sep15OmDateCorrection = applyIndus8181Sep15OmDateCorrection;
