@@ -14,6 +14,7 @@ const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPend
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
 const { applyAxisArshpreetReimbursementDuplicateRepair } = require('../modules/expenses');
 const { applyArshpreetSep01SalaryAdvanceRepair } = require('../modules/expenses');
+const { applyUmairSep13SalaryAdvanceCorrection } = require('../modules/expenses');
 const { applyCashCounterMissingEntries } = require('../modules/expenses');
 const { applyAxis3448PaytmBankTruthSettlements } = require('../modules/expenses');
 const { stagePaytmSettlementsFromAxisDraft } = require('../modules/expenses');
@@ -30,6 +31,13 @@ test('TR-00124 is preserved and linked to an Arshpreet salary advance instead of
   const advance=salary.advances['ADV-00054'];assert.equal(advance.amount,10000);assert.equal(advance.date,'2026-09-01');assert.equal(advance.account,'Axis Bank 3448');assert.equal(advance.fundingTransferId,'TR-00124');assert.equal(advance.fundingToAccount,'Arshpreet 1919');assert.deepEqual(advance.recoveries,[]);assert.equal(advance.proof,'/salary-advance-10000.jpg');
   assert.ok(salary.advanceAudit.some(event=>event.action==='TRANSFER_RECLASSIFIED_AS_ADVANCE'&&event.advanceId===advance.id));assert.ok(store.auditLog.some(event=>event.action==='TRANSFER_RECLASSIFIED_AS_SALARY_ADVANCE'&&event.subjectId==='TR-00124'));
   assert.deepEqual(applyArshpreetSep01SalaryAdvanceRepair(store,salary),{expensesChanged:false,salaryChanged:false},'the repair is idempotent');
+});
+
+test('Umair ADV-00033 is corrected to the verified 0992 debit and excess recovery is removed',()=>{
+  const draftId='BRD-UMAIR-0992',expenses={oneTimeMigrations:{},auditLog:[],auditSeq:0,bankDateOverrides:{},bankReconciliationApprovals:{APPROVAL:{id:'APPROVAL',draftId,status:'pending'}},bankReconciliationDrafts:{[draftId]:{id:draftId,nature:'PERSONAL',account:'ICICI Bank 0992',transactions:[{date:'2026-09-13',description:'UPI/umairshaik/XXh089@okicici/UPI/Kotak Mahi',reference:'662260714728',debit:6000,credit:0}],resolutions:{}}}},salary={oneTimeMigrations:{},advanceAudit:[],advanceRequests:{REQ:{id:'REQ',amount:10000}},advances:{'ADV-00033':{id:'ADV-00033',requestId:'REQ',employeeName:'Umair',amount:10000,date:'2026-09-13',account:'ICICI Bank 0992',payingNature:'PERSONAL',recoveries:[{ym:'2026-09',amount:10000,by:'owner'}]}}};
+  const result=applyUmairSep13SalaryAdvanceCorrection(expenses,salary),advance=salary.advances['ADV-00033'],resolution=expenses.bankReconciliationDrafts[draftId].resolutions['bank-0'];
+  assert.equal(result.complete,true);assert.equal(result.salaryChanged,true);assert.equal(result.expensesChanged,true);assert.equal(advance.amount,6000);assert.equal(advance.recoveries.reduce((sum,row)=>sum+row.amount,0),6000);assert.equal(salary.advanceRequests.REQ.amount,6000);assert.equal(resolution.action,'link_existing');assert.equal(resolution.appId,'ADV-00033');assert.equal(expenses.bankDateOverrides['ADV-00033'].bankReference,'662260714728');assert.equal(expenses.bankReconciliationApprovals.APPROVAL.status,'superseded');
+  assert.deepEqual(applyUmairSep13SalaryAdvanceCorrection(expenses,salary),{expensesChanged:false,salaryChanged:false,complete:true},'the correction is idempotent');
 });
 
 test('bank reversal candidates require explicit bank evidence and one exact reference pair',()=>{

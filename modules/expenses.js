@@ -1123,6 +1123,35 @@ function applyArshpreetSep01SalaryAdvanceRepair(s,salaryStore){
   s.oneTimeMigrations[key]={appliedAt:now,result:'reclassified',advanceId:advance.id,transferId,employeeId:employee.id,employeeName:employee.name,amount,date,fromAccount,toAccount,preservedProof:true,preservedReconciliation:true};
   return {expensesChanged:true,salaryChanged:true,advanceId:advance.id};
 }
+function applyUmairSep13SalaryAdvanceCorrection(s,salaryStore){
+  const key='correct-umair-adv-00033-to-6000-and-link-0992-v1',advanceId='ADV-00033',account='ICICI Bank 0992',date='2026-09-13',reference='662260714728',amount=6000,now=new Date().toISOString();
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return {expensesChanged:false,salaryChanged:false,complete:true};
+  if(!salaryStore||!salaryStore.advances)return {expensesChanged:false,salaryChanged:false,complete:false};
+  const advance=salaryStore.advances[advanceId],nameKey=value=>String(value||'').toLowerCase().replace(/[^a-z]/g,'');
+  if(!advance||!['umair','umer'].some(name=>nameKey(advance.employeeName).includes(name))||String(advance.date||advance.payoutDate||'').slice(0,10)!==date||canonicalAccountName(advance.account)!==account)return {expensesChanged:false,salaryChanged:false,complete:false};
+  let salaryChanged=false;
+  salaryStore.oneTimeMigrations=salaryStore.oneTimeMigrations||{};
+  if(!salaryStore.oneTimeMigrations[key]){
+    const before=JSON.parse(JSON.stringify(advance)),oldRecoveries=Array.isArray(advance.recoveries)?advance.recoveries:[],recoveries=[];let remaining=amount;
+    oldRecoveries.forEach(recovery=>{if(remaining<=0)return;const kept=Math.min(remaining,num(recovery.amount));if(kept>0)recoveries.push(Object.assign({},recovery,{amount:roundMoney(kept),correctionNote:'Owner corrected '+advanceId+' from ₹10,000 to ₹6,000 against verified ICICI 0992 bank evidence '+reference}));remaining=roundMoney(remaining-kept);});
+    advance.amount=amount;advance.payingNature='PERSONAL';advance.recoveries=recoveries;advance.reference=reference;advance.bankReference=reference;advance.correctedAt=now;advance.correctedBy='gaganlambasanki';advance.correctionReason='Owner confirmed the actual advance paid to Umair was ₹6,000; linked to ICICI 0992 bank debit '+reference+'.';
+    if(advance.requestId&&salaryStore.advanceRequests&&salaryStore.advanceRequests[advance.requestId]){salaryStore.advanceRequests[advance.requestId].amount=amount;salaryStore.advanceRequests[advance.requestId].correctionReason=advance.correctionReason;salaryStore.advanceRequests[advance.requestId].correctedAt=now;}
+    salaryStore.advanceAudit=salaryStore.advanceAudit||[];salaryStore.advanceAudit.push({at:now,by:'gaganlambasanki',action:'ADVANCE_AMOUNT_AND_RECOVERY_CORRECTED',advanceId,details:{before,after:JSON.parse(JSON.stringify(advance)),bankAccount:account,bankReference:reference,removedRecoveryAmount:roundMoney(oldRecoveries.reduce((sum,row)=>sum+num(row.amount),0)-recoveries.reduce((sum,row)=>sum+num(row.amount),0))}});
+    salaryStore.oneTimeMigrations[key]={appliedAt:now,advanceId,beforeAmount:num(before.amount),afterAmount:amount,bankAccount:account,bankReference:reference,beforeRecoveries:before.recoveries||[],afterRecoveries:JSON.parse(JSON.stringify(recoveries))};salaryChanged=true;
+  }
+  const matches=[];Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>{if(canonicalAccountName(draft.account)!==account)return;(draft.transactions||[]).forEach((bank,index)=>{if(String(bank.date||'')===date&&Math.abs(num(bank.debit)-amount)<.01&&!num(bank.credit)&&reconciliationReference(bank.reference)===reconciliationReference(reference))matches.push({draft,bank,index,rowId:'bank-'+index});});});
+  if(matches.length!==1)return {expensesChanged:false,salaryChanged,complete:false};
+  const match=matches[0],draft=match.draft,rowId=match.rowId,existing=(draft.resolutions||{})[rowId];
+  if(existing&&!(existing.action==='link_existing'&&existing.appId===advanceId))return {expensesChanged:false,salaryChanged,complete:false};
+  const beforeResolution=existing?JSON.parse(JSON.stringify(existing)):null,reason='Owner confirmed this ₹6,000 ICICI 0992 debit is Umair salary advance '+advanceId+', not KHG or Lawyer Charges.';
+  draft.resolutions=draft.resolutions||{};draft.resolutions[rowId]={action:'link_existing',appId:advanceId,reason,remark:reason,by:'gaganlambasanki',at:now};
+  s.bankDateOverrides=s.bankDateOverrides||{};s.bankDateOverrides[advanceId]={bankDate:date,originalDate:String(advance.date||date),bankReference:reference,reconciliationDraft:draft.id,provisional:true,remark:reason,by:'gaganlambasanki',at:now};
+  s.bankReconciliationApprovals=s.bankReconciliationApprovals||{};const superseded=[];Object.values(s.bankReconciliationApprovals).filter(item=>item&&item.draftId===draft.id&&item.status==='pending').forEach(item=>{item.status='superseded';item.supersededAt=now;item.supersededBy='gaganlambasanki';item.supersededReason='Umair advance amount and bank link corrected from verified bank evidence.';superseded.push(item.id);});
+  audit(s,null,'SALARY_ADVANCE_BANK_LINK_CORRECTED','salary_advance',advanceId,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:normalizedNature(draft.nature),account,before:{resolution:beforeResolution,advanceAmount:10000},after:{draftId:draft.id,rowId,action:'link_existing',appId:advanceId,advanceAmount:amount,bankReference:reference},note:reason});
+  s.oneTimeMigrations[key]={appliedAt:now,result:'corrected_and_linked',advanceId,amount,account,date,reference,draftId:draft.id,rowId,supersededApprovalIds:superseded};
+  return {expensesChanged:true,salaryChanged,complete:true,draftId:draft.id,rowId};
+}
 function loadStore() {
   bankAuthorityTransaction.recover(DATA_DIR);
   let s;
@@ -1190,6 +1219,9 @@ function loadStore() {
     const arshpreetSep01AdvanceRepair=applyArshpreetSep01SalaryAdvanceRepair(s,arshpreetSalaryStore);
     if(arshpreetSep01AdvanceRepair.salaryChanged)saveSalaryStore(arshpreetSalaryStore);
     if(arshpreetSep01AdvanceRepair.expensesChanged)saveStore(s);
+    const umairAdvanceCorrection=applyUmairSep13SalaryAdvanceCorrection(s,arshpreetSalaryStore);
+    if(umairAdvanceCorrection.salaryChanged)saveSalaryStore(arshpreetSalaryStore);
+    if(umairAdvanceCorrection.expensesChanged)saveStore(s);
     if(applyLgHistoricalPayment20260814(s))saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
     // only as balance adjustments. These postings affect spending/P&L only;
@@ -7961,6 +7993,7 @@ module.exports.applySep11PrashantReimbursementDateCorrection = applySep11Prashan
 module.exports.applyAxisArshpreetReimbursementDuplicateRepair = applyAxisArshpreetReimbursementDuplicateRepair;
 module.exports.applyArshpreetSep12SalaryAdvanceRepair = applyArshpreetSep12SalaryAdvanceRepair;
 module.exports.applyArshpreetSep01SalaryAdvanceRepair = applyArshpreetSep01SalaryAdvanceRepair;
+module.exports.applyUmairSep13SalaryAdvanceCorrection = applyUmairSep13SalaryAdvanceCorrection;
 module.exports.applyIndus8181TransferDateCorrection = applyIndus8181TransferDateCorrection;
 module.exports.applyIndus8181Sep15DebitDateCorrection = applyIndus8181Sep15DebitDateCorrection;
 module.exports.applyIndus8181Sep15OmDateCorrection = applyIndus8181Sep15OmDateCorrection;
