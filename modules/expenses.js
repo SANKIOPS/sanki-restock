@@ -5178,7 +5178,7 @@ function parseIndusIndMobileStatementText(raw){
   const month={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12},dateValue=value=>{const m=String(value||'').match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);if(!m||!month[m[2].toLowerCase()])return'';const date=m[3]+'-'+String(month[m[2].toLowerCase()]).padStart(2,'0')+'-'+m[1].padStart(2,'0'),parsed=new Date(date+'T00:00:00Z');return Number.isFinite(parsed.getTime())&&parsed.toISOString().slice(0,10)===date?date:'';},section=(text.split(/Transaction History/i)[1]||'').split(/This is a computer generated statement/i)[0]||'',tailPattern=/([SM])(\d{5,12})((?:\d+\.\d{2}){3})/g,rows=[];let priorEnd=0,match;
   while((match=tailPattern.exec(section))){
     const block=section.slice(priorEnd,match.index),dateMatch=Array.from(block.matchAll(/\d{1,2}\s+[A-Za-z]{3}\s+\d{4}/g)).at(-1),date=dateValue(dateMatch&&dateMatch[0]);priorEnd=tailPattern.lastIndex;if(!date)continue;
-    const description=block.slice(dateMatch.index+dateMatch[0].length).replace(/DateParticularsChq No\/Ref NoWithdrawalDepositBalance/gi,'').replace(/\b(UPI|IMPS\/P2A)\/([\d\s]+)(?=\/)/gi,(full,prefix,digits)=>{const compact=digits.replace(/\s/g,'');return /^\d{12}$/.test(compact)?prefix+'/'+compact:full;}).replace(/\s+/g,' ').trim(),reversal=/(?:REVERSED\s*:|\bREVERSAL\b|^RVS\b)/i.test(description),referenceDigits=match[2],candidates=[];
+    const description=block.slice(dateMatch.index+dateMatch[0].length).replace(/DateParticularsChq No\/Ref NoWithdrawalDepositBalance/gi,'').replace(/\b(UPI|IMPS\/P2A)\/([\d\s]+)(?=\/)/gi,(full,prefix,digits)=>{const compact=digits.replace(/\s/g,'');return /^\d{12}$/.test(compact)?prefix+'/'+compact:full;}).replace(/\s+/g,' ').trim(),reversal=bankNarrationIndicatesReversal(description),referenceDigits=match[2],candidates=[];
     for(let length=5;length<=referenceDigits.length;length++){const money=(referenceDigits.slice(length)+match[3]).match(/\d+\.\d{2}/g)||[];if(money.length!==3)continue;const debit=statementNum(money[0]),credit=statementNum(money[1]),balance=statementNum(money[2]);if((debit>0||credit>0)&&!(debit>0&&credit>0))candidates.push({bankReference:match[1]+referenceDigits.slice(0,length),debit,credit,balance});}
     if(!candidates.length)continue;const transactionReference=((description.match(/\b(?:UPI|IMPS\/P2A)\/(\d{10,})/i)||[])[1]||'');rows.push({date,description:description||'IndusInd transaction',reference:transactionReference,transactionReference,reversal,candidates,row:rows.length+1});
   }
@@ -5404,9 +5404,14 @@ function cumulativeCompanyExcludedBankNet(s,draft){
   total+=companyFundsExcludedAdvanceNet(s,draft);
   return roundMoney(total);
 }
+function bankNarrationIndicatesReversal(value){
+  // IndusInd sometimes uses an RVS payee token (for example
+  // `UPI/RVSLLUVKUS/...`) instead of spelling out "reversal".
+  return /(?:REVERSED\s*:|\bREVERSAL\b|(?:^|[\/\s])RVS[A-Z0-9]*)/i.test(String(value||''));
+}
 function bankReversalEvidenceGroups(transactions){
   const groups=new Map();(transactions||[]).forEach((bank,index)=>{const reference=String(bank.reference||'').replace(/\s/g,'').toUpperCase(),key=reference||'missing-reference-'+index,rows=groups.get(key)||[];rows.push({bank,index,reference});groups.set(key,rows);});
-  return Array.from(groups.values()).filter(rows=>rows.some(x=>x.bank.reversal===true||/(?:REVERSED\s*:|\bREVERSAL\b|^RVS\b)/i.test(String(x.bank.description||''))));
+  return Array.from(groups.values()).filter(rows=>rows.some(x=>x.bank.reversal===true||bankNarrationIndicatesReversal(x.bank.description)));
 }
 function bankReversalPairCandidates(transactions){
   const groups=new Map();
@@ -5417,7 +5422,7 @@ function bankReversalPairCandidates(transactions){
   });
   const pairs=[];
   groups.forEach((rows,reference)=>{
-    if(rows.length!==2||!rows.some(x=>x.bank.reversal===true||/(?:REVERSED\s*:|\bREVERSAL\b|^RVS\b)/i.test(String(x.bank.description||''))))return;
+    if(rows.length!==2||!rows.some(x=>x.bank.reversal===true||bankNarrationIndicatesReversal(x.bank.description)))return;
     const debit=rows.find(x=>num(x.bank.debit)>0&&!num(x.bank.credit)),credit=rows.find(x=>num(x.bank.credit)>0&&!num(x.bank.debit));
     if(!debit||!credit||Math.abs(num(debit.bank.debit)-num(credit.bank.credit))>.005||String(credit.bank.date||'')<String(debit.bank.date||''))return;
     pairs.push({bankRowIds:['bank-'+debit.index,'bank-'+credit.index],debitRowId:'bank-'+debit.index,creditRowId:'bank-'+credit.index,reference,amount:roundMoney(debit.bank.debit)});

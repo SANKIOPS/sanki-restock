@@ -39,6 +39,17 @@ test('bank reversal candidates require explicit bank evidence and one exact refe
   assert.equal(bankReversalPairCandidates([debit,{...credit,credit:664}]).length,0);assert.equal(bankReversalPairCandidates([debit,{...credit,reference:'OTHER'}]).length,0);assert.equal(bankReversalPairCandidates([debit,credit,{...debit}]).length,0,'ambiguous reference occurrences require review');
 });
 
+test('compact UPI RVS narration pairs a failed debit with its returned credit',()=>{
+  const rows=[
+    {date:'2026-09-06',description:'UPI/LUVKUSH/7982361268@axl/UPI/Kotak Mahi',reference:'7982361268',debit:300,credit:0},
+    {date:'2026-09-06',description:'UPI/RVSLLUVKUS/7982361268@axl/UPI/Kotak Mahi',reference:'7982361268',debit:0,credit:300}
+  ];
+  const pairs=bankReversalPairCandidates(rows);
+  assert.equal(pairs.length,1);
+  assert.deepEqual(pairs[0].bankRowIds,['bank-0','bank-1']);
+  assert.equal(pairs[0].amount,300);
+});
+
 test('ambiguous or unpaired marked bank reversals fail closed without fabricated transfers',()=>{
   const file=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(file)?fs.readFileSync(file):null,account='IndusInd Bank 8181',date='2098-06-04',debit={date,description:'Failed UPI',reference:'123456789012',debit:665,credit:0,balance:335},credit={date,description:'REVERSED : Failed UPI',reference:'123456789012',debit:0,credit:665,balance:1000,reversal:true};
   [[credit],[debit,{...debit,balance:-330},credit]].forEach((transactions,index)=>{
