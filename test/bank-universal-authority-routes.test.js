@@ -199,6 +199,30 @@ test('TR-00136 26701 -> 26700.63 previews read-only and commits the linked bank/
   assert.equal(retry.status, 404); assert.equal(JSON.stringify({ expenses: read(), cards: readCards() }), snapshot);
 });
 
+test('Owner can explicitly approve the current clean reconciliation when a submitted derived fingerprint is stale', async () => {
+  cardSeed();
+  const candidate = await previewMovement('TR-00136', { role: 'admin' });
+  assert.equal(candidate.status, 200, JSON.stringify(candidate.body));
+  const staged = await stageMovement('TR-00136', candidate.body.bankAmountAuthority.fingerprint, { role: 'admin' });
+  assert.equal(staged.status, 200, JSON.stringify(staged.body));
+  const submission = await finalize('admin');
+  assert.equal(submission.status, 202, JSON.stringify(submission.body));
+  const store = read(), approval = store.bankReconciliationApprovals[submission.body.approval.id];
+  approval.bankAmountAuthorityFingerprint = 'stale-derived-snapshot';
+  write(store);
+  const blocked = await finalize('owner', { approveRequestId: approval.id });
+  assert.equal(blocked.status, 409, JSON.stringify(blocked.body));
+  assert.equal(blocked.body.approvalRefreshRequired, true);
+  assert.equal(read().bankReconciliationApprovals[approval.id].status, 'pending');
+  const approved = await finalize('owner', { approveRequestId: approval.id, approveCurrentState: true });
+  assert.equal(approved.status, 200, JSON.stringify(approved.body));
+  const saved = read().bankReconciliationApprovals[approval.id];
+  assert.equal(saved.status, 'approved');
+  assert.equal(saved.ownerConfirmedCurrentStateBy, 'owner-user');
+  assert.ok(saved.ownerConfirmedCurrentStateAt);
+  assert.ok(read().auditLog.some(item => item.action === 'BANK_RECONCILIATION_FINALIZATION_APPROVED' && /current evidence/i.test(item.note)));
+});
+
 test('card manual difference above one rupee remains unrestricted while automatic exact-reference correction retains the inclusive threshold', async () => {
   cardSeed({ bankAmount: 28001.19 });
   const candidate = await previewMovement('TR-00136');
