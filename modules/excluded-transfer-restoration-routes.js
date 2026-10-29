@@ -20,9 +20,10 @@ module.exports = function registerExcludedTransferRestoration(router, deps) {
   };
   const handler = mode => (req, res) => {
     try {
-      // A PERSONAL permission or Admin role does not authorize reversing an
-      // Owner exclusion, even when that role can ordinarily log transfers.
-      if (!deps.isOwner(req)) fail(403, 'Only the Owner can restore an excluded transfer.');
+      // This sensitive correction is limited to the Owner and the specifically
+      // delegated Prashant administrator. Ordinary Admin/PERSONAL access is not
+      // enough, and all exact-evidence checks below still apply.
+      if (!deps.canRestoreExcludedTransfer(req)) fail(403, 'Only the Owner or Prashant can restore an excluded transfer.');
       const body = req.body || {}, intent = { draftId: body.draftId, rowId: body.rowId, transferId: body.transferId };
       if (Object.values(intent).some(value => typeof value !== 'string' || !value.trim() || value.length > 200)) fail(400, 'Choose the exact draft, bank row and excluded transfer ID.');
       Object.keys(intent).forEach(key => { intent[key] = intent[key].trim(); });

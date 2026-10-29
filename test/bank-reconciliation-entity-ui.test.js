@@ -96,6 +96,71 @@ test('shared 7883 expense forms expose only authorized shared entities and do no
   h.context.cfg.isOwner = true; h.context.cfg.approvalNatures.push('PERSONAL'); assert.deepEqual(Array.from(h.context.bankExpenseNatures()), ['SAMAST', 'PERSONAL']);
   h.context.bankReconView.rows[0].entityTag = { nature: 'PERSONAL' }; h.context.openBankExpense('bank-1'); assert.equal(h.nodes.beNature.value, 'PERSONAL');
 });
+
+test('authorized shared-bank vendor-payment access enables SANKI only for direct expense creation', () => {
+  for (const owner of [false, true]) {
+    const h = harness({ bankEntityTaggingActive: () => true }); h.expense();
+    h.context.bankReconView.account = 'IndusInd Bank 7883';
+    h.context.cfg.isOwner = owner;
+    h.context.cfg.vendorPaymentAccountsByNature = { SANKI: ['IndusInd Bank 7883'] };
+    assert.deepEqual(Array.from(h.context.bankExpenseNatures(true)), ['SANKI', 'SAMAST']);
+    assert.deepEqual(Array.from(h.context.bankExpenseNatures()), ['SAMAST'], 'balance/category corrections do not inherit vendor-payment access');
+    const before = JSON.stringify(h.context.bankReconView);
+    h.context.openBankExpense('bank-1');
+    assert.match(h.nodes.beNature.innerHTML, /value="SANKI"/);
+    assert.equal(h.nodes.beNature.value, '', 'untagged shared debit still needs an explicit expense entity');
+    assert.equal(h.nodes.beAccount.value, 'IndusInd Bank 7883');
+    assert.equal(JSON.stringify(h.context.bankReconView), before);
+    h.context.bankReconView.rows[0].entityTag = { nature: 'SANKI', source: 'linked_ledger' };
+    h.context.openBankExpense('bank-1');
+    assert.equal(h.nodes.beNature.value, 'SANKI');
+    assert.match(h.nodes.beLedgerList.innerHTML, /SANKI Category/);
+    assert.equal(h.calls.length, 0, 'opening the form never saves or retags a bank row');
+  }
+});
+
+test('shared SANKI choice fails closed without exact vendor-payment, role and approval permissions', () => {
+  for (const permission of [undefined, {}, { SANKI: [] }, { SANKI: ['IndusInd Bank 8181'] }, { SANKI: 'IndusInd Bank 7883' }]) {
+    const h = harness({ bankEntityTaggingActive: () => true }); h.expense();
+    h.context.bankReconView.account = 'IndusInd Bank 7883';
+    h.context.cfg.vendorPaymentAccountsByNature = permission;
+    h.context.cfg.payingAccountsByNature = { SANKI: ['IndusInd Bank 7883'] };
+    assert.deepEqual(Array.from(h.context.bankExpenseNatures(true)), ['SAMAST']);
+  }
+  const h = harness({ bankEntityTaggingActive: () => true }); h.expense();
+  h.context.bankReconView.account = 'IndusInd Bank 7883';
+  h.context.cfg.vendorPaymentAccountsByNature = { SANKI: ['IndusInd Bank 7883'] };
+  h.context.cfg.isAdmin = false;
+  assert.deepEqual(Array.from(h.context.bankExpenseNatures(true)), ['SAMAST']);
+  h.context.cfg.isAdmin = true; h.context.cfg.approvalNatures = ['SAMAST'];
+  assert.deepEqual(Array.from(h.context.bankExpenseNatures(true)), ['SAMAST']);
+  h.context.cfg.approvalNatures = ['SANKI', 'SAMAST']; h.context.bankReconView.account = 'Other Bank 7883';
+  assert.deepEqual(Array.from(h.context.bankExpenseNatures(true)), ['SAMAST'], 'a suffix is not an account authorization');
+  h.context.bankReconView.account = 'IndusInd Bank 7883'; delete h.context.cfg.approvalNatures;
+  assert.deepEqual(Array.from(h.context.bankExpenseNatures(true)), ['SAMAST', 'PERSONAL'], 'submission natures cannot stand in for explicit SANKI approval permission');
+});
+
+test('shared SANKI expense uses its own category and proof context and submits one original bank row', async () => {
+  const h = harness({ bankEntityTaggingActive: () => true }); h.expense();
+  h.context.bankReconView.account = 'IndusInd Bank 7883';
+  h.context.cfg.vendorPaymentAccountsByNature = { SANKI: ['IndusInd Bank 7883'] };
+  const before = JSON.stringify(h.context.bankReconView);
+  h.context.openBankExpense('bank-1');
+  fields(h, { beNature: 'SANKI', beLedger: 'SAMAST Category', beVendor: 'SANKI Vendor', beParticulars: 'Verified bill', beRemark: 'Bank source checked' });
+  h.context.el('beBillPhoto').files = [{}]; click(h, 'beSave');
+  assert.equal(h.uploads.length, 0); assert.equal(h.calls.length, 0);
+  h.context.syncBankExpenseNature();
+  assert.equal(h.nodes.beLedger.value, ''); assert.match(h.nodes.beLedgerList.innerHTML, /SANKI Category/);
+  fields(h, { beLedger: 'SANKI Category', beBill: 'printed', bePaymentType: 'UPI' });
+  h.context.el('beBillPhoto').files = []; click(h, 'beSave'); assert.equal(h.uploads.length, 0);
+  h.context.el('beBillPhoto').files = [{}]; click(h, 'beSave'); click(h, 'beSave'); await flush();
+  assert.deepEqual(h.uploads, ['SANKI']); assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].url, '/api/expenses/bank-statements/create-expense');
+  assert.equal(h.calls[0].body.nature, 'SANKI'); assert.equal(h.calls[0].body.ledger, 'SANKI Category');
+  assert.equal(h.calls[0].body.draftId, 'TEST-DRAFT'); assert.equal(h.calls[0].body.rowId, 'bank-1');
+  assert.equal(Object.hasOwn(h.calls[0].body, 'amount'), false); assert.equal(Object.hasOwn(h.calls[0].body, 'account'), false);
+  assert.equal(JSON.stringify(h.context.bankReconView), before, 'the original bank evidence is never rewritten by the form');
+});
 test('incoming account labels are canonical and ambiguous shared names remain unavailable until the registry is reviewed', () => {
   const h = harness(); h.context.cfg.isOwner = true; h.context.cfg.approvalNatures.push('PERSONAL'); h.context.cfg.transferAccountsByNature.PERSONAL = ['Shared Bank', 'ICICI Bank 0992']; h.incoming(); h.context.syncBankIncomingAccount();
   const sources = h.context.bankIncomingSources();

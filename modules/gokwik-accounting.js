@@ -85,6 +85,7 @@ function validateLink(store, tx, orders, options={}) {
   const candidates = orders.filter(order => text(order.id) === orderId);
   if (candidates.length !== 1) throw Error('Exact Shopify order ID was not found uniquely. Sync the order first.');
   const order = candidates[0], number = text(order.orderNumber || order.number || order.name).replace(/^#/, '');
+  if((store.saleStoreCreditCorrections||{})['SHOPIFY/'+orderId]||(store.requests||[]).some(request=>request.kind==='sale_store_credit'&&request.status==='pending'&&request.meta&&(text(request.meta.orderId)===orderId||request.meta.saleId==='SHOPIFY/'+orderId)))throw Error('This order has an approved or pending store-credit exchange correction. It has no new GoKwik receipt to link.');
   if (number !== tx.orderNumber) throw Error('Shopify order ID and order number disagree.');
   if(rounded&&identityCandidates(tx,orders).length!==1)throw Error('The rounded merchant ID and order number do not identify one unique Shopify order. Resolve the conflicting source first.');
   if (routeLocked(store, orderId)) throw Error('This order already has bank-linked receipt evidence. Review/unmatch the original bank link before moving its receipt to GoKwik.');

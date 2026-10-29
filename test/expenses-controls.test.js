@@ -14,6 +14,9 @@ const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPend
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
 const { applyAxisArshpreetReimbursementDuplicateRepair } = require('../modules/expenses');
 const { applyArshpreetSep01SalaryAdvanceRepair } = require('../modules/expenses');
+const { applyUmairSep13GroupedAdvanceCorrection } = require('../modules/expenses');
+const { applyIcici0992Sep06ReversalRepair } = require('../modules/expenses');
+const { applyIcici0992HotelIncomeBulkUndo } = require('../modules/expenses');
 const { applyCashCounterMissingEntries } = require('../modules/expenses');
 const { applyAxis3448PaytmBankTruthSettlements } = require('../modules/expenses');
 const { stagePaytmSettlementsFromAxisDraft } = require('../modules/expenses');
@@ -32,11 +35,43 @@ test('TR-00124 is preserved and linked to an Arshpreet salary advance instead of
   assert.deepEqual(applyArshpreetSep01SalaryAdvanceRepair(store,salary),{expensesChanged:false,salaryChanged:false},'the repair is idempotent');
 });
 
+test('Umair ADV-00033 retains 10000 and groups its 2000 + 2000 + 6000 bank debits',()=>{
+  const draftId='BRD-UMAIR-0992-GROUP',priorKey='correct-umair-adv-00033-to-6000-and-link-0992-v1',expenses={oneTimeMigrations:{[priorKey]:{result:'corrected_and_linked'}},auditLog:[],auditSeq:0,bankDateOverrides:{'ADV-00033':{bankReference:'662260714728'}},bankReconciliationApprovals:{APPROVAL:{id:'APPROVAL',draftId,status:'pending'}},bankReconciliationDrafts:{[draftId]:{id:draftId,nature:'PERSONAL',account:'ICICI Bank 0992',transactions:[{date:'2026-09-13',reference:'662286249570',debit:2000,credit:0},{date:'2026-09-13',reference:'662293611445',debit:2000,credit:0},{date:'2026-09-13',reference:'662260714728',debit:6000,credit:0}],resolutions:{'bank-2':{action:'link_existing',appId:'ADV-00033'}}}}},salary={oneTimeMigrations:{[priorKey]:{beforeRecoveries:[{ym:'2026-09',amount:10000,by:'owner'}]}},advanceAudit:[],advanceRequests:{REQ:{id:'REQ',amount:6000}},advances:{'ADV-00033':{id:'ADV-00033',requestId:'REQ',employeeName:'Umair',amount:6000,date:'2026-09-13',account:'ICICI Bank 0992',payingNature:'PERSONAL',recoveries:[{ym:'2026-09',amount:6000,by:'owner'}]}}};
+  const result=applyUmairSep13GroupedAdvanceCorrection(expenses,salary),advance=salary.advances['ADV-00033'],resolutions=expenses.bankReconciliationDrafts[draftId].resolutions;
+  assert.equal(result.complete,true);assert.equal(advance.amount,10000);assert.equal(advance.recoveries.reduce((sum,row)=>sum+row.amount,0),10000);assert.equal(salary.advanceRequests.REQ.amount,10000);assert.deepEqual(Object.keys(resolutions),['bank-0','bank-1','bank-2']);Object.values(resolutions).forEach(resolution=>{assert.equal(resolution.action,'link_multiple_bank_entries');assert.equal(resolution.appId,'ADV-00033');assert.deepEqual(resolution.bankRowIds,['bank-0','bank-1','bank-2']);});assert.equal(expenses.bankReconciliationApprovals.APPROVAL.status,'superseded');
+  assert.deepEqual(applyUmairSep13GroupedAdvanceCorrection(expenses,salary),{expensesChanged:false,salaryChanged:false,complete:true});
+});
+
 test('bank reversal candidates require explicit bank evidence and one exact reference pair',()=>{
   const debit={date:'2098-06-01',reference:'123456789012',description:'UPI outgoing',debit:665,credit:0},credit={date:'2098-06-01',reference:'123456789012',description:'REVERSED : UPI outgoing',debit:0,credit:665,reversal:true};
   const pairs=bankReversalPairCandidates([debit,credit,{...debit,reference:'123456789099'}]);assert.equal(pairs.length,1);assert.deepEqual(pairs[0].bankRowIds,['bank-0','bank-1']);assert.equal(pairs[0].amount,665);
   assert.equal(bankReversalPairCandidates([debit,{...credit,reversal:false,description:'Axis funding transfer'}]).length,0,'opposite amounts alone never imply a reversal');
   assert.equal(bankReversalPairCandidates([debit,{...credit,credit:664}]).length,0);assert.equal(bankReversalPairCandidates([debit,{...credit,reference:'OTHER'}]).length,0);assert.equal(bankReversalPairCandidates([debit,credit,{...debit}]).length,0,'ambiguous reference occurrences require review');
+});
+
+test('compact UPI RVS narration pairs a failed debit with its returned credit',()=>{
+  const rows=[
+    {date:'2026-09-06',description:'UPI/LUVKUSH/7982361268@axl/UPI/Kotak Mahi',reference:'7982361268',debit:300,credit:0},
+    {date:'2026-09-06',description:'UPI/RVSLLUVKUS/7982361268@axl/UPI/Kotak Mahi',reference:'7982361268',debit:0,credit:300}
+  ];
+  const pairs=bankReversalPairCandidates(rows);
+  assert.equal(pairs.length,1);
+  assert.deepEqual(pairs[0].bankRowIds,['bank-0','bank-1']);
+  assert.equal(pairs[0].amount,300);
+});
+
+test('ICICI 0992 Sep 6 repair pairs the failed 300 debit and reversal while preserving the successful retry',()=>{
+  const draftId='BRD-ICICI0992-SEP06',store={oneTimeMigrations:{},auditLog:[],auditSeq:0,receipts:[{id:'REC-00081',date:'2026-09-06',amount:300,account:'ICICI Bank 0992',from:'RVSLLUVKUS'}],bankDateOverrides:{'REC-00081':{bankDate:'2026-09-06',reconciliationDraft:draftId}},bankReconciliationLinks:{'REC-00081':{reconciliationDraft:draftId}},bankReconciliationApprovals:{APP:{id:'APP',draftId,status:'pending'}},bankReconciliationDrafts:{[draftId]:{id:draftId,nature:'PERSONAL',account:'ICICI Bank 0992',transactions:[{date:'2026-09-06',description:'UPI/RVSLLUVKUS/7982361268@axl/UPI/Kotak Mahi',reference:'7982361268',debit:0,credit:300},{date:'2026-09-06',description:'UPI/LUVKUSH/7982361268-2@i/UPI/INDUSIND B',reference:'7982361268',debit:300,credit:0},{date:'2026-09-06',description:'UPI/LUVKUSH/7982361268@axl/UPI/Kotak Mahi',reference:'7982361268',debit:300,credit:0}],resolutions:{'bank-0':{action:'link_existing',appId:'REC-00081'},'bank-1':{action:'create_expense',appId:'EX-01028/PAY-001',vendor:'Common Vendor',category:'Miscellaneous Expenses'}}}}};
+  assert.deepEqual(bankReversalPairCandidates(store.bankReconciliationDrafts[draftId].transactions).map(pair=>pair.bankRowIds),[['bank-2','bank-0']]);
+  assert.equal(applyIcici0992Sep06ReversalRepair(store),true);const draft=store.bankReconciliationDrafts[draftId];
+  assert.equal(draft.resolutions['bank-0'].action,'bank_reversal_pair');assert.equal(draft.resolutions['bank-2'].action,'bank_reversal_pair');assert.deepEqual(draft.resolutions['bank-0'].bankRowIds,['bank-2','bank-0']);assert.equal(draft.resolutions['bank-1'].appId,'EX-01028/PAY-001');assert.equal(store.receipts[0].accountingExcluded,true);assert.equal(store.bankDateOverrides['REC-00081'],undefined);assert.equal(store.bankReconciliationLinks['REC-00081'],undefined);assert.equal(store.bankReconciliationApprovals.APP.status,'superseded');assert.equal(applyIcici0992Sep06ReversalRepair(store),false);
+});
+
+test('ICICI 0992 historical rental bulk undo reopens only the 180 active credits for Sewak Park Hotel classification',()=>{
+  const createdAt='2026-10-13T17:19:07.524Z',draftId='BRD-HOTEL-UNDO',ids=Array.from({length:181},(_,index)=>'REC-'+String(index+10).padStart(5,'0')).filter(id=>id!=='REC-00081'),receipts=ids.map((id,index)=>({id,nature:'PERSONAL',account:'ICICI Bank 0992',amount:index===ids.length-1?4620:1000,receiptType:'rental_income',category:'Rental Income',historicalBulk:true,createdBy:'gaganlambasanki',createdAt,bankReconciliationEvidence:{draftId,rowId:'bank-'+index}}));
+  receipts.push({id:'REC-00081',nature:'PERSONAL',account:'ICICI Bank 0992',amount:300,receiptType:'rental_income',category:'Rental Income',historicalBulk:true,createdBy:'gaganlambasanki',createdAt,accountingExcluded:true});
+  const store={receipts,oneTimeMigrations:{},auditLog:[],auditSeq:0,bankDateOverrides:{[ids[0]]:{reconciliationDraft:draftId}},bankReconciliationLinks:{[ids[0]]:{reconciliationDraft:draftId}},bankReconciliationApprovals:{APP:{id:'APP',draftId,status:'pending'}},bankReconciliationDrafts:{[draftId]:{id:draftId,nature:'PERSONAL',account:'ICICI Bank 0992',resolutions:{'bank-0':{action:'create_receipt',appId:ids[0],receiptId:ids[0]},'bank-debit':{action:'create_expense',appId:'EX-KEEP/PAY-001'}},transactionOwnership:{'bank-0':{nature:'PERSONAL',source:'historical_personal_workflow'},'bank-debit':{nature:'PERSONAL',source:'historical_personal_workflow'}}}}};
+  assert.equal(applyIcici0992HotelIncomeBulkUndo(store),true);assert.equal(receipts.filter(receipt=>receipt.accountingExcluded).length,181);assert.equal(store.bankReconciliationDrafts[draftId].resolutions['bank-0'],undefined);assert.equal(store.bankReconciliationDrafts[draftId].resolutions['bank-debit'].appId,'EX-KEEP/PAY-001');assert.equal(store.bankReconciliationDrafts[draftId].transactionOwnership['bank-debit'].source,'historical_personal_workflow');assert.equal(store.bankReconciliationApprovals.APP.status,'superseded');assert.equal(store.oneTimeMigrations['undo-icici-0992-historical-rental-bulk-for-sewak-park-hotel-v1'].total,183620);assert.equal(applyIcici0992HotelIncomeBulkUndo(store),false);
 });
 
 test('ambiguous or unpaired marked bank reversals fail closed without fabricated transfers',()=>{
@@ -311,20 +346,24 @@ function invokeThroughRouterAsync(method, routePath, { body = {}, query = {}, ro
 
 test('owner can bulk classify historical PERSONAL statement rows only for the three approved accounts',()=>{
   const file=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(file)?fs.readFileSync(file):null,stored=baseline?JSON.parse(baseline):{},account='ICICI Bank 0993',id='BRD-PERSONAL-HISTORICAL';
-  stored.expenses={};stored.transfers=[];stored.receipts=[];stored.adjustments=[];stored.vendorAdvances=[];stored.bankStatements={};stored.bankDateOverrides={};stored.openingBalancesByNature={PERSONAL:{[account]:20000,'ICICI Bank 0992':5000}};stored.bankReconciliationDrafts={[id]:{id,account,nature:'PERSONAL',transactions:[
+  stored.expenses={};stored.customLedgers={'Current Personal Category':{nature:'PERSONAL',active:true}};stored.transfers=[];stored.receipts=[];stored.adjustments=[];stored.vendorAdvances=[];stored.bankStatements={};stored.bankDateOverrides={};stored.openingBalancesByNature={PERSONAL:{[account]:20000,'ICICI Bank 0992':5000}};stored.bankReconciliationDrafts={[id]:{id,account,nature:'PERSONAL',transactions:[
     {date:'2098-07-01',description:'Restaurant payment',reference:'HIST-D1',debit:500,credit:0,balance:19500},
     {date:'2098-07-01',description:'Pharmacy payment',reference:'HIST-D2',debit:300,credit:0,balance:19200},
     {date:'2098-07-02',description:'Tenant rent',reference:'HIST-C1',debit:0,credit:10000,balance:29200},
     {date:'2098-07-03',description:'Own account transfer',reference:'HIST-C2',debit:0,credit:2500,balance:31700},
-    {date:'2098-07-04',description:'Restaurant second payment',reference:'HIST-D3',debit:200,credit:0,balance:31500}
-  ],summary:{from:'2098-07-01',to:'2098-07-04',openingBalance:20000,closingBalance:31500,totalDebits:1000,totalCredits:12500,validated:true},resolutions:{},matchingPolicy:'strict_identity_v2',createdBy:'owner-user',createdAt:new Date().toISOString(),expiresAt:'2099-01-01T00:00:00.000Z'}};
+    {date:'2098-07-04',description:'Restaurant second payment',reference:'HIST-D3',debit:200,credit:0,balance:31500},
+    {date:'2098-07-05',description:'Hotel guest payment',reference:'HIST-C3',debit:0,credit:800,balance:32300}
+  ],summary:{from:'2098-07-01',to:'2098-07-05',openingBalance:20000,closingBalance:32300,totalDebits:1000,totalCredits:13300,validated:true},resolutions:{},matchingPolicy:'strict_identity_v2',createdBy:'owner-user',createdAt:new Date().toISOString(),expiresAt:'2099-01-01T00:00:00.000Z'}};
   fs.writeFileSync(file,JSON.stringify(stored));
   try{
     assert.equal(invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'admin',body:{draftId:id,rowIds:['bank-0'],direction:'debit',category:'Food & Dining'}}).status,403,'Prashant cannot use the owner recovery tool');
     const debits=invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:id,rowIds:['bank-0','bank-1'],direction:'debit',category:'Food & Dining',vendor:'Test Food Vendor'}});assert.equal(debits.status,200,JSON.stringify(debits.body));assert.equal(debits.body.created,2);const suggested=debits.body.rows.find(x=>x.id==='bank-4').personalSuggestion;assert.deepEqual([suggested.vendor,suggested.category],['Test Food Vendor','Food & Dining']);
     let after=JSON.parse(fs.readFileSync(file));assert.equal(Object.keys(after.expenses).length,2);assert.equal(Object.values(after.expenses).every(x=>x.nature==='PERSONAL'&&x.ledger==='Food & Dining'&&x.status==='paid'),true);assert.deepEqual(Object.values(after.expenses).map(x=>x.amount).sort((a,b)=>a-b),[300,500]);
+    const currentCatalogueCategory=invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:id,rowIds:['bank-4'],direction:'debit',category:'Current Personal Category',vendor:'Current Catalogue Vendor'}});assert.equal(currentCatalogueCategory.status,200,JSON.stringify(currentCatalogueCategory.body));
+    after=JSON.parse(fs.readFileSync(file));assert.equal(after.expenses[currentCatalogueCategory.body.expenses[0].id].ledger,'Current Personal Category');
     const rent=invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:id,rowIds:['bank-2'],direction:'credit',creditKind:'rental_income'}});assert.equal(rent.status,200,JSON.stringify(rent.body));after=JSON.parse(fs.readFileSync(file));const recoveredReceipt=after.receipts.find(x=>x.historicalBulk);assert.ok(recoveredReceipt);assert.deepEqual([recoveredReceipt.receiptType,recoveredReceipt.category,recoveredReceipt.amount],['rental_income','Rental Income',10000]);
     const transfer=invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:id,rowIds:['bank-3'],direction:'credit',creditKind:'internal_transfer',fromAccount:'ICICI Bank 0992'}});assert.equal(transfer.status,200,JSON.stringify(transfer.body));after=JSON.parse(fs.readFileSync(file));const recoveredTransfer=after.transfers.find(x=>x.historicalBulk);assert.ok(recoveredTransfer);assert.deepEqual([recoveredTransfer.fromAccount,recoveredTransfer.toAccount,recoveredTransfer.amount],['ICICI Bank 0992','ICICI Bank 0993',2500]);
+    const hotel=invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:id,rowIds:['bank-5'],direction:'credit',creditKind:'sewak_park_hotel_income'}});assert.equal(hotel.status,200,JSON.stringify(hotel.body));after=JSON.parse(fs.readFileSync(file));const hotelReceipt=after.receipts.find(x=>x.category==='Sewak Park Hotel Income');assert.ok(hotelReceipt);assert.deepEqual([hotelReceipt.receiptType,hotelReceipt.hotelName,hotelReceipt.hotelLocation,hotelReceipt.incomeSource,hotelReceipt.amount],['hotel_income','Sewak Park Hotel','Sewak Park','hotel_business',800]);
     assert.equal(invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:id,rowIds:['bank-2'],direction:'credit',creditKind:'home_received'}}).status,409,'a resolved row cannot be posted twice');
     after.bankReconciliationDrafts.BAD={...after.bankReconciliationDrafts[id],id:'BAD',account:'Gagan Personal Cash',resolutions:{}};fs.writeFileSync(file,JSON.stringify(after));assert.equal(invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:'BAD',rowIds:['bank-0'],direction:'debit',category:'Food & Dining'}}).status,403);
   }finally{if(baseline)fs.writeFileSync(file,baseline);else fs.rmSync(file,{force:true});}
@@ -332,7 +371,7 @@ test('owner can bulk classify historical PERSONAL statement rows only for the th
 
 test('historical PERSONAL bulk controls expose the five credit choices and approved account scope',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
-  ['Rental income','Personal income','Transfer from other account','Home received','Other personal received'].forEach(label=>assert.match(html,new RegExp(label)));
+  ['Sewak Park Hotel income','Rental income','Personal income','Transfer from other account','Home received','Other personal received'].forEach(label=>assert.match(html,new RegExp(label)));
   assert.match(html,/personal-historical-bulk/);assert.match(html,/0993, 0992 and 7883/);assert.match(html,/cfg&&cfg\.canManagePersonalAccounting&&\(bankNature==='PERSONAL'\|\|bankEntityTaggingActive\(\)\)/);assert.match(html,/Suggested groups:/);assert.match(html,/Possible:/);assert.match(html,/Confirm or correct the suggested vendor/);
 });
 
@@ -3296,7 +3335,8 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html,/populatePaymentSource\(e\.nature\|\|'SANKI',true\)/);
   assert.match(html,/Refreshing paying accounts/);
   assert.match(html,/<label>Expense entity<\/label><select id="lg_expense_nature"><option value="">All<\/option>/);
-  assert.match(html,/expenseNature='\+encodeURIComponent\(el\('lg_expense_nature'\)\.value\)/);
+  assert.match(html,/expenseNature=el\('lg_expense_nature'\)\.value/);
+  assert.match(html,/expenseNature='\+encodeURIComponent\(expenseNature\)/);
   assert.match(html,/id="editPayingAccount"/);
   assert.match(html,/paymentAccount:el\('editPayingAccount'\)\.value/);
 });

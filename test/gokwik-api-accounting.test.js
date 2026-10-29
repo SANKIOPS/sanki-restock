@@ -19,6 +19,7 @@ function actualSaveHarness(api,persisted){
  const files=new Map([[file,JSON.stringify(persisted)]]),events=[],writes=[],commits=[];
  const context=vm.createContext({
   path,Date,process:{pid:12345},EXP_PATH:file,DATA_DIR:dataDir,
+  saleStoreCreditCorrections:require('../modules/sale-store-credit-corrections'),
   sankiCategories:{attachGroups:()=>events.push('categories')},
   require(name){assert.equal(name,'./gokwik-api-accounting');return {finalizeStagedAudit(store){events.push('finalize');return api.finalizeStagedAudit(store);}};},
   fs:{
@@ -162,6 +163,16 @@ for(const external of [false,true])test('production saveStore finalizes only pen
   delete expected._bankAuthorityExternal;
  }else assert.ok(h.events.indexOf('write')<h.events.indexOf('rename'));
  assert.deepEqual(clone(store),expected);
+});
+
+for(const external of [false,true])test('production saveStore preserves concurrent exchange corrections before '+(external?'linked-store commit':'filesystem write'),()=>{
+ const api=clockedApi('2026-10-22T09:08:07.654Z'),{store,persisted}=stagedSaveFixture(api);
+ persisted.saleStoreCreditCorrections={'SHOPIFY/SYNTH-REPLACEMENT':{saleId:'SHOPIFY/SYNTH-REPLACEMENT',storeCreditAmount:150,treatment:'exchange_store_credit',approvedBy:'synthetic-owner'}};
+ if(external)store._bankAuthorityExternal=[{store:'creditCards',before:'{"keep":true}',after:'{"keep":true}'}];
+ const before=JSON.stringify(persisted),h=actualSaveHarness(api,persisted);
+ assert.throws(()=>h.save(store),/remove or overwrite saved store-credit correction/);
+ assert.equal(h.writes.length,0);assert.equal(h.commits.length,0);assert.equal(JSON.stringify(persisted),before);
+ assert.ok(!h.events.includes('write')&&!h.events.includes('rename')&&!h.events.includes('commit'));
 });
 
 for(const external of [false,true])test('production saveStore rejects malformed pending audit before '+(external?'linked-store commit':'filesystem write'),()=>{

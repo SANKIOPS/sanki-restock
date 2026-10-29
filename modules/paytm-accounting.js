@@ -43,6 +43,16 @@ function matchPayoutBank(store, payout) {
   return { bankMatched: matched, bankMatch: matched ? 'Matched to Axis bank' : candidates.length > 1 ? 'ambiguous' : candidates.length ? 'amount/date candidate' : 'not found', bankCandidates: candidates.map(row => ({ id: row.id, date: row.date, credit: Number(row.credit), reference: row.reference || row.description || '' })) };
 }
 
+function assertNoStoreCreditExchange(store, orderId, orderNumber) {
+  const saleId = 'SHOPIFY/' + String(orderId), label = '#' + String(orderNumber || orderId).replace(/^#/, '');
+  if (Object.prototype.hasOwnProperty.call(store.saleStoreCreditCorrections || {}, saleId)) {
+    throw new Error('Shopify order ' + label + ' has an approved store-credit exchange correction: cash and Paytm are zero. Review its source correction instead of linking or posting another Paytm receipt.');
+  }
+  if ((store.requests || []).some(request => request.kind === 'sale_store_credit' && request.status === 'pending' && request.meta && request.meta.saleId === saleId)) {
+    throw new Error('Shopify order ' + label + ' has a store-credit exchange correction awaiting Owner approval. Resolve that request before linking or posting a Paytm receipt.');
+  }
+}
+
 function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   if (!tx) throw new Error('Paytm transaction not found. Import its detailed report first.');
   if (resolutionForTransaction(store, tx.transactionId)) throw new Error('This transaction belongs to an audited accidental receipt/refund return and cannot be linked to Shopify.');
@@ -52,6 +62,7 @@ function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   if (matches.length !== 1) throw new Error(matches.length ? 'Order number is ambiguous; use the Shopify order ID.' : 'Shopify order not found.');
   const order = matches[0];
   if (!isOriginalPaymentOrder(order)) throw new Error('Choose a non-cancelled Shopify order with an original successful payment. Paid, partially paid, partially refunded and refunded orders are supported.');
+  assertNoStoreCreditExchange(store, order.id, order.orderNumber || order.number || order.name);
   const links = store.paytmOrderLinks || {};
   const row = saleRows.find(x => String(x.orderId) === String(order.id) && x.account !== 'Counter Cash');
   const orderDate = String(order.processedAt || order.createdAt || row && row.date || '').slice(0, 10);
@@ -126,6 +137,7 @@ function validateSettlementReview(store, payoutId, saleRows, options = {}) {
   if (linked.reduce((sum, x) => sum + cents(x.amount), 0) !== cents(payout.customerGross-excludedAmount)) throw new Error('Reviewed customer receipts plus excluded payments do not equal the customer-payment gross for this settlement.');
   const roundedOrders = new Set();
   for (const link of linked) {
+    if (link.orderId) assertNoStoreCreditExchange(store, link.orderId, link.orderNumber);
     if (link.type === 'manual_sale' || link.type === 'cash_transfer') {
       const source = link.type === 'manual_sale' ? store.receipts : store.transfers;
       const record = (source || []).find(x => x.id === link.recordId && x.paytmTransactionId === link.transactionId);

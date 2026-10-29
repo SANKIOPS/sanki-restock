@@ -30,11 +30,26 @@ function harness(overrides = {}) {
     if (options) return { success: true, refundId: original.id };
     return { success: true, refunds: [] };
   }
-  const context = { cfg, tab: 'not-receivables', URLSearchParams, window: {}, document: { getElementById: id => nodes[id], createElement: element, head: element(), body: element() },
+  nodes.panel=element();
+  const context = { cfg, tab: overrides.url ? 'receivables' : 'not-receivables', location:{search:overrides.url||''}, URLSearchParams, window: {}, document: { getElementById: id => nodes[id], createElement: element, head: element(), body: element() },
     api, esc: value => String(value == null ? '' : value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'), fmtBank: value => '₹' + Number(value).toFixed(2), setMsg: (message, success) => notices.push({ message, success }) };
-  vm.runInNewContext(source.replace(/\}\(\)\);\s*$/, 'window.correctionTest = { openCorrection }; }());'), context);
-  return { nodes, requests, notices, cfg, open: () => context.window.correctionTest.openCorrection(original), answer(fn) { answer = fn; } };
+  let script=source.replace(/\}\(\)\);\s*$/, 'window.correctionTest = { openCorrection }; }());');
+  if(overrides.url)script=script.replace('function draw() {','function draw() { return;');
+  vm.runInNewContext(script, context);
+  return { nodes, requests, notices, cfg, open: () => context.window.correctionTest.openCorrection(original), async render(){context.window.renderRefundsSection('panel');await new Promise(resolve=>setImmediate(resolve));}, answer(fn) { answer = fn; } };
 }
+
+test('Manage refund deep link opens only an exact authorized source using read-only requests once', async()=>{
+  const ui=harness({url:'?manageRefund=RF-SYNTHETIC&nature=SANKI',answer:async(url)=>url.includes('/correction-preview')?{success:true,editable:false,blockedReason:'Pending approval'}:{success:true,refunds:[original]}});
+  await ui.render();assert.equal(ui.requests.length,2);assert.match(ui.requests[0].url,/nature=SANKI/);assert.match(ui.requests[0].url,/search=RF-SYNTHETIC/);assert.match(ui.requests[1].url,/RF-SYNTHETIC\/correction-preview/);assert.match(ui.nodes.rf_message.textContent,/Pending approval/);assert.ok(ui.requests.every(r=>!r.options));
+  await ui.render();assert.equal(ui.requests.filter(r=>r.url.includes('/correction-preview')).length,1);
+});
+
+test('Manage refund deep link denies inaccessible or ambiguous targets without fallback or writes',async()=>{
+  for(const options of [{cfg:{canEditLedgerTransactions:false}},{url:'?manageRefund=RF-SYNTHETIC&nature=PERSONAL'},{records:[]},{records:[original,original]},{records:[{...original,id:'RF-OTHER'}]}]){
+    const ui=harness({url:'?manageRefund=RF-SYNTHETIC&nature=SANKI',...options,answer:async()=>({success:true,refunds:options.records||[original]})});await ui.render();assert.ok(ui.requests.every(r=>!r.options&&!r.url.includes('/correction-preview')));assert.equal(ui.nodes.rf_dialog,undefined);
+  }
+});
 test('correction UI opens GET-only, shows immutable identity and requires reviewed explicit Apply', async () => {
   const ui = harness(); await ui.open();
   assert.equal(ui.requests.length, 1); assert.equal(ui.requests[0].options, undefined);

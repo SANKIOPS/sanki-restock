@@ -88,8 +88,17 @@ test('real helpers preview a shared 7883 PERSONAL row without writing or restori
 
 for (const role of ['admin', 'manager', 'claimant']) for (const route of [previewRoute, applyRoute]) test(role + ' cannot ' + route.split('/').at(-1) + ' an Owner-excluded transfer even with personal accounting permission', async () => {
   reset(); const before = bytes();
-  const result = await dispatch(route, { role, username: 'prashant', permissions: { personalAccounting: true }, body: { ...intent, confirm: true, fingerprint: 'a'.repeat(64), reason } });
+  const result = await dispatch(route, { role, username: role === 'admin' ? 'another-admin' : 'prashant', permissions: { personalAccounting: true }, body: { ...intent, confirm: true, fingerprint: 'a'.repeat(64), reason } });
   assert.equal(result.status, 403, JSON.stringify(result.body)); assert.equal(bytes(), before);
+});
+
+test('Prashant can preview and restore the exact excluded transfer without creating a duplicate', async () => {
+  const before = reset(), actor = { role: 'admin', username: 'prashant', permissions: { personalAccounting: true } };
+  const reviewed = await preview(actor); assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+  const result = await apply(reviewed.body.plan.fingerprint, actor); assert.equal(result.status, 200, JSON.stringify(result.body));
+  const after = read(); assert.equal(after.transfers.length, 1); assert.equal(after.transfers[0].accountingExcluded, false);
+  assert.equal(after.bankReconciliationDrafts[draftId].resolutions['bank-0'].appId, transferId);
+  assert.equal(after.transfers[0].restorationHistory.at(-1).by, 'prashant'); unchangedFinancialRecords(before, after);
 });
 
 test('Owner apply restores one existing transfer and stages its exact link without changing other financial data', async () => {
@@ -103,15 +112,68 @@ test('Owner apply restores one existing transfer and stages its exact link witho
   assert.equal(replay.status, 200, JSON.stringify(replay.body)); assert.equal(replay.body.alreadyRestored, true); assert.equal(bytes(), saved, 'HTTP replay must not save another audit or money movement');
 });
 
+test('Owner restores both sides when the exact opposite finalized bank row was also excluded', async () => {
+  const before = reset(state => {
+    const row = state.bankStatements['PERSONAL|' + receiving].imports[0].reconciliationRows[0];
+    row.linkedRecordIds = [];
+    row.ledger = {};
+    delete row.bank.transactionId;
+    row.decision = 'Reviewed bank record without ledger link';
+    row.reason = 'The linked transfer was later excluded';
+    state.transfers[0].bankReconciliationEvidence = { recordId: 'BST-SYNTHETIC-RESTORE-ORIGIN', description: row.bank.description, reference };
+  });
+  const reviewed = await preview();
+  assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+  assert.equal(reviewed.body.plan.oppositeCorrection.recordId, 'BST-SYNTHETIC-RESTORE-ORIGIN');
+  const result = await apply(reviewed.body.plan.fingerprint);
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  const after = read(), row = after.bankStatements['PERSONAL|' + receiving].imports[0].reconciliationRows[0];
+  assert.equal(after.transfers.length, 1);
+  assert.equal(after.transfers[0].accountingExcluded, false);
+  assert.deepEqual(row.linkedRecordIds, [transferId]);
+  assert.equal(row.ledger.id, transferId);
+  assert.equal(row.corrected, true);
+  assert.equal(row.correctionHistory.at(-1).type, 'restore_excluded_transfer');
+  assert.deepEqual(after.expenses, before.expenses);
+  assert.deepEqual(after.receipts, before.receipts);
+  assert.deepEqual(after.bankTruthMovements, before.bankTruthMovements);
+});
+
+test('a different verified same-bank UPI reference distinguishes another same-date and same-amount transfer', async () => {
+  reset(state => {
+    const other = { ...clone(state.transfers[0]), id: 'TR-SYNTHETIC-DISTINCT', accountingExcluded: false, accountingExclusion: null, reconciliationDraft: 'BRD-SYNTHETIC-DISTINCT-SOURCE', bankRowId: 'bank-0' };
+    state.transfers.push(other);
+    state.bankReconciliationDrafts['BRD-SYNTHETIC-DISTINCT-SOURCE'] = { id: 'BRD-SYNTHETIC-DISTINCT-SOURCE', nature: 'SAMAST', account: source, transactions: [{ date, description: 'UPI/900000006124/DR/Synthetic distinct transfer', reference: '900000006124', debit: amount, credit: 0 }], resolutions: { 'bank-0': { action: 'link_existing', appId: other.id, postingNature: 'PERSONAL' } } };
+    state.bankReconciliationDrafts['BRD-SYNTHETIC-DISTINCT-OPPOSITE'] = { id: 'BRD-SYNTHETIC-DISTINCT-OPPOSITE', nature: 'PERSONAL', account: receiving, transactions: [{ date, description: 'UPI/900000006124/Synthetic invalid opposite copy', reference: '900000006124', debit: 0, credit: amount + 1 }], resolutions: { 'bank-0': { action: 'link_existing', appId: other.id, postingNature: 'PERSONAL' } } };
+  });
+  const reviewed = await preview();
+  assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+  assert.equal(reviewed.body.plan.transfer.id, transferId);
+});
+
 for (const changed of [
   { name: 'stale transfer amount', mutate: s => { s.transfers[0].amount += 1; } },
   { name: 'stale exclusion reason', mutate: s => { s.transfers[0].accountingExclusion.reason = 'Changed by another reviewer'; } },
-  { name: 'changed actual bank row', mutate: s => { s.bankReconciliationDrafts[draftId].transactions[0].reference = '900000006124'; } },
-  { name: 'new pending Owner request', mutate: s => { s.bankReconciliationApprovals['BRA-SYNTHETIC-PENDING'] = { id: 'BRA-SYNTHETIC-PENDING', draftId, status: 'pending' }; } }
+  { name: 'changed actual bank row', mutate: s => { s.bankReconciliationDrafts[draftId].transactions[0].reference = '900000006124'; } }
 ]) test(changed.name + ' rejects Owner apply without saving anything', async () => {
   reset(); const reviewed = await preview(); assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
   const state = read(); changed.mutate(state); write(state); const before = bytes();
   const result = await apply(reviewed.body.plan.fingerprint); assert.equal(result.status, 409, JSON.stringify(result.body)); assert.equal(bytes(), before);
+});
+
+test('restoration supersedes an affected pending Owner approval and requires corrected resubmission', async () => {
+  reset(state => { state.bankReconciliationApprovals['BRA-SYNTHETIC-PENDING'] = { id: 'BRA-SYNTHETIC-PENDING', draftId, status: 'pending', requestedBy: 'prashant' }; });
+  const beforePreview = bytes(), reviewed = await preview();
+  assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+  assert.equal(bytes(), beforePreview, 'preview must not withdraw the approval');
+  assert.deepEqual(reviewed.body.plan.approvalsToSupersede, ['BRA-SYNTHETIC-PENDING']);
+  const result = await apply(reviewed.body.plan.fingerprint);
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  const after = read(), approval = after.bankReconciliationApprovals['BRA-SYNTHETIC-PENDING'];
+  assert.equal(approval.status, 'superseded');
+  assert.equal(approval.supersededBy, 'synthetic-owner');
+  assert.match(approval.supersededReason, /Submit the updated reconciliation again/);
+  assert.equal(after.transfers[0].accountingExcluded, false);
 });
 
 for (const change of [{ confirm: false }, { confirm: undefined }, { reason: '' }, { reason: 'yes' }, { fingerprint: 'forged' }, { transferId: 'TR-SYNTHETIC-DOES-NOT-EXIST' }]) test('invalid explicit apply request is atomic: ' + JSON.stringify(change), async () => {
@@ -147,10 +209,10 @@ test('raw preview and successful apply do not run unrelated migrations or catego
   const after = read(); unchangedFinancialRecords(raw, after); assert.deepEqual(after.oneTimeMigrations, {}); assert.deepEqual(after.syntheticUnnormalizedMarker, raw.syntheticUnnormalizedMarker);
 });
 
-test('non-Owner denial happens before reading an invalid accounting file', async () => {
+test('unauthorized denial happens before reading an invalid accounting file', async () => {
   reset(); fs.writeFileSync(file, '{ synthetic invalid json'); const before = bytes();
   for (const route of [previewRoute, applyRoute]) {
-    const denied = await dispatch(route, { role: 'admin', username: 'prashant', permissions: { personalAccounting: true }, body: { ...intent, fingerprint: 'a'.repeat(64), confirm: true, reason } });
+    const denied = await dispatch(route, { role: 'admin', username: 'another-admin', permissions: { personalAccounting: true }, body: { ...intent, fingerprint: 'a'.repeat(64), confirm: true, reason } });
     assert.equal(denied.status, 403); assert.equal(bytes(), before);
   }
 });

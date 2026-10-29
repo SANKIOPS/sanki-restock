@@ -145,6 +145,17 @@ test('bank-style card approvals obey the same attention policy and a legacy revi
   assert.equal(row(invoke(), account).status, 'review_pending');
 });
 
+test('archived duplicate card reviews do not remain pending while unknown states stay actionable', () => {
+  const account='HDFC 7376',cards={cards:{CC:{id:'CC',name:'HDFC',last4:'7376',active:true}},statements:{
+    ORIGINAL:{id:'ORIGINAL',cardId:'CC',status:'finalized',storedName:'original.pdf',summary:{from:minus(5),to:required}},
+    DUPLICATE:{id:'DUPLICATE',cardId:'CC',status:'archived',storedName:'duplicate.pdf',summary:{from:minus(5),to:required}}
+  }};
+  save(fresh(),cards);
+  for(const role of ['owner','admin']){const result=row(invoke(role),account);assert.equal(result.pendingDraft,false);assert.equal(result.draftId,'');assert.equal(result.status,'up_to_date');}
+  cards.statements.DUPLICATE.status='unknown-review-state';save(fresh(),cards);
+  for(const role of ['owner','admin']){const result=row(invoke(role),account);assert.equal(result.pendingDraft,true);assert.equal(result.draftId,'DUPLICATE');assert.equal(result.status,'review_pending');}
+});
+
 test('private PERSONAL card approval periods cannot affect or reveal admin reminder metadata', () => {
   const account = 'HDFC 7376', cards = { cards: { CC: { id: 'CC', name: 'HDFC', last4: '7376', active: true } }, statements: {} };
   const store = fresh();
