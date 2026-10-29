@@ -305,7 +305,7 @@ function createStore(options = {}) {
         if(set.behaviorsConfirmed==null&&Array.isArray(groups)&&raw['Flexible Inclusions']){set.interests=groups.flatMap(g=>(g.interests||[]).map(x=>x.name));set.interestsConfirmed=true;set.behaviors=groups.flatMap(g=>(g.behaviors||[]).map(x=>x.name));set.behaviorsConfirmed=true;}
       }catch{/* Preserve existing records when the source audience is unavailable. */}
     }
-    return { ...output, summary: configuredSummary(state),missingDetails:require('./meta-ads-setup-bundle').missingDetails(output),setupCoverage:require('./meta-ads-setup-bundle').setupCoverage(output), insights:require('./meta-ads-insights').insights(state,period) };
+    return { ...output, goalTargets:output.goalTargets||require('../public/meta-decisions').defaults, summary: configuredSummary(state),missingDetails:require('./meta-ads-setup-bundle').missingDetails(output),setupCoverage:require('./meta-ads-setup-bundle').setupCoverage(output), insights:require('./meta-ads-insights').insights(state,period) };
   }
   function mutate(type, method, recordId, body, actor) {
     if (!plain(body) || Buffer.byteLength(JSON.stringify(body), 'utf8') > 128 * 1024) fail('Record body must be an object below 128 KiB.');
@@ -443,6 +443,17 @@ function createStore(options = {}) {
       validateRelationships(state);if(changedRecords){state.revision++;save(state);}return {revision:state.revision,changedRecords};
     });
   }
+  function setGoalTargets(body,actor){
+    const defaults=require('../public/meta-decisions').defaults;
+    if(!plain(body)||!Object.hasOwn(defaults,body.goal)||!plain(body.targets)||Object.keys(body.targets).some(k=>!Object.hasOwn(defaults[body.goal],k)))fail('Invalid goal targets.');
+    const targets={...defaults[body.goal],...body.targets};
+    for(const [k,v] of Object.entries(targets))if(v!==null&&(!Number.isFinite(v)||v<0||(k==='minDays'&&(!Number.isInteger(v)||v<1||v>366))))fail('Enter valid non-negative targets.');
+    if(targets.minDays==null||targets.minSpend==null||(body.goal==='profile'&&targets.visitMax==null))fail('Minimum days, spend and profile visit limit are required.');
+    if(targets.increaseCost!=null&&targets.keepBelow!=null&&targets.increaseCost>=targets.keepBelow)fail('Pause threshold must exceed the increase target.');
+    return locked(()=>{const state=loadUnlocked();if(body.revision!==state.revision)fail('Records changed. Refresh before saving targets.',409);
+      const before=state.goalTargets||clone(defaults);state.goalTargets={...before,[body.goal]:targets};state.revision++;
+      state.changes.unshift({id:crypto.randomUUID(),at:clock(),actor,entityType:'goalSettings',entityId:body.goal,field:'targets',before:before[body.goal],after:targets,action:'update',reason:'Recommendation targets updated',revision:state.revision});save(state);return {revision:state.revision};});
+  }
   function copySettings(body,actor){
     const allowed={destination:['destination','destinationRef','whatsappNumber','performanceGoal'],budget:['budgetDaily'],locations:['locations'],interests:['interests','interestsConfirmed','behaviors','behaviorsConfirmed','placements','placementsConfirmed'],age:['ageMin','ageMax','gender'],collection:['collection'],creativeTypes:['creativeTypes'],model:['model'],product:['product'],skus:['skus']};
     if(!plain(body)||!Array.isArray(body.targets)||!body.targets.length||body.targets.length>2000||new Set(body.targets).size!==body.targets.length||!Array.isArray(body.groups)||!body.groups.length||body.groups.some(g=>!allowed[g]))fail('Choose target ad sets and settings to copy.');
@@ -484,7 +495,7 @@ function createStore(options = {}) {
       if(changedRecords){state.revision++;save(state);}return {revision:state.revision,changedRecords};
     });
   }
-  return { file, load, view, mutate, importSetup, importPerformance,bulk,confirmStatuses,copySettings };
+  return { file, load, view, mutate, importSetup, importPerformance,bulk,confirmStatuses,copySettings,setGoalTargets };
 }
 
 function createRouter(store = createStore()) {
@@ -539,6 +550,7 @@ function createRouter(store = createStore()) {
     }catch(e){sendError(e,res);}
   }));
   router.use(BASE, express.json({ limit: '128kb' }));
+  router.post(`${BASE}/goal-targets`,(req,res)=>{try{res.json({success:true,...store.setGoalTargets(req.body,req.user.username)});}catch(e){sendError(e,res);}});
   router.post(`${BASE}/copy-settings`,(req,res)=>{try{res.json({success:true,...store.copySettings(req.body,req.user.username)});}catch(e){sendError(e,res);}});
   router.post(`${BASE}/confirm-statuses`,(req,res)=>{try{res.json({success:true,...store.confirmStatuses(req.body,req.user.username)});}catch(e){sendError(e,res);}});
   router.post(`${BASE}/bulk`,(req,res)=>{try{res.json({success:true,...store.bulk(req.body,req.user.username)});}catch(e){sendError(e,res);}});

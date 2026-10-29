@@ -1,0 +1,7 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {assess,defaults}=require('../public/meta-decisions');
+const m={spend:600,profileVisits:600,instagramFollows:40};
+test('profile rules respect exact thresholds and fractional twenties',()=>{assert.equal(assess(m,'profile',defaults,3).action,'Increase');assert.equal(assess({...m,profileVisits:599},'profile',defaults,3).action,'Keep');assert.equal(assess({...m,instagramFollows:30},'profile',defaults,3).action,'Keep');assert.equal(assess({...m,spend:20.99*30,instagramFollows:30},'profile',defaults,3).action,'Keep');assert.equal(assess({...m,spend:21*30,instagramFollows:30},'profile',defaults,3).action,'Pause');});
+test('missing outcomes and low delivery never pause; explicit zero outcomes can pause',()=>{assert.equal(assess({...m,instagramFollows:null},'profile',defaults,3).action,'Needs data');assert.equal(assess({...m,spend:400},'profile',defaults,3).action,'Needs data');assert.equal(assess(m,'profile',defaults,2).action,'Needs data');assert.equal(assess({...m,instagramFollows:0},'profile',defaults,3).action,'Pause');});
+test('unconfigured objectives require targets and verified outcome data',()=>{assert.equal(assess({...m,messagingStarts:10},'messages',defaults,3).action,'Set targets');const settings={...defaults,store:{...defaults.store,increaseCost:20,keepBelow:40}};assert.equal(assess(m,'store',settings,3).action,'Needs data');});
