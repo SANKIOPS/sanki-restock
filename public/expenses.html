@@ -2709,7 +2709,33 @@
       if((d.statementSummary||{}).format!=='IndusInd mobile PDF')return;
       el('bs_table').insertAdjacentHTML('afterbegin','<p><button class="btn mini ghost" id="bs_repair_import" onclick="previewBankImportRepair()">Check imported amounts against original PDF</button><span class="hint"> Re-read retained PDF columns; accounting entries are never changed by this repair.</span></p>');
     }
+    function bankRowNeedsReview(row){return !!(row&&!['matched','resolved','already_reconciled'].includes(row.status));}
+    function bankVisibleRowAnchor(){
+      var nodes=Array.from(document.querySelectorAll('[data-bank-reconciliation-row]')),node=nodes.find(function(item){return item.getBoundingClientRect().bottom>0;})||nodes[0];
+      return node?{rowId:node.dataset.bankReconciliationRow,top:node.getBoundingClientRect().top}:null;
+    }
+    function bankNextReviewAfterUpdate(previous,current){
+      if(!previous||!current||previous.draftId!==current.draftId)return'';
+      var currentById=new Map((current.rows||[]).map(function(row){return[row.id,row];})),oldRows=previous.rows||[],lastChanged=-1;
+      oldRows.forEach(function(row,index){var updated=currentById.get(row.id);if(bankRowNeedsReview(row)&&updated&&!bankRowNeedsReview(updated))lastChanged=index;});
+      if(lastChanged<0)return'';
+      for(var index=lastChanged+1;index<oldRows.length;index++){var after=currentById.get(oldRows[index].id);if(bankRowNeedsReview(after))return after.id;}
+      for(var before=0;before<lastChanged;before++){var earlier=currentById.get(oldRows[before].id);if(bankRowNeedsReview(earlier))return earlier.id;}
+      return'';
+    }
+    function bankRestoreReviewPosition(nextRowId,anchor){
+      requestAnimationFrame(function(){
+        var nodes=Array.from(document.querySelectorAll('[data-bank-reconciliation-row]')),target=nodes.find(function(node){return node.dataset.bankReconciliationRow===nextRowId;});
+        if(target){target.scrollIntoView({block:'center'});target.classList.add('flash');setTimeout(function(){target.classList.remove('flash');},1800);return;}
+        if(!anchor)return;var same=nodes.find(function(node){return node.dataset.bankReconciliationRow===anchor.rowId;});if(same)window.scrollBy(0,same.getBoundingClientRect().top-anchor.top);
+      });
+    }
+    function bankMarkReviewRows(d){
+      var buttons=Array.from(el('bs_table').querySelectorAll('button[onclick^="openBankReview("]'));
+      (d.rows||[]).forEach(function(row){var button=buttons.find(function(item){return item.getAttribute('onclick')==="openBankReview('"+row.id+"')";}),tr=button&&button.closest('tr');if(tr)tr.dataset.bankReconciliationRow=row.id;});
+    }
     function renderBankReconciliation(d){
+      var viewportAnchor=typeof bankVisibleRowAnchor==='function'?bankVisibleRowAnchor():null,nextReviewRowId=typeof bankNextReviewAfterUpdate==='function'?bankNextReviewAfterUpdate(bankReconView,d):'';
       SankiNavigation.set({draft:d.draftId});
       bankStatementLoadGeneration++;el('bs_table').dataset.reconciliationDirty='';
       bankReconView=d;bankDraftId=d.draftId||bankDraftId;el('bs_discard').style.display='inline-flex';var s=d.statementSummary||{},meta='<div class="claim-meta"><span>Temporary preview</span><span>Period '+esc(s.from||'—')+' to '+esc(s.to||'—')+'</span><span>Opening '+fmt(s.openingBalance)+'</span><span>Debits '+fmt(s.totalDebits)+'</span><span>Credits '+fmt(s.totalCredits)+'</span><span>Closing '+fmt(s.closingBalance)+'</span><span>'+(s.validated?'✓ Statement totals validated':'Validation unavailable')+'</span></div>';
@@ -2717,6 +2743,8 @@
       var approval=d.finalizationApproval,approvalNote=ReconciliationStatus.bank(d)+(d.gokwik&&d.gokwik.pending?'<div class="msg">'+Number(d.gokwik.pending)+' exact GoKwik settlement(s) included as report-only matches. Charges and net transfers will post together only with Owner finalization of this 0437 statement.</div>':'')+(d.gokwik&&d.gokwik.errors||[]).map(function(error){return '<p class="msg err">'+esc(error.message)+'</p>';}).join('');el('bs_table').innerHTML=bankDraftSwitcher()+meta+approvalNote+'<div class="filters"><div class="fld" style="flex:1"><label>Reconciliation-period remark</label><input id="bs_period_remark" value="'+esc(d.periodRemark||'')+'" placeholder="Optional note for this statement period"></div><button class="btn mini ghost" onclick="saveBankPeriodRemark()">Save remark</button></div>'+'<div class="claim-meta"><span>Suggested '+((d.summary.possible_match||0)+(d.summary.amount_mismatch||0))+'</span><span>Matched '+(d.summary.matched||0)+'</span><span>Resolved '+(d.summary.resolved||0)+'</span><span>Previously reconciled '+(d.summary.already_reconciled||0)+'</span><span>Missing in ledger '+(d.summary.missing_in_app||0)+'</span><span>Missing in bank '+(d.summary.missing_in_bank||0)+'</span><span>Unresolved '+d.unresolved+'</span></div>'+(bankOpeningAnchorConflict(d)?bankUnverifiedOpeningSummary(d):balance)+'<table class="resp"><thead><tr><th>Result</th><th>Date</th><th>Entity | Vendor | Particulars</th><th>Reference</th><th class="r">In</th><th class="r">Out</th><th>Remark / action performed</th><th>Review</th></tr></thead><tbody>'+rows+'</tbody></table>';el('bs_finalize').style.display=d.canFinalizeTransactions?'inline-flex':'none';el('bs_finalize').disabled=!!(approval&&approval.status==='pending'&&!cfg.isOwner);el('bs_finalize').textContent=approval&&approval.status==='pending'?(cfg.isOwner?'Approve & finalize reconciliation':'Awaiting Owner approval'):(d.balanceResolved?'Finalize reconciliation':'Finalize reviewed transactions — balance pending');
       el('bs_finalize').style.display='inline-flex';if(d.unresolved){el('bs_finalize').disabled=true;el('bs_finalize').textContent='Resolve '+d.unresolved+' remaining '+(d.unresolved===1?'entry':'entries')+' before finalizing';el('bs_finalize').title='Every missing or suggested entry needs a decision before Owner approval.';}
       if(bankOpeningAnchorConflict(d)){el('bs_finalize').disabled=true;el('bs_finalize').textContent='Historical opening evidence required before finalizing';el('bs_finalize').title='The opening anchor is unverified. Review the historical closing evidence; an opening adjustment cannot bypass this conflict.';delete el('bs_finalize').dataset.confirmPending;}
+      if(typeof bankMarkReviewRows==='function')bankMarkReviewRows(d);
+      if(typeof bankRestoreReviewPosition==='function')bankRestoreReviewPosition(nextReviewRowId,viewportAnchor);
     }
     function bankOpeningAnchorConflict(d){
       return [d&&d.anchorConflict,d&&d.openingAnchorConflict].concat(d&&d.reconciliationConflicts||[]).find(function(conflict){return conflict&&conflict.type==='ambiguous_opening_anchor';})||null;
