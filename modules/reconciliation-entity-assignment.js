@@ -45,7 +45,7 @@ function register(router, deps) {
       if (draft.originalStatementPeriod || draft.reconstructedFromFinalized) fail('A restored or finalized statement cannot use pending-row entity assignment.');
       if (Object.values(s.bankReconciliationApprovals || {}).some(value => value && value.draftId === draft.id && value.status === 'pending')) fail('This reconciliation is awaiting Owner approval. Withdraw that request before changing its entity choices.');
       const target = normalized(b.targetNature), shared = deps.isShared(draft.account), reason = typeof b.reason === 'string' ? b.reason.trim() : '';
-      if (!NATURES.includes(target) || shared && !['SAMAST', 'PERSONAL'].includes(target)) fail('Choose a valid entity for this reconciliation.', 400);
+      if (!NATURES.includes(target)) fail('Choose a valid entity for this reconciliation.', 400);
       if (!deps.approvalNatures(req).includes(target) || target === 'PERSONAL' && !deps.canManagePersonalAccounting(req)) fail('You cannot assign the selected accounting entity.', 403);
       if (!reason || reason.length > 2000) fail('Enter a reason of no more than 2,000 characters for this assignment.', 400);
       if (!Array.isArray(b.rowIds) || !b.rowIds.length || b.rowIds.length > 500 || b.rowIds.some(id => typeof id !== 'string' || !/^bank-\d+$/.test(id)) || new Set(b.rowIds).size !== b.rowIds.length) fail('Select between 1 and 500 distinct bank transactions.', 400);

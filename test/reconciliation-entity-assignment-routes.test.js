@@ -56,7 +56,8 @@ test('shared bulk choices require authorization and never change a prior manual 
   seed({ shared: true }); await unchanged(() => bulk({ targetNature: 'PERSONAL' }, { role: 'admin' }), 403);
   assert.equal((await assign({ targetNature: 'PERSONAL' })).status, 200); const draft = read().bankReconciliationDrafts[draftId]; assert.equal(draft.transactionOwnership['bank-0'].nature, 'PERSONAL'); assert.equal(draft.transactionOwnership['bank-1'].nature, 'PERSONAL'); assert.equal(draft.transactionOwnership['bank-2'], undefined);
   await unchanged(() => bulk({ targetNature: 'SAMAST' }), 409);
-  seed({ shared: true }); await unchanged(() => bulk({ targetNature: 'SANKI' }), 400);
+  seed({ shared: true }); const sanki = await assign({ targetNature: 'SANKI' }); assert.equal(sanki.status, 200, JSON.stringify(sanki.body));
+  assert.equal(read().bankReconciliationDrafts[draftId].transactionOwnership['bank-0'].nature, 'SANKI');
 });
 
 test('a protected member rejects the entire batch; prior reviews and history cannot be overwritten', async () => {

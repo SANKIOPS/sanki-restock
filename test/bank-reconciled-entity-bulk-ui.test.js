@@ -96,13 +96,14 @@ test('only Owner or Admin can see shared 7883 entity correction, and finalized e
 
 test('target choices follow approval authorization and never expose unrelated entity targets', () => {
   const h = harness();
-  assert.deepEqual(Array.from(h.context.bankEntityBulkTargets()), ['SAMAST', 'PERSONAL']);
+  assert.deepEqual(Array.from(h.context.bankEntityBulkTargets()), ['SANKI', 'SAMAST', 'PERSONAL']);
   h.context.cfg.canManagePersonalAccounting = false;
-  assert.deepEqual(Array.from(h.context.bankEntityBulkTargets()), ['SAMAST']);
+  assert.deepEqual(Array.from(h.context.bankEntityBulkTargets()), ['SANKI', 'SAMAST']);
   h.context.cfg.isOwner = true;
-  assert.deepEqual(Array.from(h.context.bankEntityBulkTargets()), ['SAMAST', 'PERSONAL']);
+  assert.deepEqual(Array.from(h.context.bankEntityBulkTargets()), ['SANKI', 'SAMAST', 'PERSONAL']);
   h.context.cfg.approvalNatures = ['SANKI'];
-  assert.deepEqual(Array.from(h.context.bankEntityBulkTargets()), []);
+  assert.deepEqual(Array.from(h.context.bankEntityBulkTargets()), ['SANKI']);
+  h.context.cfg.approvalNatures = [];
   h.select().open();
   assert.equal(h.nodes.bankEntityBulkDlg.open, false, 'no dialog is offered without an authorized target');
 });
@@ -170,6 +171,7 @@ test('a meaningful reason and authorized target are required before any request'
   h.context.bankEntityBulkRequest(false);
   h.fields({ bankEntityBulkNature: 'SAMAST', bankEntityBulkReason: 'short' });
   h.context.bankEntityBulkRequest(false);
+  h.context.cfg.approvalNatures = ['SAMAST', 'PERSONAL'];
   h.fields({ bankEntityBulkNature: 'SANKI', bankEntityBulkReason: 'An otherwise sufficient reason' });
   h.context.bankEntityBulkRequest(false);
   assert.equal(h.calls.length, 0);
@@ -308,7 +310,7 @@ test('new assignment choices work on nonshared accounts but retain shared/privat
   const h = pendingHarness();
   assert.equal(h.context.bankEntityAssignmentAllowed('Axis Bank 3448'), true);
   assert.deepEqual(Array.from(h.context.bankEntityAssignmentTargets('Axis Bank 3448')), ['SANKI', 'SAMAST', 'PERSONAL']);
-  assert.deepEqual(Array.from(h.context.bankEntityAssignmentTargets('IndusInd Bank 7883')), ['SAMAST', 'PERSONAL']);
+  assert.deepEqual(Array.from(h.context.bankEntityAssignmentTargets('IndusInd Bank 7883')), ['SANKI', 'SAMAST', 'PERSONAL']);
   h.context.cfg.canManagePersonalAccounting = false;
   assert.deepEqual(Array.from(h.context.bankEntityAssignmentTargets('Axis Bank 3448')), ['SANKI', 'SAMAST']);
   h.context.cfg.isAdmin = false;

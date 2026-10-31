@@ -5599,9 +5599,7 @@ function addPersonalHistoricalSuggestions(s,draft,rows){
     row.personalSuggestion={vendor:best.vendor,category:best.category,confidence:strong?'strong':'possible',matchedTokens,source:Array.from(best.sources).join(', '),sourceRowId:best.sourceRowId,confirmations:best.confirmations,groupKey:(best.vendor+'|'+best.category).toLowerCase()};
   });
 }
-function reconciliationOwnershipNature(value){const nature=String(value||'').trim().toUpperCase();return ['SAMAST','PERSONAL'].includes(nature)?nature:'';}
-// Existing source evidence may be SANKI-funded through the shared bank. Manual
-// ownership targets deliberately retain their narrower SAMAST/PERSONAL policy.
+function reconciliationOwnershipNature(value){const nature=String(value||'').trim().toUpperCase();return NATURES.includes(nature)?nature:'';}
 function reconciliationLinkedOwnershipNature(value){const nature=String(value||'').trim().toUpperCase();return NATURES.includes(nature)?nature:'';}
 function reconciliationLinkedMovements(row){
   const movements=[];if(row&&row.app)movements.push(row.app,...(row.app.linkedEntries||[]));return movements.filter(Boolean);
@@ -6457,8 +6455,8 @@ router.post('/api/expenses/bank-statements/retag-bulk',(req,res)=>{
   const fail=(message,status=409)=>{const error=new Error(message);error.status=status;throw error;},copy=value=>JSON.parse(JSON.stringify(value)),same=(a,c)=>JSON.stringify(a)===JSON.stringify(c),idsOf=row=>Array.from(new Set(ledgerConnections.linkedIds(row).concat(row&&row.ledger&&row.ledger.id?String(row.ledger.id).split(/\s*,\s*/):[]).filter(Boolean))).sort();
   try{
     if(!isAdmin(req))fail('Only the Owner or an Admin can change reconciliation entities.',403);
-    if(!['SAMAST','PERSONAL'].includes(requestedNature)||!isSharedBankReconciliationAccount(account))fail('Bulk transaction ownership is available only in the shared IndusInd Bank 7883 reconciliation.',400);
-    if(typeof b.targetNature!=='string'||!['SAMAST','PERSONAL'].includes(targetNature))fail('Choose SAMAST or PERSONAL.',400);
+    if(!NATURES.includes(requestedNature)||!isSharedBankReconciliationAccount(account))fail('Bulk transaction ownership is available only in the shared IndusInd Bank 7883 reconciliation.',400);
+    if(typeof b.targetNature!=='string'||!NATURES.includes(targetNature))fail('Choose SANKI, SAMAST, or PERSONAL.',400);
     if(reason.length<10)fail('Enter a correction reason of at least 10 characters.',400);
     if(!items.length||items.length>200)fail('Select between 1 and 200 bank transactions.',400);
     const s=loadStore();if(!canAccessBankReconciliation(req,s,nature,account)||requestedNature==='PERSONAL'&&!canManagePersonalAccounting(req))fail('You cannot edit this bank reconciliation.',403);
@@ -6500,7 +6498,7 @@ router.post('/api/expenses/bank-statements/retag-bulk',(req,res)=>{
       const linked=[];
       for(const id of ids){const matches=movementPool.filter(value=>value.id===id||(value.sourceIds||[]).includes(id));if(matches.length!==1)fail('Linked source '+id+' is missing or does not resolve uniquely in this bank account.');if(!linked.some(value=>value.id===matches[0].id))linked.push(matches[0]);}
       const ownershipEvidence=[row,row.bank,lookup&&lookup.transaction,...copies.flatMap(value=>[value.row,value.row.bank])];
-      if(linked.some(value=>reconciliationLinkedOwnershipNature(value.entity)==='SANKI')||ownershipEvidence.some(value=>value&&[value.entityTag&&value.entityTag.nature,value.entityTag&&value.entityTag.sourceNature,value.transactionNature,value.ledger&&value.ledger.entity].some(n=>reconciliationLinkedOwnershipNature(n)==='SANKI')))fail('This selection includes a SANKI vendor payment. Its expense entity must remain SANKI; correct the source payment instead of bulk-retagging it.');
+      if(targetNature!=='SANKI'&&(linked.some(value=>reconciliationLinkedOwnershipNature(value.entity)==='SANKI')||ownershipEvidence.some(value=>value&&[value.entityTag&&value.entityTag.nature,value.entityTag&&value.entityTag.sourceNature,value.transactionNature,value.ledger&&value.ledger.entity].some(n=>reconciliationLinkedOwnershipNature(n)==='SANKI'))))fail('This selection includes a SANKI vendor payment. Its expense entity must remain SANKI; correct the source payment instead of bulk-retagging it.');
       const sourceNatures=Array.from(new Set(linked.map(value=>reconciliationOwnershipNature(value.entity)).filter(Boolean)));if(sourceNatures.length>1)fail('This transaction links mixed accounting entities. Split or correct its source workflow individually.');
       const tagNature=reconciliationOwnershipNature(row.entityTag&&row.entityTag.nature||row.transactionNature),sourceNature=sourceNatures[0]||tagNature;
       if(row.entityTag&&row.entityTag.sourceConflict||tagNature&&sourceNatures.length&&tagNature!==sourceNature)fail('The saved ownership and linked accounting source disagree. Review that conflict individually.');
@@ -6565,7 +6563,7 @@ router.post('/api/expenses/bank-statements/retag',(req,res)=>{
   if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot edit this reconciliation.'});
   if(!isSharedBankReconciliationAccount(draft.account))return res.status(400).json({success:false,error:'Transaction ownership tagging is available only for the shared IndusInd Bank 7883 reconciliation.'});
   if(!reason)return res.status(400).json({success:false,error:'Enter a reason for changing the transaction entity.'});
-  if(!['SAMAST','PERSONAL','UNKNOWN'].includes(requested))return res.status(400).json({success:false,error:'Choose SAMAST, PERSONAL, or Unclear.'});
+  if(!['SANKI','SAMAST','PERSONAL','UNKNOWN'].includes(requested))return res.status(400).json({success:false,error:'Choose SANKI, SAMAST, PERSONAL, or Unclear.'});
   const view=draftReconciliation(s,draft),row=view.rows.find(value=>value.id===rowId&&value.bank);
   if(!row)return res.status(404).json({success:false,error:'The bank transaction was not found in this reconciliation.'});
   if(row.status==='already_reconciled')return res.status(409).json({success:false,error:'This transaction was finalized in an earlier statement. Correct it from the finalized reconciliation history.'});
