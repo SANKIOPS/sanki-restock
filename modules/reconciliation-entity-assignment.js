@@ -22,9 +22,12 @@ function evidenceError(draft) {
 
 function editable(draft, row) {
   const tag = row && row.entityTag;
+  const unreviewed = row && row.status === 'missing_in_app' && !row.app && !row.resolution && !(draft.resolutions || {})[row.id];
+  const missingRequiredEntity = row && row.status !== 'already_reconciled' && row.ownershipUnresolved === true;
   return !!(draft && !draft.originalStatementPeriod && !draft.reconstructedFromFinalized && row && row.bank &&
-    /^bank-\d+$/.test(row.id) && !stale(draft, row.id) && row.status === 'missing_in_app' && !row.app && !row.resolution &&
-    !(draft.resolutions || {})[row.id] && !row.matchingExclusion && !(draft.matchingExclusions || {})[row.id] &&
+    /^bank-\d+$/.test(row.id) && !stale(draft, row.id) && (unreviewed || missingRequiredEntity) &&
+    !row.matchingExclusion && !(draft.matchingExclusions || {})[row.id] &&
+    !(row.resolution && ['exclude', 'bank_reversal_pair'].includes(row.resolution.action)) &&
     !row.reversalReviewRequired && !row.ledgerClaimedElsewhere && !(row.reconciliationConflicts || []).length &&
     !(tag && (tag.sourceConflict || ['mixed_linked_entries', 'ambiguous_candidates', 'linked_ledger', 'finalized_bank_record'].includes(tag.source))) &&
     !(tag && tag.source === 'manual' && !assignment(draft, row.id)));
@@ -50,7 +53,7 @@ function register(router, deps) {
       const view = deps.draftReconciliation(snapshot, detached, { readOnly: true });
       const rows = rowIds.map(id => view.rows.find(row => row.id === id));
       for (const row of rows) {
-        if (!editable(draft, row)) fail('A selected transaction is reviewed, linked, excluded, finalized or ambiguous. Nothing was assigned.');
+        if (!editable(draft, row)) fail('A selected transaction no longer needs an entity, is finalized, or has ambiguous evidence. Nothing was assigned.');
         const old = assignment(draft, row.id), tag = row.entityTag;
         if (!deps.canManagePersonalAccounting(req) && (old && old.nature === 'PERSONAL' || tag && [tag.nature, tag.sourceNature].includes('PERSONAL'))) fail('The Owner must review this PERSONAL transaction.', 403);
         if (shared && tag && tag.source === 'manual' && tag.nature !== target) fail('A selected transaction already has a reviewed entity. Use its individual review workflow instead.');

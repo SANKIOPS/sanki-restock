@@ -4,6 +4,7 @@ const source = require.resolve('../modules/rental-source.json'); require.cache[s
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'recon-entity-assignment-')); process.env.DATA_PATH = path.join(temp, 'data.json');
 const file = path.join(temp, 'expenses.json'); fs.writeFileSync(file, '{}');
 const { router } = require('../modules/expenses'), clone = value => JSON.parse(JSON.stringify(value)), read = () => JSON.parse(fs.readFileSync(file, 'utf8')), write = value => fs.writeFileSync(file, JSON.stringify(value));
+const entityAssignment = require('../modules/reconciliation-entity-assignment');
 const date = '2098-08-01', draftId = 'BRD-BULK-ENTITY'; let baseline;
 function invoke(route, body = {}, options = {}) {
   return new Promise((resolve, reject) => {
@@ -79,6 +80,15 @@ test('bulk rejects forged scope, duplicate identifiers, stale evidence and unaut
 });
 
 function incoming(patch = {}, actor = {}) { return invoke('/api/expenses/bank-statements/create-incoming', { draftId, rowId: 'bank-0', sourceKind: 'external', source: 'Synthetic refund sender', receiptType: 'refund', category: 'Refund Received', note: 'Verified incoming refund without expense classification', ...patch }, actor); }
+
+test('a matched draft row with missing ownership remains assignable without reopening its bank match', () => {
+  const draft = { transactions: [{ date, debit: 100, credit: 0, reference: 'MATCHED-ENTITY' }], entityAssignments: {}, resolutions: {} };
+  const row = { id: 'bank-0', status: 'matched', bank: draft.transactions[0], app: { id: 'EX-MATCHED/PAY-001' }, ownershipUnresolved: true, entityTag: { nature: '', source: 'none', sourceConflict: false }, reconciliationConflicts: [] };
+  assert.equal(entityAssignment.editable(draft, row), true);
+  assert.equal(row.status, 'matched');
+  assert.equal(row.app.id, 'EX-MATCHED/PAY-001');
+});
+
 test('shared incoming receipt derives unique physical owner without adding an expense tag or modifying existing records', async () => {
   const before = seed({ shared: true, incoming: true }), made = await incoming(); assert.equal(made.status, 200, JSON.stringify(made.body)); assert.equal(made.body.receipt.nature, 'PERSONAL'); assert.equal(made.body.receipt.amount, 100); assert.ok(made.body.receipt.receiptAccount); assert.deepEqual(read().bankReconciliationDrafts[draftId].transactionOwnership, {});
   assert.deepEqual(read().expenses, before.expenses); assert.deepEqual(read().transfers, before.transfers); assert.deepEqual(read().bankStatements, before.bankStatements); assert.equal(made.body.rows.find(row => row.id === 'bank-0').ownershipUnresolved, false);
