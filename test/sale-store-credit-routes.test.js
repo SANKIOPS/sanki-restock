@@ -27,7 +27,7 @@ const orders = () => JSON.parse(fs.readFileSync(process.env.ORDERS_PATH, 'utf8')
 const writeOrders = value => fs.writeFileSync(process.env.ORDERS_PATH, JSON.stringify(value));
 const previewRoute = '/api/expenses/sale-store-credit-corrections/preview';
 const applyRoute = '/api/expenses/sale-store-credit-corrections';
-const date = '2098-06-02', amount = 2499, saleId = 'SHOPIFY/synthetic-replacement';
+const date = '2098-06-02', amount = 2499, roundedCashAmount = 2500, saleId = 'SHOPIFY/synthetic-replacement';
 const intent = { saleId, originalOrderNumber:'#9001', storeCreditAmount:amount, reason:'Replacement #9002 uses the credit issued for returned #9001; cash was selected in error and no additional money was collected.' };
 
 function request(method, route, options = {}) {
@@ -104,7 +104,7 @@ for (const role of ['claimant','accounting','samast_accounting']) test(role + ' 
 test('Admin can request without changing cash and only Owner can approve', () => {
   const before = reset(), p = preview({ role:'admin' }); assert.equal(p.status, 200, JSON.stringify(p.body));
   const pending = apply(p.body.previewFingerprint, { role:'admin' }); assert.equal(pending.status, 200, JSON.stringify(pending.body)); assert.equal(pending.body.approved, false); assert.equal(pending.body.request.kind, 'sale_store_credit'); assert.deepEqual(read().saleStoreCreditCorrections, {});
-  financialRecordsUnchanged(before, read()); assert.equal(ledger().entries.find(row => row.id === saleId).credit, amount); assert.equal(decide(pending.body.request.id, { role:'admin' }).status, 403);
+  financialRecordsUnchanged(before, read()); assert.equal(ledger().entries.find(row => row.id === saleId).credit, roundedCashAmount); assert.equal(decide(pending.body.request.id, { role:'admin' }).status, 403);
   const approved = decide(pending.body.request.id); assert.equal(approved.status, 200, JSON.stringify(approved.body));
   const correction = read().saleStoreCreditCorrections[saleId]; assert.equal(correction.storeCreditAmount, amount); assert.equal(correction.requestedBy, 'prashant'); assert.equal(correction.walletStatus, 'pending_external_user_action');
 });
@@ -112,16 +112,33 @@ test('Admin can request without changing cash and only Owner can approve', () =>
 test('Owner correction removes only false cash and retains a zero-money audit row for both roles', () => {
   const before = reset(), orderBytes = fs.readFileSync(process.env.ORDERS_PATH, 'utf8'), incentiveBytes = fs.readFileSync(process.env.INCENTIVES_PATH, 'utf8');
   const beforeCash = ledger().entries.reduce((sum,row) => sum + Number(row.credit || 0) - Number(row.debit || 0), 0);
-  assert.equal(ledger().entries.find(row => row.id === 'SHOPIFY/synthetic-original').credit, amount, 'credit refund never withdraws genuine original cash');
+  assert.equal(ledger().entries.find(row => row.id === 'SHOPIFY/synthetic-original').credit, roundedCashAmount, 'credit refund never withdraws genuine original cash');
   const p = preview(), result = apply(p.body.previewFingerprint); assert.equal(result.status, 200, JSON.stringify(result.body)); assert.equal(result.body.approved, true);
   const stored = read(), corrected = stored.saleStoreCreditCorrections[saleId]; assert.equal(corrected.cashAmount, 0); assert.equal(corrected.nonCashAmount, 0); assert.equal(corrected.storeCreditAmount, amount); assert.equal(corrected.walletStatus, 'pending_external_user_action'); assert.equal(corrected.reason, intent.reason);
   financialRecordsUnchanged(before, stored); assert.equal(fs.readFileSync(process.env.ORDERS_PATH, 'utf8'), orderBytes); assert.equal(fs.readFileSync(process.env.INCENTIVES_PATH, 'utf8'), incentiveBytes);
   for (const role of ['admin','owner']) {
-    const cash = ledger('Counter Cash', role); assert.equal(cash.entries.find(row => row.id === 'SHOPIFY/synthetic-original').credit, amount); assert.equal(cash.entries.some(row => row.id === saleId && row.credit > 0), false);
-    assert.equal(beforeCash - cash.entries.reduce((sum,row) => sum + Number(row.credit || 0) - Number(row.debit || 0), 0), amount);
+    const cash = ledger('Counter Cash', role); assert.equal(cash.entries.find(row => row.id === 'SHOPIFY/synthetic-original').credit, roundedCashAmount); assert.equal(cash.entries.some(row => row.id === saleId && row.credit > 0), false);
+    assert.equal(beforeCash - cash.entries.reduce((sum,row) => sum + Number(row.credit || 0) - Number(row.debit || 0), 0), roundedCashAmount);
     const audit = cash.entries.find(row => row.kind === 'sale_store_credit_correction'); assert.ok(audit); assert.equal(audit.credit, 0); assert.equal(audit.debit, 0); assert.equal(audit.reason, intent.reason); assert.equal(audit.storeCreditAmount, amount); assert.equal(audit.originalOrderId, 'synthetic-original');
   }
   for (const account of ['Axis Bank 3448','Paytm Settlement Clearing']) assert.equal(ledger(account).entries.some(row => row.orderId === 'synthetic-replacement' || JSON.stringify(row.connectedSales || []).includes('synthetic-replacement')), false, 'no bank/provider receipt is created');
+});
+
+test('Counter Cash upward rounding starts on 1 October 2026 and preserves the Shopify source amount', () => {
+  reset();
+  let cash = ledger().entries.find(row => row.id === saleId);
+  assert.equal(cash.credit, roundedCashAmount);
+  const source = orders();
+  for (const order of Object.values(source.orders)) {
+    order.createdAt = '2026-09-30T10:00:00.000Z';
+    order.processedAt = '2026-09-30T10:00:00.000Z';
+    for (const transaction of order.paymentTransactions || []) transaction.processedAt = '2026-09-30T10:00:00.000Z';
+  }
+  writeOrders(source);
+  const historical = invoke('/api/expenses/account-ledger', { role:'owner', query:{ nature:'SANKI', account:'Counter Cash', from:'2026-09-30', to:'2026-09-30' } });
+  assert.equal(historical.status, 200, JSON.stringify(historical.body));
+  cash = historical.body.entries.find(row => row.id === saleId);
+  assert.equal(cash.credit, amount);
 });
 
 test('identical retries are idempotent and different pending intent conflicts', () => {
@@ -190,7 +207,7 @@ for (const [name, replaceTransactions] of Object.entries({
   const correction = clone(read().saleStoreCreditCorrections[saleId]), source = orders(); source.orders['synthetic-replacement'].paymentTransactions = replaceTransactions(); writeOrders(source); const sourceBytes = fs.readFileSync(process.env.ORDERS_PATH, 'utf8');
   for (const role of ['admin','owner']) {
     const cash = ledger('Counter Cash', role); assert.equal(cash.entries.some(row => row.orderId === 'synthetic-replacement' && Number(row.credit || 0) > 0), false);
-    assert.equal(cash.entries.find(row => row.id === 'SHOPIFY/synthetic-original').credit, amount);
+    assert.equal(cash.entries.find(row => row.id === 'SHOPIFY/synthetic-original').credit, roundedCashAmount);
     const audit = cash.entries.find(row => row.kind === 'sale_store_credit_correction'); assert.ok(audit); assert.equal(audit.stale, true); assert.equal(audit.credit, 0); assert.equal(audit.debit, 0); assert.equal(audit.storeCreditAmount, amount); assert.equal(audit.reason, intent.reason);
     for (const account of ['Paytm Settlement Clearing','Axis Bank 3448']) assert.equal(ledger(account, role).entries.some(row => row.orderId === 'synthetic-replacement' || JSON.stringify(row.connectedSales || []).includes('synthetic-replacement')), false, 'changed source evidence cannot create an unverified provider/bank receipt');
   }

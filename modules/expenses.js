@@ -136,7 +136,8 @@ function num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 function round0(n) { return Math.round(n); }
 function roundMoney(n) { return Math.round(num(n) * 100) / 100; }
 function proofList(value, fallback) { return Array.from(new Set([].concat(Array.isArray(value) ? value : [], fallback || []).map(x => String(x || '').trim()).filter(Boolean))); }
-function roundCashSale(n) { const amount=num(n);return amount>0?Math.ceil(amount/10)*10:amount; }
+const CASH_SALE_ROUNDING_FROM='2026-10-01';
+function roundCashSale(n,date) { const amount=num(n);return amount>0&&String(date||'')>=CASH_SALE_ROUNDING_FROM?Math.ceil(amount/10)*10:amount; }
 function loadCreditCards(){bankAuthorityTransaction.recover(DATA_DIR);try{return JSON.parse(fs.readFileSync(CREDIT_CARD_PATH,'utf8'));}catch{return{cards:{}};}}
 function creditCardName(card){return card&&`${card.name} ${card.last4}`.trim();}
 function visibleCreditCards(req){return Object.values(loadCreditCards().cards||{}).filter(card=>card.active!==false&&canManageRestrictedCard(req,card));}
@@ -1657,7 +1658,7 @@ function salesLedgerEntries(accountingStore, options = {}) {
   const postedPaytmOrders=new Set((accountingStore&&accountingStore.paytmPayoutPostings||[]).flatMap(x=>x.orderIds||[]).map(String));
   try {
     const local = JSON.parse(fs.readFileSync(SALES_PATH, 'utf8'));
-    (local.sales || []).filter(x => !x.voided).forEach(x => {const cash=String(x.paymentMode||'').toLowerCase()==='cash';rows.push({ id:'SALE/'+x.id, date:x.day||String(x.ts||'').slice(0,10), account:cash?DEFAULT_COUNTER_CASH:DEFAULT_SALES_BANK, amount:cash?roundCashSale(x.total):num(x.total), originalAmount:num(x.total), description:'Sale · '+(x.channel||'POS')+' · '+(x.staff||'') });});
+    (local.sales || []).filter(x => !x.voided).forEach(x => {const cash=String(x.paymentMode||'').toLowerCase()==='cash',date=x.day||String(x.ts||'').slice(0,10);rows.push({ id:'SALE/'+x.id, date, account:cash?DEFAULT_COUNTER_CASH:DEFAULT_SALES_BANK, amount:cash?roundCashSale(x.total,date):num(x.total), originalAmount:num(x.total), description:'Sale · '+(x.channel||'POS')+' · '+(x.staff||'') });});
   } catch { /* no local-sales store yet */ }
   try {
     const shop = JSON.parse(fs.readFileSync(ORDERS_PATH, 'utf8'));
@@ -1701,9 +1702,9 @@ function salesLedgerEntries(accountingStore, options = {}) {
         const embeddedRefunds=verifiedTransactions.filter(tx=>String(tx.kind||'').toLowerCase()==='refund'&&(!tx.status||String(tx.status).toLowerCase()==='success'));
         const refundKeys=new Set(),allRefunds=[...embeddedRefunds,...(x.refundTransactions||[])].filter(tx=>{if(!(num(tx.amount)>0))return false;const key=String(tx.id||'')||[tx.parentId||tx.parent_id||'',tx.gateway||tx.payment_gateway||'',tx.amount,tx.processedAt||tx.processed_at||''].join('|');if(refundKeys.has(key))return false;refundKeys.add(key);return true;});
         if(!options.originalReceipts)allRefunds.forEach(tx=>{if(bucket(tx)==='store_credit')return;const parent=byId.get(String(tx.parentId||tx.parent_id||'')),key=parent?bucket(parent):bucket(tx);if(key==='store_credit')return;const row=components.get(key);if(row)row.amount=roundMoney(Math.max(0,row.amount-num(tx.amount)));});
-        const common={orderId:String(x.id),orderNumber:orderNo||String(x.name||x.id),date,gross,paymentGateways:x.paymentGateways||[],description:'Shopify payment component · '+(x.name||x.id)+' · '+(x.channel||''),cashAmount:num(components.get('cash')&&components.get('cash').amount),nonCashAmount:roundMoney(Array.from(components.entries()).filter(([key])=>!['cash','store_credit'].includes(key)).reduce((sum,[,row])=>sum+num(row.amount),0)),refundAmount:x.moneyRefunded!=null?num(x.moneyRefunded):num(x.refundAmount)};
+        const verifiedCashAmount=num(components.get('cash')&&components.get('cash').amount),roundedCashAmount=roundCashSale(verifiedCashAmount,date),common={orderId:String(x.id),orderNumber:orderNo||String(x.name||x.id),date,gross,paymentGateways:x.paymentGateways||[],description:'Shopify payment component · '+(x.name||x.id)+' · '+(x.channel||''),cashAmount:roundedCashAmount,shopifyCashAmount:verifiedCashAmount,cashRoundingAmount:roundMoney(roundedCashAmount-verifiedCashAmount),nonCashAmount:roundMoney(Array.from(components.entries()).filter(([key])=>!['cash','store_credit'].includes(key)).reduce((sum,[,row])=>sum+num(row.amount),0)),refundAmount:x.moneyRefunded!=null?num(x.moneyRefunded):num(x.refundAmount)};
         const routes={cash:DEFAULT_COUNTER_CASH,paytm:PAYTM_CLEARING_ACCOUNT,cod:VELOCITY_CLEARING_ACCOUNT,gokwik:gokwikAccounting.CLEARING,other:nonCashDefault};let sequence=0;
-        components.forEach((component,key)=>{if(key==='store_credit'||!(component.amount>0))return;const id=key==='cash'?baseId:(key==='paytm'||key==='gokwik'&&/\bupi\b/i.test(component.gateway)?baseId+'/NONCASH':baseId+'/PAYMENT-'+(++sequence)),account=key==='cod'&&component.manualCashCollected?DEFAULT_COUNTER_CASH:(routes[key]||nonCashDefault),amount=num(componentAmountOverrides[id]&&componentAmountOverrides[id].amount)||component.amount,gokwikOriginalAccount=key==='gokwik'&&/\bupi\b/i.test(component.gateway)?PAYTM_CLEARING_ACCOUNT:WEBSITE_SALES_ACCOUNT;rows.push(Object.assign({id,account,amount,gokwikOriginalAccount,originalAmount:component.amount,componentAmountOverride:componentAmountOverrides[id]||null,allocationPart:key,gateway:component.gateway,manualCashCollected:component.manualCashCollected,shopifyTransactionIds:component.transactionIds},common));});
+        components.forEach((component,key)=>{if(key==='store_credit'||!(component.amount>0))return;const id=key==='cash'?baseId:(key==='paytm'||key==='gokwik'&&/\bupi\b/i.test(component.gateway)?baseId+'/NONCASH':baseId+'/PAYMENT-'+(++sequence)),account=key==='cod'&&component.manualCashCollected?DEFAULT_COUNTER_CASH:(routes[key]||nonCashDefault),sourceAmount=num(componentAmountOverrides[id]&&componentAmountOverrides[id].amount)||component.amount,amount=account===DEFAULT_COUNTER_CASH?roundCashSale(sourceAmount,date):sourceAmount,gokwikOriginalAccount=key==='gokwik'&&/\bupi\b/i.test(component.gateway)?PAYTM_CLEARING_ACCOUNT:WEBSITE_SALES_ACCOUNT;rows.push(Object.assign({id,account,amount,gokwikOriginalAccount,originalAmount:component.amount,cashRoundingAmount:account===DEFAULT_COUNTER_CASH?roundMoney(amount-sourceAmount):0,componentAmountOverride:componentAmountOverrides[id]||null,allocationPart:key,gateway:component.gateway,manualCashCollected:component.manualCashCollected,shopifyTransactionIds:component.transactionIds},common));});
         if(pendingCodAmount>0)rows.push(Object.assign({id:baseId+'/PAYMENT-'+(++sequence),account:VELOCITY_CLEARING_ACCOUNT,amount:pendingCodAmount,originalAmount:pendingCodAmount,allocationPart:'cod_receivable',gateway:'Cash on Delivery (COD)',shopifyTransactionIds:pendingCodTransactions.map(tx=>String(tx.id||''))},common));
         return;
       }
@@ -1713,8 +1714,8 @@ function salesLedgerEntries(accountingStore, options = {}) {
       // never guess the cash portion from the order total.
       const correctedCash=override?num(override.cashAmount):(explicitCash!=null?explicitCash:(pureCash?Math.max(0,roundMoney(gross-(x.moneyRefunded!=null?num(x.moneyRefunded):num(x.refundAmount)))):null));
       if(correctedCash!=null){
-        const cashAmount=Math.max(0,Math.min(gross,correctedCash)),remaining=roundMoney(gross-cashAmount),nonCashAmount=paytmBound?Math.min(remaining,verifiedPaytm):remaining,nonCashAccount=paytmBound?PAYTM_CLEARING_ACCOUNT:(override&&override.nonCashAccount||x.nonCashAccount||nonCashDefault),common={orderId:String(x.id),orderNumber:orderNo||String(x.name||x.id),date,gross,paymentGateways:x.paymentGateways||[],description:'Shopify split sale · '+(x.name||x.id)+' · '+(x.channel||''),saleAllocation:override||null,cashAmount,nonCashAmount,unallocatedAmount:roundMoney(remaining-nonCashAmount)};
-        if(cashAmount>0)rows.push(Object.assign({id:baseId,account:DEFAULT_COUNTER_CASH,amount:cashAmount,originalAmount:cashAmount,allocationPart:'cash'},common));
+        const shopifyCashAmount=Math.max(0,Math.min(gross,correctedCash)),cashAmount=roundCashSale(shopifyCashAmount,date),remaining=roundMoney(gross-shopifyCashAmount),nonCashAmount=paytmBound?Math.min(remaining,verifiedPaytm):remaining,nonCashAccount=paytmBound?PAYTM_CLEARING_ACCOUNT:(override&&override.nonCashAccount||x.nonCashAccount||nonCashDefault),common={orderId:String(x.id),orderNumber:orderNo||String(x.name||x.id),date,gross,paymentGateways:x.paymentGateways||[],description:'Shopify split sale · '+(x.name||x.id)+' · '+(x.channel||''),saleAllocation:override||null,cashAmount,shopifyCashAmount,cashRoundingAmount:roundMoney(cashAmount-shopifyCashAmount),nonCashAmount,unallocatedAmount:roundMoney(remaining-nonCashAmount)};
+        if(cashAmount>0)rows.push(Object.assign({id:baseId,account:DEFAULT_COUNTER_CASH,amount:cashAmount,originalAmount:shopifyCashAmount,allocationPart:'cash'},common));
         if(nonCashAmount>0)rows.push(Object.assign({id:baseId+'/NONCASH',account:nonCashAccount,amount:nonCashAmount,originalAmount:nonCashAmount,allocationPart:'non_cash'},common));
         return;
       }
@@ -1723,7 +1724,7 @@ function salesLedgerEntries(accountingStore, options = {}) {
         return; // Cash/store-credit portions require their own verified allocation.
       }
       const freshPaytm=paytmBound?(verifiedPaytm||(paytm&&!storeCredit&&gateways.trim()==='paytm'&&!shopifyPayment.transactions?gross:0)):num(x.paytmAmount||x.paytmPaidAmount||x.freshPaymentAmount)||(paytm&&!storeCredit?gross:(date>=SHOPIFY_DIRECT_TO_AXIS_FROM?gross:0));
-      const amount=cash?roundCashSale(gross):freshPaytm;
+      const amount=cash?roundCashSale(gross,date):freshPaytm;
       if(!(amount>0))return;
       rows.push({ id:baseId, orderId:String(x.id), orderNumber:orderNo||String(x.name||x.id), date, account:cash?DEFAULT_COUNTER_CASH:nonCashDefault, amount, gross, storeCreditUsed:Math.max(0,gross-amount), paymentGateways:x.paymentGateways||[], description:'Shopify sale · '+(x.name||x.id)+' · '+(x.channel||'') });
     });
