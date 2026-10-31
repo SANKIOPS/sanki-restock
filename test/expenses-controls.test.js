@@ -2748,10 +2748,12 @@ test('IndusInd 7883 uses one physical reconciliation book and derives each match
 });
 
 test('7883 entity retagging is restricted, audited and safely corrects only supported linked sources',()=>{
-  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):null,stored=baseline?JSON.parse(baseline):{},account='IndusInd Bank 7883',draftId='BRD-SHARED-7883-RETAG',date='2098-08-22',expenseId='EX-TAG-RETAG',adjustmentId='ADJ-TAG-RETAG';
+  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):null,stored=baseline?JSON.parse(baseline):{},account='IndusInd Bank 7883',draftId='BRD-SHARED-7883-RETAG',date='2098-08-22',expenseId='EX-TAG-RETAG',adjustmentId='ADJ-TAG-RETAG',transferId='TR-TAG-REIMBURSEMENT';
   try{
     stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={transactions:{},imports:[]};delete stored.bankStatements['PERSONAL|'+account];
     stored.expenses=stored.expenses||{};stored.expenses[expenseId]={id:expenseId,date,nature:'SAMAST',status:'paid',approvedAt:date+'T09:00:00.000Z',vendor:'SAMAST cleaner',particulars:'Building cleaning',ledger:'Cleaning',amount:300,paidAmount:300,payments:[{id:'PAY-001',date,amount:300,account,bankReference:'RETAG-7883-REF'}]};
+    stored.expenses['EX-TAG-REIMBURSEMENT']={id:'EX-TAG-REIMBURSEMENT',date,nature:'SANKI',status:'paid',approvedAt:date+'T08:00:00.000Z',vendor:'Reimbursed vendor',particulars:'Company reimbursement',ledger:'Miscellaneous Expenses',amount:71118,paidAmount:71118,reimbursementAmount:71118,reimbursementStatus:'reimbursed',payments:[],reimbursementPayments:[{id:'REIM-001',date,amount:71118,account,accountNatures:['PERSONAL'],settledByTransferId:transferId}]};
+    stored.transfers=stored.transfers||[];stored.transfers.push({id:transferId,date,nature:'PERSONAL',fromNature:'PERSONAL',toNature:'PERSONAL',fromAccount:account,toAccount:'HDFC 7376',amount:71118,classification:'internal_transfer',reimbursementAllocations:[{expenseId:'EX-TAG-REIMBURSEMENT',paymentId:'REIM-001',amount:71118}]});
     stored.adjustments=stored.adjustments||[];stored.adjustments.push({id:adjustmentId,date,nature:'SAMAST',account,amount:-40,note:'Simple bank charge adjustment',bankReference:'ADJUSTMENT-7883-REF'});
     stored.reconciliationExpenses=stored.reconciliationExpenses||[];stored.reconciliationExpenses.push({id:'BRE-'+adjustmentId,date,nature:'SAMAST',account,amount:40,adjustmentId,category:'Bank Charges'});
     const adjustmentBankRow={date,description:'Simple bank charge adjustment',reference:'ADJUSTMENT-7883-REF',debit:40,credit:0,balance:610};
@@ -2763,7 +2765,7 @@ test('7883 entity retagging is restricted, audited and safely corrects only supp
     const unknownRowId='bank-1',unknownBody={draftId,rowId:unknownRowId,nature:'PERSONAL',reason:'Owner confirmed this unidentified bank transaction was personal'};
     assert.equal(invoke('POST','/api/expenses/bank-statements/retag',{role:'claimant',body:unknownBody}).status,403);
     assert.equal(invoke('POST','/api/expenses/bank-statements/retag',{role:'accounting',username:'personal-bookkeeper',permissions:{personalAccounting:true},body:unknownBody}).status,403,'PERSONAL-book access alone must not grant this audited mutation');
-    assert.equal(invoke('POST','/api/expenses/bank-statements/retag',{role:'owner',body:{draftId,rowId:unknownRowId,nature:'SANKI',reason:'Invalid third entity'}}).status,400);
+    assert.equal(invoke('POST','/api/expenses/bank-statements/retag',{role:'owner',body:{draftId,rowId:unknownRowId,nature:'SERVICES',reason:'Invalid entity'}}).status,400);
     assert.equal(invoke('POST','/api/expenses/bank-statements/retag',{role:'owner',body:{draftId,rowId:unknownRowId,nature:'PERSONAL',reason:''}}).status,400);
     const linkedConflict=invoke('POST','/api/expenses/bank-statements/retag',{role:'owner',body:{draftId,rowId:'bank-0',nature:'PERSONAL',reason:'Attempt to contradict a reliable linked source'}});
     assert.equal(linkedConflict.status,409);assert.match(linkedConflict.body.error,/category/i);assert.deepEqual([linkedConflict.body.sourceNature,linkedConflict.body.requestedNature],['SAMAST','PERSONAL']);
@@ -2791,6 +2793,12 @@ test('7883 entity retagging is restricted, audited and safely corrects only supp
     assert.equal(cleared.status,200,JSON.stringify(cleared.body));
     const clearedRow=cleared.body.rows.find(x=>x.id===unknownRowId);assert.ok(clearedRow);assert.deepEqual([clearedRow.entityTag.nature,clearedRow.ownershipUnresolved,cleared.body.canFinalizeTransactions],['',true,false]);
     after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.bankReconciliationDrafts[draftId].transactionOwnership[unknownRowId],undefined);assert.equal(after.bankReconciliationDrafts[draftId].resolutions[unknownRowId].postingNature,undefined,'clearing the tag must also clear stale posting ownership');
+
+    const refreshed=invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'SAMAST',account,draftId}});assert.equal(refreshed.status,200,JSON.stringify(refreshed.body));
+    const transferRow=refreshed.body.draft.rows.find(value=>value.app&&value.app.id===transferId&&!value.bank);assert.ok(transferRow,JSON.stringify(refreshed.body.draft.rows));
+    const transferChanged=invoke('POST','/api/expenses/bank-statements/retag',{role:'owner',body:{draftId,rowId:transferRow.id,nature:'SANKI',reason:'Confirmed company transfer source'}});assert.equal(transferChanged.status,200,JSON.stringify(transferChanged.body));
+    after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));const correctedTransfer=after.transfers.find(value=>value.id===transferId),linkedPayment=after.expenses['EX-TAG-REIMBURSEMENT'].reimbursementPayments[0];
+    assert.deepEqual([correctedTransfer.nature,correctedTransfer.fromNature,correctedTransfer.toNature],['SANKI','SANKI','SANKI']);assert.deepEqual(linkedPayment.accountNatures,['SANKI']);assert.equal(linkedPayment.settledByTransferId,transferId);
   }finally{if(baseline===null)fs.rmSync(expenseFile,{force:true});else fs.writeFileSync(expenseFile,baseline);}
 });
 

@@ -6445,10 +6445,13 @@ function reconciliationSourceNatureCorrectionPlan(s,row,targetNature){
     const refund=(s.salesRefunds||[]).find(value=>value.id===id);if(refund){add('sales_refund',refund.id,refund,()=>{refund.nature=targetNature;});return;}
     const bankTruth=(s.bankTruthMovements||[]).find(value=>value.id===id);if(bankTruth){add('bank_truth',bankTruth.id,bankTruth,()=>{bankTruth.nature=targetNature;});return;}
     const transfer=(s.transfers||[]).find(value=>value.id===id);if(transfer){
-      const fromNature=normalizedNature(transfer.fromNature||transfer.nature),toNature=normalizedNature(transfer.toNature||transfer.nature),protectedTransfer=transferReimbursements.protectsTransfer(s,transfer.id)||gokwikAccounting.protectsMovement(s,transfer.id)||expenseLoans.protectsMovement(s,transfer.id)||expenseRefunds.protectsMovement(s,transfer.id)||transfer.creditCardPaymentId||transfer.salaryAdvanceId||transfer.paytmTransactionId||transfer.gokwikPostingId;
+      const fromNature=normalizedNature(transfer.fromNature||transfer.nature),toNature=normalizedNature(transfer.toNature||transfer.nature),reimbursementLinks=transferReimbursements.allocations(s,transfer.id),protectedTransfer=gokwikAccounting.protectsMovement(s,transfer.id)||expenseLoans.protectsMovement(s,transfer.id)||expenseRefunds.protectsMovement(s,transfer.id)||transfer.creditCardPaymentId||transfer.salaryAdvanceId||transfer.paytmTransactionId||transfer.gokwikPostingId;
       if(protectedTransfer){unsupported.push({id,error:'This transfer belongs to a protected repayment, reimbursement, salary, card or settlement workflow. Correct that source workflow first.'});return;}
       if(fromNature!==toNature){unsupported.push({id,error:'This is an inter-entity transfer. Correct its source and destination separately instead of assigning one entity.'});return;}
-      add('transfer',transfer.id,transfer,()=>{transfer.nature=targetNature;transfer.fromNature=targetNature;transfer.toNature=targetNature;});return;
+      const linkedPayments=reimbursementLinks.map(link=>{const expense=(s.expenses||{})[link.expenseId],payment=expense&&(expense.reimbursementPayments||[]).find(value=>value.id===link.paymentId&&value.settledByTransferId===transfer.id);return expense&&payment?{expense,payment}:null;}).filter(Boolean);
+      if(linkedPayments.length!==reimbursementLinks.length){unsupported.push({id,error:'This transfer has an incomplete reimbursement allocation. Repair that allocation before changing its entity.'});return;}
+      if(linkedPayments.some(value=>normalizedNature(value.expense.nature)!==targetNature)){unsupported.push({id,error:'This transfer settles a reimbursement in another entity. Select that reimbursement entity or correct the allocation first.'});return;}
+      add('transfer',transfer.id,transfer,()=>{transfer.nature=targetNature;transfer.fromNature=targetNature;transfer.toNature=targetNature;linkedPayments.forEach(value=>{value.payment.accountNatures=[targetNature];});},linkedPayments.map(value=>value.expense.id+'/'+value.payment.id));return;
     }
     unsupported.push(id);
   });
