@@ -3055,7 +3055,7 @@
       }
     };
     function showBankEntityTagEditor(rowId){
-      var panel=el('bankEntityTagEditor'),row=bankReconRow(rowId),active=bankEntityTaggingActive()&&!!row;if(!panel)return;
+      var panel=el('bankEntityTagEditor'),row=bankReconRow(rowId),active=bankEntityTaggingActive()&&!!(row&&row.bank);if(!panel)return;
       panel.style.display=active?'block':'none';panel.open=false;bankEntityTagRowId=active?rowId:'';if(!active)return;
       var tag=row.entityTag||{},label=bankEntityTagLabel(tag),meta=bankEntityTagMeta(tag),canEdit=!!(cfg&&(cfg.isOwner||cfg.isAdmin));
       el('bankEntityTagCurrent').innerHTML=(label==='Needs review'?'<b>No bookkeeping correction requested.</b><br>Choose the transaction action below. Own-account transfers derive their context from the accounts, not an expense entity.':'<b>Current: '+esc(label)+'</b>')+(meta?'<br>'+esc(meta):'')+(canEdit?'':'<br>Only an Admin or Owner can change this tag.');

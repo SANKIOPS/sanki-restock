@@ -214,3 +214,11 @@ test('optional entity correction panel is a collapsed details element and does n
   assert.equal(h.nodes.bankEntityTagEditor.style.display, 'block');
   assert.equal(h.calls.length, 0);
 });
+test('app-only missing-bank rows do not expose the bank entity correction editor', () => {
+  const h = harness();
+  h.context.bankReconView.rows[0].bank = null;
+  h.context.showBankEntityTagEditor('bank-1');
+  assert.equal(h.nodes.bankEntityTagEditor.style.display, 'none');
+  assert.equal(h.context.bankEntityTagRowId, '');
+  assert.equal(h.calls.length, 0);
+});
