@@ -2666,7 +2666,11 @@ router.post('/api/expenses/upload', proofUpload.single('photo'), async (req, res
   try{
     fs.mkdirSync(PROOF_DIR,{recursive:true});
     let stored=req.file.buffer,ext=(path.extname(req.file.originalname||'')||'.jpg').toLowerCase().replace(/[^.a-z0-9]/g,'')||'.jpg';
-    try{const image=await Jimp.read(req.file.buffer),max=1400;if(image.bitmap.width>max||image.bitmap.height>max)image.scaleToFit(max,max);stored=await image.quality(62).getBufferAsync(Jimp.MIME_JPEG);ext='.jpg';}catch{/* Preserve valid formats Jimp cannot decode, such as HEIC. */}
+    // Most reconciliation proofs are already compact screenshots. Decoding and
+    // re-encoding every one of them blocked the request for several seconds,
+    // even when compression saved almost nothing. Keep small proofs as-is and
+    // reserve the expensive resize for genuinely large camera images.
+    if(req.file.buffer.length>1024*1024)try{const image=await Jimp.read(req.file.buffer),max=1400;if(image.bitmap.width>max||image.bitmap.height>max)image.scaleToFit(max,max);stored=await image.quality(62).getBufferAsync(Jimp.MIME_JPEG);ext='.jpg';}catch{/* Preserve valid formats Jimp cannot decode, such as HEIC. */}
     const proofNature=normalizedNature(req.body&&req.body.nature),purpose=String(req.body&&req.body.purpose||'').trim(),salaryAdvanceUpload=proofNature==='PERSONAL'&&purpose==='salary_advance';
     if(salaryAdvanceUpload&&!isOwner(req)&&!rolesOfReq(req).includes('admin'))return res.status(403).json({success:false,error:'Only Owner or Admin may upload a PERSONAL salary-advance proof.'});
     const privacy=proofNature==='PERSONAL'?'personal-':'',filename=privacy+Date.now()+'-'+crypto.randomBytes(6).toString('hex')+ext,finalPath=path.join(PROOF_DIR,filename),temporary=finalPath+'.tmp-'+process.pid;
