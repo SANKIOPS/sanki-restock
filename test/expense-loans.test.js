@@ -39,10 +39,10 @@ test('normal loan receipt credits bank once and creates an equal liability witho
   const report=buildReport({expenses:store(),orders:{orders:{}},purchases:{},opening:{lots:[]},salary:{},manualSales:{},feeds:[]},{from:day,to:'2098-12-31'});assert.equal(report.totals.otherIncome,0);assert.equal(report.totals.expenses,0);
 });
 test('historical opening loan creates only a liability and never invents a bank receipt',()=>{
-  reset();const before=position(),r=borrow({historicalOpening:true,reference:'',proof:'',date:'2098-10-01',source:'Madhukant Sehgal',amount:200000,note:'Opening loan liability received before accounting began'},'owner','loan-test-owner');
+  reset();const before=position(),r=borrow({historicalOpening:true,reference:'',proof:'',date:'2026-08-06',source:'Madhukan',amount:200000,note:'Opening loan liability received before accounting began'},'owner','loan-test-owner');
   assert.equal(r.status,200,JSON.stringify(r));assert.equal(r.body.receipt.historicalOpening,true);assert.equal(r.body.receipt.bankReference,'');
   const after=position();assert.equal(after.liabilities.loans-before.liabilities.loans,200000);assert.equal(after.assets.bankAndCash,before.assets.bankAndCash);
-  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',username:'loan-test-owner',query:{nature:'SANKI',account,from:'2098-10-01',to:'2098-12-31'}}).body;
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',username:'loan-test-owner',query:{nature:'SANKI',account,from:'2026-08-06',to:'2098-12-31'}}).body;
   assert.equal(ledger.entries.some(entry=>entry.id===r.body.receipt.id),false);assert.equal(ledger.balance,0);
   assert.equal(borrow({historicalOpening:true,reference:'',proof:'',requestId:'opening-admin-denied'},'admin').status,403);
 });

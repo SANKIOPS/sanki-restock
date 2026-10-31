@@ -216,9 +216,17 @@ test('optional entity correction panel is a collapsed details element and does n
 });
 test('app-only missing-bank rows do not expose the bank entity correction editor', () => {
   const h = harness();
-  h.context.bankReconView.rows[0].bank = null;
+  h.context.bankReconView.rows[0].bank = null;h.context.bankReconView.rows[0].app={id:'EX-1/PAY-001'};
   h.context.showBankEntityTagEditor('bank-1');
   assert.equal(h.nodes.bankEntityTagEditor.style.display, 'none');
   assert.equal(h.context.bankEntityTagRowId, '');
   assert.equal(h.calls.length, 0);
+});
+test('app-only transfer rows expose source-level entity correction', () => {
+  const h = harness();
+  h.context.bankReconView.rows[0].bank=null;h.context.bankReconView.rows[0].app={id:'TR-00172'};
+  h.context.showBankEntityTagEditor('bank-1');
+  assert.equal(h.nodes.bankEntityTagEditor.style.display,'block');
+  assert.match(h.nodes.bankEntityTagCurrent.innerHTML,/TR-00172/);
+  assert.match(h.nodes.bankEntityTagMsg.textContent,/updates its source record/);
 });

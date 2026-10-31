@@ -6444,7 +6444,12 @@ function reconciliationSourceNatureCorrectionPlan(s,row,targetNature){
     if(found)return;
     const refund=(s.salesRefunds||[]).find(value=>value.id===id);if(refund){add('sales_refund',refund.id,refund,()=>{refund.nature=targetNature;});return;}
     const bankTruth=(s.bankTruthMovements||[]).find(value=>value.id===id);if(bankTruth){add('bank_truth',bankTruth.id,bankTruth,()=>{bankTruth.nature=targetNature;});return;}
-    if((s.transfers||[]).some(value=>value.id===id)){unsupported.push(id);return;}
+    const transfer=(s.transfers||[]).find(value=>value.id===id);if(transfer){
+      const fromNature=normalizedNature(transfer.fromNature||transfer.nature),toNature=normalizedNature(transfer.toNature||transfer.nature),protectedTransfer=transferReimbursements.protectsTransfer(s,transfer.id)||gokwikAccounting.protectsMovement(s,transfer.id)||expenseLoans.protectsMovement(s,transfer.id)||expenseRefunds.protectsMovement(s,transfer.id)||transfer.creditCardPaymentId||transfer.salaryAdvanceId||transfer.paytmTransactionId||transfer.gokwikPostingId;
+      if(protectedTransfer){unsupported.push({id,error:'This transfer belongs to a protected repayment, reimbursement, salary, card or settlement workflow. Correct that source workflow first.'});return;}
+      if(fromNature!==toNature){unsupported.push({id,error:'This is an inter-entity transfer. Correct its source and destination separately instead of assigning one entity.'});return;}
+      add('transfer',transfer.id,transfer,()=>{transfer.nature=targetNature;transfer.fromNature=targetNature;transfer.toNature=targetNature;});return;
+    }
     unsupported.push(id);
   });
   if(!identifiers.length)return{success:false,error:'This displayed match has no source record that can be corrected safely. Unmatch it first, then tag the bank transaction.'};
@@ -6567,7 +6572,12 @@ router.post('/api/expenses/bank-statements/retag',(req,res)=>{
   if(!reason)return res.status(400).json({success:false,error:'Enter a reason for changing the transaction entity.'});
   if(!['SANKI','SAMAST','PERSONAL','UNKNOWN'].includes(requested))return res.status(400).json({success:false,error:'Choose SANKI, SAMAST, PERSONAL, or Unclear.'});
   const view=draftReconciliation(s,draft),candidate=view.rows.find(value=>value.id===rowId),row=candidate&&candidate.bank?candidate:null;
-  if(candidate&&!candidate.bank)return res.status(409).json({success:false,error:'This is an app-only ledger entry with no bank transaction attached. Match it to the correct 7883 bank row first; own-account transfer entity comes from its source and destination accounts.'});
+  if(candidate&&!candidate.bank){
+    if(!requested||requested==='UNKNOWN')return res.status(400).json({success:false,error:'Choose SANKI, SAMAST, or PERSONAL for this existing transfer.'});
+    const correction=reconciliationSourceNatureCorrectionPlan(s,candidate,requested);if(!correction.success)return res.status(409).json({success:false,error:correction.error,unsupported:correction.unsupported||[]});
+    correction.apply();const at=new Date().toISOString();correction.changes.forEach(change=>audit(s,req,'BANK_RECONCILIATION_SOURCE_ENTITY_CORRECTED',change.kind,change.id,{nature:requested,account:draft.account,before:change.before,after:change.after,note:reason,draftId:draft.id,bankRowId:rowId,bankMovementPreserved:true}));
+    audit(s,req,'BANK_RECONCILIATION_APP_TRANSFER_RETAGGED','bank_reconciliation',draft.id,{nature:requested,account:draft.account,before:correction.changes.map(change=>({type:change.kind,id:change.id,nature:change.before.nature})),after:{nature:requested},note:reason,ledgerRowId:rowId});saveStore(s);return res.json(draftReconciliation(s,draft));
+  }
   if(!row)return res.status(404).json({success:false,error:'The transaction was not found in this reconciliation.'});
   if(row.status==='already_reconciled')return res.status(409).json({success:false,error:'This transaction was finalized in an earlier statement. Correct it from the finalized reconciliation history.'});
   const sourceNature=reconciliationLinkedOwnershipNature(row.entityTag&&row.entityTag.sourceNature),targetNature=requested==='UNKNOWN'?'':requested,authoritativeSource=row.entityTag&&row.entityTag.source==='linked_ledger'&&sourceNature;
