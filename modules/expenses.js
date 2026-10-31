@@ -5878,8 +5878,19 @@ function draftReconciliationBase(s,draft,options={}){
   // Matching still respects every finalized statement. Opening arithmetic for
   // a historical/same-day overlap must instead start from the latest verified
   // closing strictly before that statement, not a future/partial-day closing.
-  const anchorBefore=statement.from&&statement.to&&continuityCutoff>=statement.from&&continuityCutoff<statement.to?statement.to:statement.from;
-  const openingAnchor=anchorBefore?verifiedReconciliationAnchor(book,{before:anchorBefore,nature:draft.nature,account:draft.account}):latestAnchor;
+  // A verified closing inside a spanning statement is useful for calculating
+  // only its unfinished tail.  A *deferred* closing inside that overlap is not
+  // an opening anchor, though: fall back to evidence strictly before the
+  // uploaded statement starts and rebuild the whole period from ledger history.
+  // This lets an authoritative later statement supersede a bad overlapping
+  // close without weakening conflicts that genuinely predate its opening.
+  const spansCutoff=statement.from&&statement.to&&continuityCutoff>=statement.from&&continuityCutoff<statement.to;
+  const anchorBefore=spansCutoff?statement.to:statement.from;
+  let openingAnchor=anchorBefore?verifiedReconciliationAnchor(book,{before:anchorBefore,nature:draft.nature,account:draft.account}):latestAnchor;
+  if(spansCutoff&&openingAnchor.anchorConflict&&openingAnchor.anchorConflict.cutoffDate>=statement.from
+    &&/deferred or unreconciled closing balance/i.test(String(openingAnchor.anchorConflict.message||''))){
+    openingAnchor=verifiedReconciliationAnchor(book,{before:statement.from,nature:draft.nature,account:draft.account});
+  }
   const effectiveFrom=openingAnchor.cutoffDate&&(!statement.to||openingAnchor.cutoffDate<statement.to)?openingAnchor.cutoffDate:'',priorLinkedIds=new Set();
   (book.imports||[]).forEach(record=>[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).forEach(x=>(x.linkedRecordIds||[]).forEach(id=>priorLinkedIds.add(id))));
   // A later statement can reveal a bank row on the already-finalized cutoff

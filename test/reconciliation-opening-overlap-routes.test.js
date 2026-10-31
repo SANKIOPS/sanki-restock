@@ -322,7 +322,7 @@ test('an overlapping statement cannot bypass a deferred earlier closing', async 
   assert.equal(financialSnapshot(read()),before);
 });
 
-test('a spanning-tail statement cannot bypass its deferred cutoff closing', async () => {
+test('a spanning statement rebuilds from its opening when the overlapping cutoff closing was deferred', async () => {
   const stored=seedEarlierAnchor(),book=stored.bankStatements[account];
   book.imports[0].balanceReconciled=false;
   book.imports[0].closingBalanceDeferred=true;
@@ -333,8 +333,9 @@ test('a spanning-tail statement cannot bypass its deferred cutoff closing', asyn
   draft.summary.to='2026-10-19';
   write(stored);
   const before=financialSnapshot(read()),view=await preview();
-  assert.equal(view.canFinalize,false);
-  assert.ok(view.reconciliationConflicts.some(row=>row.type==='ambiguous_opening_anchor'));
+  assert.equal(view.canFinalize,true);
+  assert.equal(view.balanceDifference,0);
+  assert.deepEqual(view.reconciliationConflicts,[]);
   assert.equal(financialSnapshot(read()),before);
 });
 

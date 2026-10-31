@@ -104,9 +104,16 @@ function snapshot(store, options) {
     return { error: 'The saved opening-anchor evidence cannot be interpreted safely. Review its retained sources; no records were changed.', status: 409 };
   }
   const continuityCutoff = String(book.reconciledThrough || '');
-  const anchorBefore = summary.from && summary.to && continuityCutoff >= summary.from && continuityCutoff < summary.to ? summary.to : summary.from;
+  const spansCutoff = summary.from && summary.to && continuityCutoff >= summary.from && continuityCutoff < summary.to;
+  const anchorBefore = spansCutoff ? summary.to : summary.from;
   if (!date(anchorBefore)) return { error: 'The saved statement has no valid opening-anchor period. Review its original source; no records were changed.', status: 409 };
-  const anchor = verifiedReconciliationAnchor(book, { before: anchorBefore, nature, account });
+  let anchor = verifiedReconciliationAnchor(book, { before: anchorBefore, nature, account });
+  // Mirror the preview rule: a deferred close inside the overlap is retained as
+  // candidate evidence, but it cannot establish the uploaded opening.
+  if (spansCutoff && anchor.anchorConflict && anchor.anchorConflict.cutoffDate >= summary.from
+    && /deferred or unreconciled closing balance/i.test(String(anchor.anchorConflict.message || ''))) {
+    anchor = verifiedReconciliationAnchor(book, { before: summary.from, nature, account });
+  }
   const candidateDate = anchor.anchorConflict && anchor.anchorConflict.cutoffDate || anchor.cutoffDate || '';
   const imports = list(book.imports).filter(record => record && typeof record === 'object');
   const candidates = imports.filter(record => period(record).dates.includes(candidateDate))
