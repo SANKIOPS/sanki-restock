@@ -12,6 +12,12 @@ test('reconciliation refreshes retain stable transaction anchors', () => {
   assert.match(html, /same\.getBoundingClientRect\(\)\.top-anchor\.top/);
 });
 
+test('a local resolution refresh never starts a second statement reload', () => {
+  assert.match(html, /keepCurrentReconciliation=.*bankReconciliationLocalUpdate/);
+  assert.match(html, /!keepCurrentReconciliation\)loadBankStatement\(\)/);
+  assert.match(html, /bankReconciliationLocalUpdate=true;setTimeout\(function\(\)\{bankReconciliationLocalUpdate=false;\},0\)/);
+});
+
 test('a saved resolution selects the next outstanding transaction', () => {
   const start = html.indexOf('    function bankRowNeedsReview(');
   const end = html.indexOf('    function bankRestoreReviewPosition(', start);
