@@ -38,6 +38,14 @@ test('normal loan receipt credits bank once and creates an equal liability witho
   const legacy=summaryForPL(day,'2098-12-31');assert.equal(legacy.Shared.variable,0);
   const report=buildReport({expenses:store(),orders:{orders:{}},purchases:{},opening:{lots:[]},salary:{},manualSales:{},feeds:[]},{from:day,to:'2098-12-31'});assert.equal(report.totals.otherIncome,0);assert.equal(report.totals.expenses,0);
 });
+test('historical opening loan creates only a liability and never invents a bank receipt',()=>{
+  reset();const before=position(),r=borrow({historicalOpening:true,reference:'',proof:'',date:'2098-10-01',source:'Madhukant Sehgal',amount:200000,note:'Opening loan liability received before accounting began'},'owner','loan-test-owner');
+  assert.equal(r.status,200,JSON.stringify(r));assert.equal(r.body.receipt.historicalOpening,true);assert.equal(r.body.receipt.bankReference,'');
+  const after=position();assert.equal(after.liabilities.loans-before.liabilities.loans,200000);assert.equal(after.assets.bankAndCash,before.assets.bankAndCash);
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',username:'loan-test-owner',query:{nature:'SANKI',account,from:'2098-10-01',to:'2098-12-31'}}).body;
+  assert.equal(ledger.entries.some(entry=>entry.id===r.body.receipt.id),false);assert.equal(ledger.balance,0);
+  assert.equal(borrow({historicalOpening:true,reference:'',proof:'',requestId:'opening-admin-denied'},'admin').status,403);
+});
 test('repayments reduce bank and outstanding principal, not P&L, with as-of history',()=>{
   reset();const l=borrow({amount:500000.25}).body.receipt;const r=repay(l.id);assert.equal(r.status,200,JSON.stringify(r));assert.equal(r.body.position.outstanding,400000.25);assert.equal(position('2098-10-10').liabilities.loans,500000.25);assert.equal(position('2098-10-11').liabilities.loans,400000.25);
   const full=repay(l.id,{amount:400000.25,date:'2098-10-12',reference:'PAY-FULL',requestId:'repay-test-request-2'});assert.equal(full.status,200);assert.equal(full.body.position.status,'repaid');assert.equal(position().liabilities.loans,0);assert.equal(position().assets.accounts.find(a=>a.name===account),undefined);

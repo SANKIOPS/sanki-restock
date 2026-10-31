@@ -96,23 +96,24 @@ function replay(s, body, candidate, collection) {
   if (!/^[A-Za-z0-9_-]{8,100}$/.test(requestId)) fail('Invalid request identifier. Refresh the form and try again.');
   const previous = collection.find(r => r.requestId === requestId);
   if (!previous) return null;
-  const fields = ['loanId', 'nature', 'account', 'amount', 'date', 'source', 'bankReference', 'note'];
+  const fields = ['loanId', 'nature', 'account', 'amount', 'date', 'source', 'bankReference', 'note', 'historicalOpening'];
   if (!active(previous) || fields.some(k => text(previous[k]) !== text(candidate[k])) ||
       JSON.stringify(previous.loanTerms || {}) !== JSON.stringify(candidate.loanTerms || {}))
     fail('This submission identifier was already used for a different transaction. Refresh the form.', 409);
   return previous;
 }
 function prepareReceipt(s, body, base, movements) {
+  const historicalOpening = body.historicalOpening === true;
   const candidate = Object.assign({}, base, { receiptType: TYPE, category: CATEGORY, amount: principal(base.amount, base.account),
-    date: date(base.date), source: text(base.source), note: text(base.note), bankReference: reference(base) });
+    date: date(base.date), source: text(base.source), note: text(base.note), bankReference: historicalOpening ? '' : reference(base), historicalOpening });
   if (!candidate.source) fail('Enter the lender name.');
   if (!candidate.note) fail('Enter a note explaining the loan and repayment arrangement.');
   candidate.loanTerms = terms(body, candidate.date);
-  if (!/cash/i.test(candidate.account) && !candidate.bankReference && !candidate.bankReconciliationEvidence)
+  if (!historicalOpening && !/cash/i.test(candidate.account) && !candidate.bankReference && !candidate.bankReconciliationEvidence)
     fail('Enter the bank transaction reference for this loan receipt.');
   const existing = replay(s, body, candidate, s.receipts || []);
   if (existing) return { existing };
-  assertUniqueMovement(movements, candidate, 'credit');
+  if (!historicalOpening) assertUniqueMovement(movements, candidate, 'credit');
   if (body.requestId) candidate.requestId = text(body.requestId);
   return { candidate };
 }
