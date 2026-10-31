@@ -250,6 +250,7 @@
           <button data-t="pending" id="pendingTab" style="display:none">Payables</button>
           <button data-t="receivables" id="receivablesTab" style="display:none">Receivables</button>
           <button data-t="spending" id="spendingTab" style="display:none">Spending dashboard</button>
+          <button data-t="approvals" id="approvalsTab" style="display:none">Approvals</button>
         </section>
         <section class="tab-group-panel" id="tabGroupLedgers" data-tab-group="ledgers" aria-label="Ledger pages">
           <button data-t="vendors">Vendor ledgers</button>
@@ -3450,10 +3451,11 @@
           loadConfig().then(function(){ syncApprovalsTab(); loadApprovals(); });
         });
     };
-    // Approval records and APIs remain intact, but the standalone navigation tab is retired.
+    // Keep the Owner/Admin approval queue reachable. Hiding this tab strands
+    // protected sale corrections in a pending state with no visible decision UI.
     function syncApprovalsTab(){
       var existing = el('tabs').querySelector('[data-t="approvals"]');
-      if(existing)existing.remove();
+      if(existing)existing.style.display=cfg.isAdmin?'':'none';
     }
 
     // boot
@@ -3462,7 +3464,7 @@
       selectedNature=(cfg.natures&&cfg.natures[0])||'SANKI';
       selectedNature=SankiNavigation.choice('nature',cfg.approvalNatures||cfg.natures,selectedNature);
       bankNature=selectedNature;
-      if(cfg.isAdmin){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';el('auditTab').style.display='';}
+      if(cfg.isAdmin){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';el('approvalsTab').style.display='';el('auditTab').style.display='';}
       if(!cfg.isAdmin){ // every non-Owner/Admin user: log + view own list only
         var cashBtn = el('tabs').querySelector('[data-t="cash"]');
         if(cashBtn&&!cfg.canVerifyCounterCash) cashBtn.remove();
