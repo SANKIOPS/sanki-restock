@@ -533,19 +533,19 @@ function createRouter(store = createStore()) {
     try { res.json({ success: true, ...store.view(typeof req.query?.period==='string'?req.query.period:undefined) }); }
     catch (error) { sendError(error, res); }
   });
-  const upload=require('multer')({storage:require('multer').memoryStorage(),limits:{fileSize:5*1024*1024,files:1}}).single('file');
+  const upload=require('multer')({storage:require('multer').memoryStorage(),limits:{fileSize:25*1024*1024,files:1}}).single('file');
   router.post(`${BASE}/import-performance`,(req,res)=>upload(req,res,error=>{
-    if(error)return res.status(400).json({success:false,error:'Upload one performance CSV or XLSX below 5 MB.'});
+    if(error)return res.status(400).json({success:false,error:error.code==='LIMIT_FILE_SIZE'?'This file exceeds the 25 MB upload limit. Export a shorter date range or split the report.':'Upload one performance CSV or XLSX file (up to 25 MB).'});
     try{
       if(!req.file||! /\.(csv|xlsx)$/i.test(req.file.originalname))fail('Choose an ad-level performance CSV.');
       let rows;try{rows=require('./meta-ads-performance').parsePerformance(req.file.buffer);}catch(e){fail(e.message);}
       res.json({success:true,...store.importPerformance(rows,Number(req.body.revision),req.user.username,req.body.preview==='true')});
     }catch(e){sendError(e,res);}
   }));
-  const setupUpload=require('multer')({storage:require('multer').memoryStorage(),limits:{fileSize:5*1024*1024,files:10}}).array('file',10);
+  const setupUpload=require('multer')({storage:require('multer').memoryStorage(),limits:{fileSize:25*1024*1024,files:10}}).array('file',10);
   router.post([`${BASE}/import-setup`,`${BASE}/import-meta`], (req,res) => setupUpload(req,res,error => {
     req.file=req.files?.[0];
-    if(error)return res.status(400).json({success:false,error:'Upload up to 10 CSV or XLSX files, each below 5 MB.'});
+    if(error)return res.status(400).json({success:false,error:error.code==='LIMIT_FILE_SIZE'?'A selected file exceeds the 25 MB upload limit. Export a shorter date range or split that report.':error.code==='LIMIT_FILE_COUNT'||error.code==='LIMIT_UNEXPECTED_FILE'?'Select up to 10 CSV or XLSX files, each up to 25 MB.':'The upload could not be read. Select the CSV or XLSX files again and retry.'});
     try {
       if(!req.file || req.files.some(file=>!/\.(csv|xlsx)$/i.test(file.originalname)))fail('Choose a Meta configuration CSV or XLSX export.');
       let detected;try{detected=req.files.length>1?{kind:'setup',label:'Linked setup bundle ('+req.files.length+' files)'}:require('./meta-ads-file-type').detectExport(req.file.buffer);}catch(e){fail(e.message);}
