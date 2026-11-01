@@ -15,7 +15,7 @@
       if(data.kind==='performance'){
         $('setupCampaignChoices').innerHTML='';$('setupReview').innerHTML='';
         if(preview){setupRevision=data.revision;setupFile=file;$('setupSummary').textContent='Detected: '+data.detected+'\n'+data.counts.created+' new performance rows; '+data.counts.updated+' updated; '+data.counts.unchanged+' unchanged.\n'+(data.hierarchy.length?data.hierarchy.length+' new campaign/ad-set/ad records will be added with incomplete setup.\n':'')+data.report.map(r=>r.ad+' · '+r.periodStart+' – '+r.periodEnd+' · '+(r.spend==null?'Spend unavailable':'₹'+r.spend)).join('\n');$('setupSave').hidden=false;}
-        else{setupRevision=null;insightsPeriod='';$('setupSave').hidden=true;$('uploadPanel').hidden=true;view='campaigns';await load('Meta performance saved.');}return;
+        else{setupRevision=null;insightsPeriod='';$('setupSave').hidden=true;$('uploadPanel').hidden=true;view='campaigns';await load('Meta performance saved.');openImportedStatusReview(data.statusReview);}return;
       }
       if(preview){setupRevision=data.revision;setupFile=file;
         $('setupCampaignChoices').innerHTML=data.level?'<h3>Select campaigns to record ('+data.campaignChoices.length+' in file)</h3><p>Search and select campaigns, then click Preview upload again.</p><input type="search" id="setupCampaignSearch" aria-label="Search campaigns in upload" placeholder="Type 2–3 letters of a campaign name…" value="'+esc(setupCampaignSearch)+'"><p id="setupCampaignSelection" role="status"></p><div class="setup-campaign-list">'+data.campaignChoices.map(c=>'<label data-campaign-name="'+esc(c.name.toLowerCase())+'"><input type="checkbox" data-setup-campaign="'+esc(c.id)+'" '+(setupCampaignIds?.includes(c.id)?'checked':'')+'>'+esc(c.name)+'</label>').join('')+'</div><p id="setupCampaignNoMatch" hidden>No matching campaigns. Try another name.</p>':'';
@@ -39,7 +39,7 @@
     try{const body=new FormData();body.append('file',file);body.append('preview',String(preview));body.append('revision',String(preview?state.revision:performanceRevision));
       const response=await fetch(apiBase+'/import-performance',{method:'POST',credentials:'same-origin',body});const data=await response.json();if(!response.ok||!data.success)throw new Error(data.error||'Performance upload failed.');
       if(preview){performanceRevision=data.revision;performanceFile=file;$('performanceSummary').textContent=`${data.report.length} ad/period rows: ${data.counts.created} new, ${data.counts.updated} updated, ${data.counts.unchanged} unchanged.\n`+data.report.map(r=>`${r.periodStart} – ${r.periodEnd} · ${r.adSet} · ${r.ad} · ${r.spend==null?'spend unavailable':'₹'+r.spend} · ${r.action}`).join('\n');$('performanceSave').hidden=false;}
-      else{performanceRevision=null;$('performanceSave').hidden=true;$('performancePanel').hidden=true;$('performanceSummary').textContent='Daily performance saved. See Campaigns for findings and next actions.';insightsPeriod="";view='campaigns';await load('Daily performance imported.');}
+      else{performanceRevision=null;$('performanceSave').hidden=true;$('performancePanel').hidden=true;$('performanceSummary').textContent='Daily performance saved. See Campaigns for findings and next actions.';insightsPeriod="";view='campaigns';await load('Daily performance imported.');openImportedStatusReview(data.statusReview);}
     }catch(e){performanceRevision=null;$('performanceSave').hidden=true;$('performanceSummary').textContent=e.message;}finally{$('performancePreview').disabled=false;$('performanceSave').disabled=false;}
   }
   $('performancePreview').addEventListener('click',()=>uploadPerformance(true));$('performanceSave').addEventListener('click',()=>uploadPerformance(false));
@@ -370,10 +370,17 @@
     const value=['reported_running','active'].includes(r.status)?'reported_running':r.status==='paused'?'paused':'unknown';
     return '<label>'+esc(r.name)+'<select data-status-type="'+type+'" data-status-id="'+esc(r.id)+'" data-status-initial="'+value+'"><option value="unknown" '+(value==='unknown'?'selected':'')+'>Unconfirmed</option><option value="reported_running" '+(value==='reported_running'?'selected':'')+'>On</option><option value="paused" '+(value==='paused'?'selected':'')+'>Off</option></select></label>';
   }
+  function openImportedStatusReview(review){
+    if(!review?.length)return;
+    statusRevision=state.revision;$('statusError').textContent='';$('statusSave').disabled=false;
+    const campaignIds=[...new Set(review.map(r=>r.campaignId))];
+    $('statusFields').innerHTML='<p><strong>Performance is saved.</strong> Confirm only these unclear switches. Existing answers remain selected. Delivery labels do not establish switch positions. You may close this without changing any saved switches.</p>'+campaignIds.map(id=>'<fieldset><legend>'+esc(review.find(r=>r.campaignId===id).campaignName)+'</legend>'+review.filter(r=>r.campaignId===id).map(r=>'<div><small>'+esc(({campaigns:'Campaign',adSets:'Ad set',ads:'Ad'})[r.type])+' · Exported delivery: '+esc(r.delivery||'Not supplied')+'</small>'+statusChoice(r.type,r)+'</div>').join('')+'</fieldset>').join('');
+    $('statusDialog').showModal();
+  }
   $('confirmStatuses').addEventListener('click',()=>{
     if(!state||busy)return;statusRevision=state.revision;$('statusError').textContent='';$('statusSave').disabled=false;
     const selected=$('campaignFilter').value;
-    $('statusFields').innerHTML=state.campaigns.filter(c=>!c.archived&&(!selected||c.id===selected)).map(c=>'<fieldset><legend>'+esc(c.name)+'</legend>'+statusChoice('campaigns',c)+state.adSets.filter(s=>s.campaignId===c.id&&!s.archived).map(s=>statusChoice('adSets',s)).join('')+'</fieldset>').join('');$('statusDialog').showModal();
+    $('statusFields').innerHTML=state.campaigns.filter(c=>!c.archived&&(!selected||c.id===selected)).map(c=>'<fieldset><legend>'+esc(c.name)+'</legend>'+statusChoice('campaigns',c)+state.adSets.filter(s=>s.campaignId===c.id&&!s.archived).map(s=>statusChoice('adSets',s)+state.ads.filter(a=>a.adSetId===s.id&&!a.archived).map(a=>statusChoice('ads',a)).join('')).join('')+'</fieldset>').join('');$('statusDialog').showModal();
   });
   for(const id of ['statusClose','statusCancel'])$(id).addEventListener('click',()=>{if(!$('statusSave').disabled)$('statusDialog').close();});
   $('statusForm').addEventListener('submit',async event=>{

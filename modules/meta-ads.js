@@ -23,7 +23,7 @@ const SCHEMAS = {
     status: ['status'], adAccountId: ['text', 120], notes: ['text', 5000]
   },
   adSets: {
-    setupDetails: ['text',60000], metaSourceId: ['text',120], campaignId: ['id', true], name: ['text', 200, true], collection: ['text', 80],
+    reportedDelivery:['text',100],setupDetails: ['text',60000], metaSourceId: ['text',120], campaignId: ['id', true], name: ['text', 200, true], collection: ['text', 80],
     budgetDaily: ['number'], conversionLocation: ['text', 160], performanceGoal: ['text', 250],
     destination: ['text', 160], destinationRef: ['reference'], facebookPage: ['text', 200],
     instagramProfile: ['text', 160], whatsappNumber: ['phone'], locations: ['locations'],
@@ -34,14 +34,14 @@ const SCHEMAS = {
     status: ['status'], confirmedOn: ['date'], notes: ['text', 5000]
   },
   ads: {
-    product:['text',200],skus:['list',120],collection:['text',80],creativeTypes:['list',100],
+    reportedDelivery:['text',100],product:['text',200],skus:['list',120],collection:['text',80],creativeTypes:['list',100],
     metaSourceId: ['text',120], adSetId: ['id', true], name: ['text', 200, true], model: ['text', 160],
     format: ['text', 100], description: ['text', 5000], mediaUrls: ['urls'],
     assessment:['text',1000],setupSource:['text',60000],whatsappNumber:['phone'],mediaCount: ['count'], cta: ['text', 150], primaryText: ['text', 10000],
     status: ['status'], notes: ['text', 5000]
   },
   results: {
-    reportGoal:['text',250],reportDestination:['text',160],resultIndicator:['text',200], attributionSetting:['text',200], reportedDelivery:['text',100],
+    reportedSetDelivery:['text',100],reportGoal:['text',250],reportDestination:['text',160],resultIndicator:['text',200], attributionSetting:['text',200], reportedDelivery:['text',100],
     adSetId: ['id', true], adId: ['id'], periodStart: ['date', true], periodEnd: ['date', true],
     ...Object.fromEntries(METRICS.map(key => [key, [MONEY.has(key) ? 'number' : 'count']])),
     source: ['text', 200], notes: ['text', 5000]
@@ -390,7 +390,7 @@ function createStore(options = {}) {
       if(!Number.isSafeInteger(revision)||revision!==state.revision)fail('Records changed. Preview the performance file again.',409);
       const counts={created:0,updated:0,unchanged:0}, now=clock(), report=[];
       const match=(type,meta)=>state[type].find(x=>x.id===meta||x.metaSourceId===meta);
-      const hierarchy=[];let setupChanged=false;
+      const hierarchy=[],statusCandidates=new Map();let setupChanged=false;
       for(const row of rows){
         if(ensureHierarchy){for(const [type,id,name,parent] of [['campaigns',row.campaignMetaId,row.campaignName,{}],['adSets',row.setMetaId,row.setName,{campaignId:match('campaigns',row.campaignMetaId)?.id||row.campaignMetaId}],['ads',row.adMetaId,row.adName,{adSetId:match('adSets',row.setMetaId)?.id||row.setMetaId}]]){if(match(type,id))continue;if(!name)fail('Include campaign, ad-set and ad names to record new hierarchy from this report.');const record=normalizeRecord(type,{id,metaSourceId:id,name,...parent});Object.assign(record,{createdAt:now,createdBy:actor,updatedAt:now,updatedBy:actor});state[type].push(record);hierarchy.push({type,id,name});state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:id,field:'record',before:null,after:record,action:'create',reason:'New record identified by Meta performance export; setup incomplete',revision:state.revision+1});}}
         const campaign=match('campaigns',row.campaignMetaId),set=match('adSets',row.setMetaId),ad=match('ads',row.adMetaId);
@@ -402,6 +402,15 @@ function createStore(options = {}) {
           const next=normalizeRecord(type,patch,prior);
           for(const key of Object.keys(patch))if(JSON.stringify(prior[key])!==JSON.stringify(next[key])){state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:prior.id,field:key,before:prior[key]??null,after:next[key],action:'update',reason:'Supplied setup field in Meta table upload',revision:state.revision+1});prior[key]=next[key];prior.updatedAt=now;prior.updatedBy=actor;setupChanged=true;}
         }}
+        for(const [type,record,delivery] of [['campaigns',campaign,''],['adSets',set,row.record.reportedSetDelivery],['ads',ad,row.record.reportedDelivery]]){
+          const supplied=row.setup?.[type]?.status;
+          if(!ensureHierarchy&&supplied&&['reported_running','paused','active'].includes(supplied)&&record.status!==supplied){state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:record.id,field:'status',before:record.status,after:supplied,action:'update',reason:'Explicit configured switch from Meta export',revision:state.revision+1});record.status=supplied;record.updatedAt=now;record.updatedBy=actor;setupChanged=true;}
+
+          if(type!=='campaigns'&&delivery&&record.reportedDelivery!==delivery){
+            state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:record.id,field:'reportedDelivery',before:record.reportedDelivery??null,after:delivery,action:'update',reason:'Delivery label from Meta export; switch unchanged',revision:state.revision+1});record.reportedDelivery=delivery;record.updatedAt=now;record.updatedBy=actor;setupChanged=true;
+          }
+          if(!supplied)statusCandidates.set(type+':'+record.id,{type,id:record.id,name:record.name,campaignId:campaign.id,campaignName:campaign.name,status:record.status,delivery:delivery||'',parentStatus:type==='adSets'?campaign.status:type==='ads'?(campaign.status==='paused'?'paused':set.status):null});
+        }
         const index=state.results.findIndex(x=>x.adId===ad.id&&x.periodStart===row.record.periodStart&&x.periodEnd===row.record.periodEnd),previous=index<0?null:state.results[index];
         const payload={...row.record,archived:false,reportGoal:previous?.reportGoal||set.performanceGoal||({profile_visit_view:'PROFILE_VISIT',reach:'REACH','actions:link_click':'LINK_CLICKS','actions:offsite_conversion.fb_pixel_purchase':'PURCHASE'}[row.record.resultIndicator]||''),reportDestination:previous?.reportDestination||set.destination,id:previous?.id||'period-'+row.adMetaId+'-'+row.record.periodStart+'-'+row.record.periodEnd,adId:ad.id,adSetId:set.id};
         const record=normalizeRecord('results',payload,previous), changed=Object.keys(payload).filter(k=>JSON.stringify(previous?.[k])!==JSON.stringify(record[k]));
@@ -413,7 +422,13 @@ function createStore(options = {}) {
       }
       validateRelationships(state);
       if(!preview&&(counts.created||counts.updated||setupChanged||hierarchy.length)){state.revision++;save(state);}
-      return {counts,revision:state.revision,report,hierarchy};
+      const statusReview=[...statusCandidates.values()].filter(r=>{
+        const known=['active','reported_running','paused'].includes(r.status);if(!known)return true;
+        if(r.delivery==='active'&&r.status==='paused')return true;
+        if(['active','reported_running'].includes(r.status)&&r.delivery==='inactive')return true;
+        return ['active','reported_running'].includes(r.status)&&r.delivery==='not_delivering'&&r.parentStatus!=='paused';
+      });
+      return {counts,revision:state.revision,report,hierarchy,statusReview};
     });
   }
   function bulk(body,actor){
@@ -484,7 +499,7 @@ function createStore(options = {}) {
       const state=loadUnlocked();if(!Number.isSafeInteger(body.revision)||body.revision!==state.revision)fail('Records changed. Reload status confirmation.',409);
       const seen=new Set(),now=clock();let changedRecords=0;
       for(const input of body.records){
-        if(!plain(input)||!['campaigns','adSets'].includes(input.type)||!['reported_running','paused','unknown'].includes(input.status))fail('Invalid status confirmation.');
+        if(!plain(input)||!['campaigns','adSets','ads'].includes(input.type)||!['reported_running','paused','unknown'].includes(input.status))fail('Invalid status confirmation.');
         const key=input.type+':'+input.id;if(seen.has(key))fail('Duplicate status confirmation.');seen.add(key);
         const record=state[input.type].find(r=>r.id===input.id&&!r.archived);if(!record)fail('Record not found or removed.',404);
         if(input.type==='adSets'&&state.campaigns.find(c=>c.id===record.campaignId)?.archived)fail('Campaign is removed.',400);
