@@ -81,7 +81,7 @@ test('exact draft, account and explicit nature are required; no implicit newest 
   for (const patch of [{ draftId: 'OTHER' }, { draftId: '__proto__' }, { nature: 'PERSONAL' }, { account: 'Other' }]) assert.equal(snapshot(store, query(patch)).status, 404);
 });
 
-test('same-day overlap follows existing anchorBefore policy and invalid saved periods fail closed', () => {
+test('a valid overlap uses its cutoff anchor and invalid saved periods fail closed', () => {
   const store = fixture(), draft = store.bankReconciliationDrafts[draftId];
   draft.summary.from = '2098-10-18';
   assert.equal(snapshot(store, query()).anchorBefore, '2098-10-24');

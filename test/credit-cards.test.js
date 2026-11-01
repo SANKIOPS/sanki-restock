@@ -41,6 +41,7 @@ test('whole-card payment debits the bank while statement accounting controls lia
   const paid=invoke('POST','/api/expenses/credit-cards/payments',{body:{cardId:card.id,nature:'SANKI',account:'Axis Bank 3448',paymentKind:'partial',amount:400,date:'2026-08-30',reference:'UTR400'}});
   assert.equal(paid.status,200);assert.equal(paid.body.outstanding,before);
   const expenses=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8')),transfer=expenses.transfers.find(x=>x.creditCardPaymentId===paid.body.payment.id);
+  assert.equal(paid.body.transfer.id,transfer.id);
   assert.equal(transfer.fromAccount,'Axis Bank 3448');assert.equal(transfer.toAccount,'HDFC Regalia 1234');assert.equal(transfer.classification,'credit_card_payment');
   const ledger=invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body;assert.equal(ledger.outstanding,paid.body.outstanding);assert.equal(ledger.entries.some(x=>x.id===paid.body.payment.id),false);
 });

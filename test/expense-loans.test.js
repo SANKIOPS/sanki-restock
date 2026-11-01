@@ -38,6 +38,14 @@ test('normal loan receipt credits bank once and creates an equal liability witho
   const legacy=summaryForPL(day,'2098-12-31');assert.equal(legacy.Shared.variable,0);
   const report=buildReport({expenses:store(),orders:{orders:{}},purchases:{},opening:{lots:[]},salary:{},manualSales:{},feeds:[]},{from:day,to:'2098-12-31'});assert.equal(report.totals.otherIncome,0);assert.equal(report.totals.expenses,0);
 });
+test('historical opening loan creates only a liability and never invents a bank receipt',()=>{
+  reset();const before=position(),r=borrow({historicalOpening:true,reference:'',proof:'',date:'2026-08-06',source:'Madhukan',amount:200000,note:'Opening loan liability received before accounting began'},'owner','loan-test-owner');
+  assert.equal(r.status,200,JSON.stringify(r));assert.equal(r.body.receipt.historicalOpening,true);assert.equal(r.body.receipt.bankReference,'');
+  const after=position();assert.equal(after.liabilities.loans-before.liabilities.loans,200000);assert.equal(after.assets.bankAndCash,before.assets.bankAndCash);
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',username:'loan-test-owner',query:{nature:'SANKI',account,from:'2026-08-06',to:'2098-12-31'}}).body;
+  assert.equal(ledger.entries.some(entry=>entry.id===r.body.receipt.id),false);assert.equal(ledger.balance,0);
+  assert.equal(borrow({historicalOpening:true,reference:'',proof:'',requestId:'opening-admin-denied'},'admin').status,403);
+});
 test('repayments reduce bank and outstanding principal, not P&L, with as-of history',()=>{
   reset();const l=borrow({amount:500000.25}).body.receipt;const r=repay(l.id);assert.equal(r.status,200,JSON.stringify(r));assert.equal(r.body.position.outstanding,400000.25);assert.equal(position('2098-10-10').liabilities.loans,500000.25);assert.equal(position('2098-10-11').liabilities.loans,400000.25);
   const full=repay(l.id,{amount:400000.25,date:'2098-10-12',reference:'PAY-FULL',requestId:'repay-test-request-2'});assert.equal(full.status,200);assert.equal(full.body.position.status,'repaid');assert.equal(position().liabilities.loans,0);assert.equal(position().assets.accounts.find(a=>a.name===account),undefined);
@@ -220,6 +228,7 @@ test('personal borrowed principal cannot be allocated as rental income',()=>{
 test('UI escapes lender/notes, shows evidence and shares loan options between both entry points',()=>{
   const l={id:'REC-1',source:'<script>bad</script>',nature:'SANKI',date:day,borrowed:500,amount:500,repaid:200,outstanding:300,status:'partially_repaid',loanTerms:{lenderKind:'company',dueDate:'2098-11-10'},note:'<img src=x>',account,proof:'/api/expenses/proof/one.jpg',payments:[{id:'LOANPAY-1',date:'2098-10-11',amount:200,account,note:'Instalment',bankReference:'PAY-1'}]};const html=ui.render({totals:{borrowed:500,repaid:200,outstanding:300},loans:[l],canVoid:true});assert.ok(html.includes('&lt;script&gt;'));assert.ok(!html.includes('<script>'));assert.match(html,/Record principal repayment/);assert.match(html,/300\.00/);assert.match(html,/Void incorrect record/);assert.match(html,/Proof 1/);
   const page=fs.readFileSync(path.join(__dirname,'../public/expenses.html'),'utf8');assert.match(page,/ExpenseLoans\.mount/);assert.match(page,/id="biReceiptType".*value="loan_received"/);assert.match(page,/Record loan repayment/);assert.match(page,/ExpenseLoans\.receiptFields\('rc'\)/);assert.match(page,/ExpenseLoans\.receiptFields\('bi'\)/);
+  const receiptStart=page.indexOf('function recordReceipt(){'),receiptEnd=page.indexOf('function recordTransfer',receiptStart),receiptHandler=page.slice(receiptStart,receiptEnd);assert.ok(receiptStart>=0&&receiptEnd>receiptStart);assert.match(receiptHandler,/var amount=.*source=.*hasProof=.*btn=/);assert.match(receiptHandler,/historicalOpening:historicalOpening/);assert.match(receiptHandler,/catch\(function\(error\)\{btn\.disabled=false/);
   for(const file of ['expenses.html','balance-sheet.html']){const source=fs.readFileSync(path.join(__dirname,'../public',file),'utf8');for(const [i,m]of [...source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].entries())if(m[1].trim())assert.doesNotThrow(()=>new vm.Script(m[1]),file+' inline script '+i);}
   assert.match(ui.liabilityRows([{lender:'<bad>',id:'REC-1',nature:'SANKI',borrowed:500,repaid:200,outstanding:300}]),/&lt;bad&gt;/);
 });

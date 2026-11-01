@@ -22,9 +22,12 @@ function evidenceError(draft) {
 
 function editable(draft, row) {
   const tag = row && row.entityTag;
+  const unreviewed = row && row.status === 'missing_in_app' && !row.app && !row.resolution && !(draft.resolutions || {})[row.id];
+  const missingRequiredEntity = row && row.status !== 'already_reconciled' && row.ownershipUnresolved === true;
   return !!(draft && !draft.originalStatementPeriod && !draft.reconstructedFromFinalized && row && row.bank &&
-    /^bank-\d+$/.test(row.id) && !stale(draft, row.id) && row.status === 'missing_in_app' && !row.app && !row.resolution &&
-    !(draft.resolutions || {})[row.id] && !row.matchingExclusion && !(draft.matchingExclusions || {})[row.id] &&
+    /^bank-\d+$/.test(row.id) && !stale(draft, row.id) && (unreviewed || missingRequiredEntity) &&
+    !row.matchingExclusion && !(draft.matchingExclusions || {})[row.id] &&
+    !(row.resolution && ['exclude', 'bank_reversal_pair'].includes(row.resolution.action)) &&
     !row.reversalReviewRequired && !row.ledgerClaimedElsewhere && !(row.reconciliationConflicts || []).length &&
     !(tag && (tag.sourceConflict || ['mixed_linked_entries', 'ambiguous_candidates', 'linked_ledger', 'finalized_bank_record'].includes(tag.source))) &&
     !(tag && tag.source === 'manual' && !assignment(draft, row.id)));
@@ -42,7 +45,7 @@ function register(router, deps) {
       if (draft.originalStatementPeriod || draft.reconstructedFromFinalized) fail('A restored or finalized statement cannot use pending-row entity assignment.');
       if (Object.values(s.bankReconciliationApprovals || {}).some(value => value && value.draftId === draft.id && value.status === 'pending')) fail('This reconciliation is awaiting Owner approval. Withdraw that request before changing its entity choices.');
       const target = normalized(b.targetNature), shared = deps.isShared(draft.account), reason = typeof b.reason === 'string' ? b.reason.trim() : '';
-      if (!NATURES.includes(target) || shared && !['SAMAST', 'PERSONAL'].includes(target)) fail('Choose a valid entity for this reconciliation.', 400);
+      if (!NATURES.includes(target)) fail('Choose a valid entity for this reconciliation.', 400);
       if (!deps.approvalNatures(req).includes(target) || target === 'PERSONAL' && !deps.canManagePersonalAccounting(req)) fail('You cannot assign the selected accounting entity.', 403);
       if (!reason || reason.length > 2000) fail('Enter a reason of no more than 2,000 characters for this assignment.', 400);
       if (!Array.isArray(b.rowIds) || !b.rowIds.length || b.rowIds.length > 500 || b.rowIds.some(id => typeof id !== 'string' || !/^bank-\d+$/.test(id)) || new Set(b.rowIds).size !== b.rowIds.length) fail('Select between 1 and 500 distinct bank transactions.', 400);
@@ -50,7 +53,7 @@ function register(router, deps) {
       const view = deps.draftReconciliation(snapshot, detached, { readOnly: true });
       const rows = rowIds.map(id => view.rows.find(row => row.id === id));
       for (const row of rows) {
-        if (!editable(draft, row)) fail('A selected transaction is reviewed, linked, excluded, finalized or ambiguous. Nothing was assigned.');
+        if (!editable(draft, row)) fail('A selected transaction no longer needs an entity, is finalized, or has ambiguous evidence. Nothing was assigned.');
         const old = assignment(draft, row.id), tag = row.entityTag;
         if (!deps.canManagePersonalAccounting(req) && (old && old.nature === 'PERSONAL' || tag && [tag.nature, tag.sourceNature].includes('PERSONAL'))) fail('The Owner must review this PERSONAL transaction.', 403);
         if (shared && tag && tag.source === 'manual' && tag.nature !== target) fail('A selected transaction already has a reviewed entity. Use its individual review workflow instead.');
