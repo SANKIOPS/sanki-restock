@@ -377,6 +377,13 @@
     $('statusFields').innerHTML='<p><strong>Performance is saved.</strong> Confirm only these unclear switches. Existing answers remain selected. Delivery labels do not establish switch positions. You may close this without changing any saved switches.</p>'+campaignIds.map(id=>'<fieldset><legend>'+esc(review.find(r=>r.campaignId===id).campaignName)+'</legend>'+review.filter(r=>r.campaignId===id).map(r=>'<div><small>'+esc(({campaigns:'Campaign',adSets:'Ad set',ads:'Ad'})[r.type])+' · Exported delivery: '+esc(r.delivery||'Not supplied')+'</small>'+statusChoice(r.type,r)+'</div>').join('')+'</fieldset>').join('');
     $('statusDialog').showModal();
   }
+  function openImportedStatusReview(review){
+    if(!review?.length)return;
+    statusRevision=state.revision;$('statusError').textContent='';$('statusSave').disabled=false;
+    const campaignIds=[...new Set(review.map(r=>r.campaignId))];
+    $('statusFields').innerHTML='<p><strong>Performance is saved.</strong> Confirm only these unclear switches. Existing answers remain selected. Delivery labels do not establish switch positions. You may close this without changing any saved switches.</p>'+campaignIds.map(id=>'<fieldset><legend>'+esc(review.find(r=>r.campaignId===id).campaignName)+'</legend>'+review.filter(r=>r.campaignId===id).map(r=>'<div><small>'+esc(({campaigns:'Campaign',adSets:'Ad set',ads:'Ad'})[r.type])+' · Exported delivery: '+esc(r.delivery||'Not supplied')+'</small>'+statusChoice(r.type,r)+'</div>').join('')+'</fieldset>').join('');
+    $('statusDialog').showModal();
+  }
   $('confirmStatuses').addEventListener('click',()=>{
     if(!state||busy)return;statusRevision=state.revision;$('statusError').textContent='';$('statusSave').disabled=false;
     const selected=$('campaignFilter').value;
