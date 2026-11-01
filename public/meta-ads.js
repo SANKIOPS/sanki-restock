@@ -368,7 +368,7 @@
   let statusRevision=null;
   function statusChoice(type,r){
     const value=['reported_running','active'].includes(r.status)?'reported_running':r.status==='paused'?'paused':'unknown';
-    return '<label>'+esc(r.name)+'<select data-status-type="'+type+'" data-status-id="'+esc(r.id)+'" data-status-initial="'+value+'"><option value="unknown" '+(value==='unknown'?'selected':'')+'>Unconfirmed</option><option value="reported_running" '+(value==='reported_running'?'selected':'')+'>On</option><option value="paused" '+(value==='paused'?'selected':'')+'>Off</option></select></label>';
+    return '<label>'+esc(({campaigns:'Campaign',adSets:'Ad set',ads:'Ad'})[type])+': '+esc(r.name)+'<select data-status-type="'+type+'" data-status-id="'+esc(r.id)+'" data-status-initial="'+value+'"><option value="unknown" '+(value==='unknown'?'selected':'')+'>Unconfirmed</option><option value="reported_running" '+(value==='reported_running'?'selected':'')+'>On</option><option value="paused" '+(value==='paused'?'selected':'')+'>Off</option></select></label>';
   }
   function openImportedStatusReview(review){
     if(!review?.length)return;
