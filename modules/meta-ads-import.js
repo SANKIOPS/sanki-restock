@@ -4,7 +4,7 @@ function parseSetup(buffer) {
   const book = XLSX.read(buffer, {type:'buffer', raw:true});
   for(const name of book.SheetNames)for(const row of XLSX.utils.sheet_to_json(book.Sheets[name],{defval:'',raw:true}))for(const key of ['Campaign ID','Ad Set ID','Ad set ID','Ad ID'])if(typeof row[key]==='number'&&!Number.isSafeInteger(row[key]))throw new Error(key+' was rounded in Excel. Export CSV directly from Meta.');
   const rows = book.SheetNames.flatMap(name => XLSX.utils.sheet_to_json(book.Sheets[name], {defval:'', raw:false}));
-  if (!rows.length || rows.length > 2000) throw new Error('Upload a configuration export containing 1–2000 ads.');
+  if (!rows.length || rows.length > 100000) throw new Error('Upload a configuration export containing 1–100,000 ads.');
   const records = {campaigns:new Map(), adSets:new Map(), ads:new Map()}, warnings = new Set();
   const text = (r,k) => String(r[k] || '').trim();
   const metaId = (r,k,prefix) => {const value=text(r,k).replace(/^[a-z]+:/i,'');if(!/^\d+$/.test(value))throw new Error(`${k} is missing or invalid. Use the configuration export with IDs.`);return prefix+value;};

@@ -3,7 +3,7 @@ const XLSX=require('xlsx');
 function parsePerformance(buffer) {
   const book=XLSX.read(buffer,{type:'buffer',raw:true,cellDates:true});
   const rows=book.SheetNames.flatMap(name=>XLSX.utils.sheet_to_json(book.Sheets[name],{defval:null,raw:true}));
-  if(!rows.length||rows.length>2000)throw new Error('Upload 1–2000 ad-level performance rows.');
+  if(!rows.length||rows.length>100000)throw new Error('Upload 1–100,000 ad-level performance rows.');
   if(!Object.hasOwn(rows[0],'Reporting starts')||!Object.hasOwn(rows[0],'Reporting ends'))throw new Error('This file does not contain performance reporting dates. Export table results rather than campaign configuration.');
   const ids=(value,label)=>{if(typeof value==='number'&&!Number.isSafeInteger(value))throw new Error(`${label} was rounded in Excel. Export the same report as CSV directly from Meta.`);const s=String(value??'').trim();if(!/^\d+$/.test(s))throw new Error(`${label} is missing or invalid. Add campaign, ad-set and ad IDs to your report.`);return s;};
   const date=value=>{const s=value instanceof Date?value.toISOString().slice(0,10):String(value??'').trim();if(!/^\d{4}-\d{2}-\d{2}$/.test(s)||!Number.isFinite(Date.parse(s))||new Date(s).toISOString().slice(0,10)!==s)throw new Error('Reporting dates must be valid YYYY-MM-DD dates.');return s;};
