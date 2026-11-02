@@ -42,12 +42,67 @@ function blank(){return{cards:{},statements:{},merchantRules:{
   interest:{pattern:'interest',category:'Fee & Charges',source:'default'}
 },payments:[],audit:[],cardSeq:0,statementSeq:0,paymentSeq:0,auditSeq:0};}
 function readObject(file,fallback){try{const value=JSON.parse(fs.readFileSync(file,'utf8'));if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Invalid accounting store.');return value;}catch(error){if(error.code==='ENOENT')return fallback;throw new Error('The accounting store is unreadable. No records were changed.',{cause:error});}}
-function load(){bankAuthorityTransaction.recover(DATA_DIR);return Object.assign(blank(),readObject(STORE_PATH,{}));}
+function load(){
+  bankAuthorityTransaction.recover(DATA_DIR);
+  const cards=Object.assign(blank(),readObject(STORE_PATH,{}));
+  applyOwnerDirectedTr00136CardReassignment(cards);
+  return cards;
+}
 function save(s){const t=STORE_PATH+'.tmp-'+process.pid+'-'+Date.now();fs.writeFileSync(t,JSON.stringify(s));fs.renameSync(t,STORE_PATH);}
 function loadExpenses(){return readObject(EXP_PATH,{});}
 function rawSnapshot(file){try{return fs.readFileSync(file,'utf8');}catch(error){if(error.code==='ENOENT')return null;throw error;}}
 function storeSnapshots(){return{cards:rawSnapshot(STORE_PATH),expenses:rawSnapshot(EXP_PATH)};}
 function commitStores(s,exp,before){return bankAuthorityTransaction.commit(DATA_DIR,[{fileName:'expenses.json',before:before.expenses,after:JSON.stringify(exp)},{fileName:'credit-cards.json',before:before.cards,after:JSON.stringify(s)}]);}
+function applyOwnerDirectedTr00136CardReassignment(cards){
+  const key='owner-reassign-tr-00136-to-icici-sapphiro-8000-v1';
+  cards.oneTimeMigrations=cards.oneTimeMigrations||{};
+  if(cards.oneTimeMigrations[key])return false;
+  const expenses=loadExpenses(),transfer=(expenses.transfers||[]).find(row=>row&&row.id==='TR-00136'),target=Object.values(cards.cards||{}).find(card=>card&&card.active!==false&&cardName(card)==='ICICI Sapphiro 8000');
+  if(!transfer||!target)return false;
+  const targetName=cardName(target),amount=round2(transfer.amount),date=String(transfer.date||'').slice(0,10),nature=String(transfer.fromNature||transfer.nature||'PERSONAL'),account=String(transfer.fromAccount||''),linked=(cards.payments||[]).find(row=>row&&row.id===transfer.creditCardPaymentId),legacyCandidates=(cards.payments||[]).filter(row=>row&&row.active!==false&&String(row.date||'').slice(0,10)===date&&String(row.nature||'')===nature&&String(row.account||'')===account&&Math.abs(round2(row.amount)-amount)<=1);
+  if(!linked&&legacyCandidates.length>1)return false;
+  let payment=linked||legacyCandidates[0],createdPayment=false;
+  const source=payment&&cards.cards&&cards.cards[payment.cardId],sourceName=source?cardName(source):String(transfer.toAccount||''),alreadyCorrect=payment&&payment.cardId===target.id&&transfer.toAccount===targetName;
+  if(!alreadyCorrect&&(sourceName!=='HDFC 7376'||transfer.toAccount!=='HDFC 7376'||transfer.classification!=='credit_card_payment'||date!=='2026-09-29'||Math.abs(amount-26700.63)>.001))return false;
+  const before=storeSnapshots(),at=new Date().toISOString();
+  if(!payment){
+    cards.paymentSeq=num(cards.paymentSeq);
+    do{cards.paymentSeq+=1;}while((cards.payments||[]).some(row=>row&&row.id==='CCP-'+String(cards.paymentSeq).padStart(5,'0')));
+    payment={id:'CCP-'+String(cards.paymentSeq).padStart(5,'0'),cardId:target.id,amount,date,nature,account,allocations:[{nature,amount}],paymentKind:'full',proof:String(transfer.proof||''),reference:String(transfer.reference||transfer.bankReference||''),note:'Linked to existing reconciled transfer '+transfer.id,createdAt:transfer.createdAt||at,createdBy:transfer.createdBy||'gaganlambasanki',active:true};
+    cards.payments=Array.isArray(cards.payments)?cards.payments:[];
+    cards.payments.push(payment);
+    createdPayment=true;
+  }
+  const allocationRows=(expenses.creditCardSettlementAllocations||[]).filter(row=>row&&row.creditCardPaymentId===payment.id),beforeSummary={transferId:transfer.id,paymentId:payment.id,cardId:payment.cardId,cardName:transfer.toAccount,amount,date};
+  if(!alreadyCorrect){
+    payment.cardId=target.id;
+    payment.amount=amount;
+    payment.date=date;
+    payment.nature=nature;
+    payment.account=account;
+    if(!Array.isArray(payment.allocations)||payment.allocations.length<=1)payment.allocations=[{nature,amount}];
+    transfer.creditCardId=target.id;
+    transfer.creditCardPaymentId=payment.id;
+    transfer.toAccount=targetName;
+    transfer.cardReassignedAt=at;
+    transfer.cardReassignedBy='gaganlambasanki';
+    transfer.cardReassignmentReason='Owner confirmed this reconciled payment belongs to ICICI Sapphiro 8000, not HDFC 7376.';
+    allocationRows.forEach(row=>{row.cardId=target.id;row.cardName=targetName;row.amount=amount;row.date=date;row.payingAccount=account;});
+    if(!allocationRows.length){expenses.creditCardSettlementAllocations=Array.isArray(expenses.creditCardSettlementAllocations)?expenses.creditCardSettlementAllocations:[];const row={id:'CCA-'+payment.id+'-'+nature,cardId:target.id,cardName:targetName,creditCardPaymentId:payment.id,date,amount,payerNature:nature,beneficiaryNature:nature,payingAccount:account,status:'self',note:'Own share of card payment',createdBy:transfer.createdBy||'gaganlambasanki',createdAt:transfer.createdAt||at};expenses.creditCardSettlementAllocations.push(row);allocationRows.push(row);}
+    cards.auditSeq=num(cards.auditSeq)+1;
+    cards.audit=Array.isArray(cards.audit)?cards.audit:[];
+    cards.audit.push({id:'CCA-'+String(cards.auditSeq).padStart(6,'0'),at,by:'gaganlambasanki',action:'CARD_PAYMENT_CARD_REASSIGNED',subjectId:payment.id,details:{before:beforeSummary,after:{transferId:transfer.id,paymentId:payment.id,cardId:target.id,cardName:targetName,amount,date},reason:transfer.cardReassignmentReason,preservedBankReconciliation:true,preservedAmount:true,preservedDate:true}});
+    expenses.auditSeq=num(expenses.auditSeq)+1;
+    expenses.auditLog=Array.isArray(expenses.auditLog)?expenses.auditLog:[];
+    expenses.auditLog.push({id:'AUD-'+String(expenses.auditSeq).padStart(6,'0'),at,user:'gaganlambasanki',action:'CARD_PAYMENT_CARD_REASSIGNED',subjectType:'transfer',subjectId:transfer.id,nature:'PERSONAL',account:transfer.fromAccount||'',paymentId:payment.id,ip:'',device:'Owner-directed deployment',userAgent:'',before:beforeSummary,after:{transferId:transfer.id,paymentId:payment.id,cardId:target.id,cardName:targetName,amount,date},note:transfer.cardReassignmentReason});
+  }
+  const result={appliedAt:at,result:alreadyCorrect?'already_correct':'reassigned',transferId:transfer.id,paymentId:payment.id,createdPayment,fromCard:sourceName,toCard:targetName,amount,date,preservedBankReconciliation:true,preservedAmount:true,preservedDate:true,allocationRows:allocationRows.map(row=>row.id)};
+  cards.oneTimeMigrations[key]=result;
+  expenses.oneTimeMigrations=expenses.oneTimeMigrations||{};
+  expenses.oneTimeMigrations[key]=result;
+  commitStores(cards,expenses,before);
+  return !alreadyCorrect;
+}
 function validDate(value){const text=String(value||'');if(!/^\d{4}-\d{2}-\d{2}$/.test(text))return false;const date=new Date(text+'T00:00:00Z');return Number.isFinite(date.getTime())&&date.toISOString().slice(0,10)===text;}
 function reviewRevisionMatches(st,body){return Number.isSafeInteger(body&&body.reviewRevision)&&body.reviewRevision===num(st.reviewRevision);}
 function settlementSourceVisible(req,nature,account){const policy=expenseModule.creditCardSettlementPolicy;return !!(policy&&req&&NATURES.includes(nature)&&(nature!=='PERSONAL'||policy.canManagePersonalAccounting(req))&&policy.accountVisibleToReq(req,account)&&policy.allowedPayingAccount(req,nature,account));}
