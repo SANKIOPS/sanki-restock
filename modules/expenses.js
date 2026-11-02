@@ -2581,9 +2581,27 @@ router.use((req,res,next)=>{
   if(draft&&draft.originalStatementPeriod)return res.status(409).json({success:false,error:'This reconciliation is locked while its retained original statement is being restored. Finalize it to run the safe recovery, or discard it and upload the original statement again.'});
   next();
 });
+function closeDuplicateOnlyBankReconciliation(s,draft,req){
+  if(!draft||!(draft.transactions||[]).length)return null;
+  const plan=bankFinalizationImportPlan(s,draft);
+  if(plan.error||plan.rebuildImportIds.size||plan.rows.length)return null;
+  const book=(s.bankStatements||{})[bankStatementBookKey(draft.nature,draft.account)]||{},closedAt=new Date().toISOString();
+  s.bankReconciliationDuplicatePreviews=Array.isArray(s.bankReconciliationDuplicatePreviews)?s.bankReconciliationDuplicatePreviews:[];
+  const closure={id:'BRD-DUP-'+Date.now(),draftId:draft.id,nature:draft.nature,account:draft.account,from:String(draft.summary&&draft.summary.from||''),to:String(draft.summary&&draft.summary.to||''),transactionCount:draft.transactions.length,reconciledThrough:String(book.reconciledThrough||''),closedBy:req.user.username,closedAt,reason:'Every uploaded bank row was already present in finalized reconciliation history'};
+  s.bankReconciliationDuplicatePreviews.push(closure);
+  Object.values(s.bankReconciliationApprovals||{}).filter(approval=>approval.draftId===draft.id&&approval.status==='pending').forEach(approval=>{approval.status='obsolete';approval.obsoleteAt=closedAt;approval.obsoleteBy=req.user.username;approval.obsoleteReason=closure.reason;});
+  audit(s,req,'BANK_RECONCILIATION_DUPLICATE_PREVIEW_CLOSED','bank_reconciliation',draft.id,{nature:draft.nature,account:draft.account,after:closure,note:'Closed a temporary preview containing only bank rows already protected by finalized history; no financial posting was made.'});
+  delete s.bankReconciliationDrafts[draft.id];
+  saveStore(s);
+  return closure;
+}
 router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{
   const s=loadStore(),b=req.body||{},draft=(s.bankReconciliationDrafts||{})[b.draftId];
   if(!draft)return next();
+  if(canAccessBankDraft(req,s,draft)){
+    const duplicateClosure=closeDuplicateOnlyBankReconciliation(s,draft,req);
+    if(duplicateClosure)return res.json({success:true,duplicatePreviewClosed:true,message:'This temporary preview contained only transactions already reconciled in finalized history. It was closed without posting anything. Upload the next statement.',account:draft.account,reconciledThrough:duplicateClosure.reconciledThrough,balanceReconciled:true});
+  }
   const transferError=stagedOwnerPersonalTransferError(draft,s,req);if(transferError)return res.status(409).json({success:false,error:transferError+' Review the transfer again; nothing was posted.'});
   const duplicateError=stagedManagedPersonalTransferDuplicateError(s,draft);if(duplicateError)return res.status(409).json({success:false,error:duplicateError+' Nothing was posted.'});
   s.bankReconciliationApprovals=s.bankReconciliationApprovals||{};

@@ -184,6 +184,38 @@ test('same-cutoff partial reconciliation derives Oct18 opening from prior ledger
   assert.equal(read().bankReconciliationDrafts[draftId].openingResolution, undefined);
 });
 
+test('duplicate-only finalized-history preview closes its stale approval without posting or changing finalized history', async () => {
+  const stored = seed();
+  stored.bankReconciliationDrafts[draftId].transactions = [clone(stored.bankReconciliationDrafts[draftId].transactions[0])];
+  stored.bankReconciliationDrafts[draftId].summary = { from: date, to: date,
+    openingBalance: periodOpening, closingBalance: 248209.82,
+    totalDebits: 0, totalCredits: 13694, validated: true };
+  stored.bankReconciliationDrafts[draftId].resolutions = {};
+  stored.bankReconciliationApprovals = { 'BRA-DUPLICATE': { id: 'BRA-DUPLICATE', draftId,
+    nature: 'SANKI', account, from: date, to: date, status: 'pending',
+    requestedBy: 'prashant', requestedAt: date + 'T15:00:00Z' } };
+  write(stored);
+  const before = financialSnapshot(read());
+  const importsBefore = clone(read().bankStatements[account].imports);
+
+  const closed = await invoke('POST', '/api/expenses/bank-statements/finalize', {
+    body: { draftId, approveRequestId: 'BRA-DUPLICATE' }
+  });
+
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  assert.equal(closed.body.duplicatePreviewClosed, true);
+  assert.equal(closed.body.reconciledThrough, date);
+  const after = read();
+  assert.equal(after.bankReconciliationDrafts[draftId], undefined);
+  assert.equal(after.bankReconciliationApprovals['BRA-DUPLICATE'].status, 'obsolete');
+  assert.equal(after.bankReconciliationApprovals['BRA-DUPLICATE'].obsoleteReason,
+    'Every uploaded bank row was already present in finalized reconciliation history');
+  assert.deepEqual(after.bankStatements[account].imports, importsBefore,
+    'the protected finalized statement is not duplicated or rewritten');
+  assert.equal(financialSnapshot(after), before, 'closing the stale preview posts no money');
+  assert.equal(after.bankReconciliationDuplicatePreviews.at(-1).draftId, draftId);
+});
+
 // Reproduce the live topology, not a lifetime ledger invented to equal the
 // statement: an Oct15 verified closing, Oct16/17 activity subsequently covered
 // by a partial Oct18 finalization, and unreconciled Oct18 transfer decisions.
