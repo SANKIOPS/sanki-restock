@@ -33,7 +33,7 @@ const path   = require('path');
 // and enforces which pages each role may open. Basic-auth + x-api-key are
 // kept as admin fallbacks so scripts/automation and the bootstrap admin
 // never get locked out.
-const { verifySession, userCanAccessPath, rolesOf, landingFor, isPrashant } = require('./modules/auth-users');
+const { verifySession, userCanAccessPath, rolesOf, landingFor, isPrashant, hasUserPermission } = require('./modules/auth-users');
 
 // Static asset extensions any logged-in user may fetch regardless of role
 // (JS/CSS/images the shared pages need). Page/navigation requests are gated.
@@ -148,6 +148,11 @@ function apiRuleFor(p) {
 }
 
 function apiAllowedForUser(user, p, method='GET') {
+  // Meta Ads is independently delegated per person. Grant the complete
+  // section only while the Owner-controlled switch is on.
+  if (p === '/api/marketing/meta' || p.startsWith('/api/marketing/meta/')) {
+    return rolesOf(user).includes('owner') || hasUserPermission(user, 'metaAds');
+  }
   if (isPrashant(user)) {
     const allowed = [
       '/api/auth/me', '/api/modules',
@@ -161,7 +166,6 @@ function apiAllowedForUser(user, p, method='GET') {
     return allowed.some(prefix => p === prefix || p.startsWith(prefix));
   }
   const userRoles = rolesOf(user);
-  if (p === '/api/marketing/meta' || p.startsWith('/api/marketing/meta/')) return userRoles.includes('owner');
   // Rack assignment, catalogue refresh and RIS synchronization are Owner-only.
   // Search itself stays available to the dedicated view-only Stylists role.
   const ownerOnlyStockAction = p.startsWith('/api/racks') || p === '/api/stock-search/refresh';
@@ -241,7 +245,7 @@ function gate(req, res, next) {
 
   // The Money Picture and its capital/OD APIs are private to the Owner role,
   // even when another account has ordinary Admin access.
-  if ((p === '/owner.html' || p === '/rentals.html' || p === '/meta-ads.html' || p === '/catalogue-images.html' || p.startsWith('/api/owner/') || p.startsWith('/api/catalogue-images')) && !rolesOf(user).includes('owner') && !(isPrashant(user) && p === '/rentals.html')) {
+  if ((p === '/owner.html' || p === '/rentals.html' || p === '/catalogue-images.html' || p.startsWith('/api/owner/') || p.startsWith('/api/catalogue-images')) && !rolesOf(user).includes('owner') && !(isPrashant(user) && p === '/rentals.html')) {
     if (p.startsWith('/api/')) return res.status(403).json({ success: false, error: 'Owner only.' });
     return res.redirect(302, landingFor(user.role));
   }
@@ -251,6 +255,11 @@ function gate(req, res, next) {
   if (!rolesOf(user).length) {
     if (p.startsWith('/api/')) return res.status(403).json({ success: false, error: 'No valid role assigned' });
     return res.redirect(302, '/login.html');
+  }
+
+  if (p === '/meta-ads.html') {
+    if (rolesOf(user).includes('owner') || hasUserPermission(user, 'metaAds')) return next();
+    return res.redirect(302, landingFor(user.role));
   }
 
   // API permissions are enforced independently of page visibility. Unknown

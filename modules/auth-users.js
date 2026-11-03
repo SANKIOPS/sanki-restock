@@ -54,6 +54,11 @@ const USER_PERMISSION_CATALOG = [
     id: 'personalAccounting',
     label: 'Personal accounting — full access',
     description: 'View and operate all PERSONAL expenses, accounts, ledgers, transfers and reconciliations.'
+  },
+  {
+    id: 'metaAds',
+    label: 'Meta Ads — full access',
+    description: 'View and operate the Meta Ads section, including campaigns, creatives, imports, results and change history.'
   }
 ];
 const USER_PERMISSION_IDS = USER_PERMISSION_CATALOG.map(x => x.id);
@@ -528,7 +533,7 @@ router.post('/api/admin/users/permissions', requireOwner, (req, res) => {
   const body = req.body || {}, username = String(body.username || '').trim();
   const store = loadUsers(), user = store.users.find(x => x.username === username);
   if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-  if (normalizeRoles(user).includes('owner')) return res.status(400).json({ success: false, error: 'The Owner always has full PERSONAL access.' });
+  if (normalizeRoles(user).includes('owner')) return res.status(400).json({ success: false, error: 'The Owner always has all special access.' });
   const requested = body.permissions && typeof body.permissions === 'object' ? body.permissions : {};
   user.permissions = Object.fromEntries(USER_PERMISSION_IDS.map(id => [id, requested[id] === true]));
   saveUsers(store);

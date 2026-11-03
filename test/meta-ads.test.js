@@ -22,12 +22,12 @@ async function fixture(t, options = {}) {
   const store = createStore({ file, seed, clock: () => '2026-10-12T12:00:00.000Z', ...options });
   const router = createRouter(store);
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  async function call(method, suffix = '', body, role = 'owner') {
+  async function call(method, suffix = '', body, role = 'owner', permissions = {}) {
     // Exercise the actual Express middleware and routes without opening sockets.
     // server.js parses JSON before mounting this router; _body models that input.
     return new Promise((resolve, reject) => {
       const req = { method, url: `/api/marketing/meta${suffix}`, headers: { 'content-type': 'application/json' }, body, _body: true };
-      if (role !== 'anonymous') req.user = { username: 'marketing-test', roles: [role], role };
+      if (role !== 'anonymous') req.user = { username: 'marketing-test', roles: [role], role, permissions };
       const res = {
         statusCode: 200,
         setHeader() {},
@@ -58,6 +58,22 @@ test('marketing API and launcher are owner-only, including ordinary admin', asyn
   assert.equal(apiAllowedForUser({ roles: ['owner'] }, '/api/marketing/meta'), true);
   assert.equal(visibleFor({ roles: ['owner'] }).some(module => module.key === 'meta-ads'), true);
   assert.equal((await call('GET')).statusCode, 200);
+});
+
+test('Owner can delegate and revoke complete Meta Ads access per user', async t => {
+  const { call } = await fixture(t);
+  const delegated = { metaAds: true };
+  for (const role of ['admin', 'accounting', 'claimant']) {
+    const user = { username: `delegated-${role}`, roles: [role], role, permissions: delegated };
+    assert.equal(apiAllowedForUser(user, '/api/marketing/meta'), true, role);
+    assert.equal(apiAllowedForUser(user, '/api/marketing/meta/ads', 'POST'), true, role);
+    assert.equal(visibleFor(user).some(module => module.key === 'meta-ads'), true, role);
+    assert.equal((await call('GET', '', undefined, role, delegated)).statusCode, 200, role);
+  }
+  const revoked = { username: 'revoked-admin', roles: ['admin'], role: 'admin', permissions: { metaAds: false } };
+  assert.equal(apiAllowedForUser(revoked, '/api/marketing/meta'), false);
+  assert.equal(visibleFor(revoked).some(module => module.key === 'meta-ads'), false);
+  assert.equal((await call('GET', '', undefined, 'admin', { metaAds: false })).statusCode, 403);
 });
 
 test('synthetic seed imports once and preserves unknown metadata and observations', async t => {

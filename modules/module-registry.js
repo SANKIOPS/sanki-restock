@@ -20,7 +20,7 @@
 const express = require('express');
 const router = express.Router();
 
-let verifySession, allowedPagesForUser, rolesOf, registerModules, userCanAccessPath;
+let verifySession, allowedPagesForUser, rolesOf, registerModules, userCanAccessPath, hasUserPermission;
 try {
   const au = require('./auth-users');
   verifySession = au.verifySession;
@@ -28,12 +28,14 @@ try {
   rolesOf = au.rolesOf;
   registerModules = au.registerModules;
   userCanAccessPath = au.userCanAccessPath;
+  hasUserPermission = au.hasUserPermission;
 } catch {
   verifySession = () => null;
   allowedPagesForUser = () => [];
   rolesOf = (u) => (u && u.roles) || (u && u.role ? [u.role] : []);
   registerModules = () => {};
   userCanAccessPath = () => false;
+  hasUserPermission = () => false;
 }
 
 // Section order controls how groups stack in the sidebar / dashboard.
@@ -69,7 +71,7 @@ const MODULES = [
   { key: 'expenses',     title: 'Ledgers',               desc: 'Expenses, payments, account movements and reconciliations', icon: '🧾', href: '/expenses.html',    section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'samast_accounting', 'personal_claimant', 'claimant', 'owner'] },
   { key: 'model-calendar', title: 'Model Calendar', desc: 'Schedule models, track packages and linked expense payments', icon: '📅', href: '/model-calendar.html', section: 'Marketing', status: 'live', roles: ['admin', 'accounting', 'owner', 'model_calendar'] },
   { key: 'seo-control', title: 'SEO', desc: 'SEO, AEO and GEO tasks, cadence, evidence and progress', icon: '◎', href: '/seo-control.html', section: 'SEO', status: 'live', roles: ['owner'], ownerOnly: true },
-  { key: 'meta-ads', title: 'Meta Ads', desc: 'Campaign settings, creative tests, results and change history', icon: '◈', href: '/meta-ads.html', section: 'Marketing', status: 'live', roles: ['owner'], ownerOnly: true },
+  { key: 'meta-ads', title: 'Meta Ads', desc: 'Campaign settings, creative tests, results and change history', icon: '◈', href: '/meta-ads.html', section: 'Marketing', status: 'live', roles: ['owner'], ownerOnly: true, delegatedPermission: 'metaAds' },
   { key: 'catalogue-images', title: 'Catalogue Images', desc: 'Stage, visually verify and publish consistent three-image product galleries', icon: '▧', href: '/catalogue-images.html', section: 'Marketing', status: 'live', roles: ['owner'], ownerOnly: true },
   { key: 'salary',       title: 'Salary',                desc: 'Payroll + attendance — pay from days worked, posted to the Results', icon: '👛', href: '/salary.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
   { key: 'incentives',   title: 'Sales incentives',      desc: 'POS salesperson incentives from eligible cash, UPI and card receipts', icon: '🎯', href: '/incentives.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
@@ -98,7 +100,7 @@ function visibleFor(user) {
   // union'd across all of the user's roles. A module shows when its page path
   // is in that allow-list. Admin sees everything not hidden.
   const allowed = isPrashant ? allowedPagesForUser(user) : (isAdmin || isOwner) ? '*' : allowedPagesForUser(user);
-  const canSee = (m) => m.navigationOnly ? userCanAccessPath(user, modulePath(m.href)) : isPrashant
+  const canSee = (m) => m.delegatedPermission && hasUserPermission(user, m.delegatedPermission) ? true : m.navigationOnly ? userCanAccessPath(user, modulePath(m.href)) : isPrashant
     ? Array.isArray(allowed) && allowed.includes(modulePath(m.href))
     : m.ownerOnly ? isOwner : (allowed === '*' || (Array.isArray(allowed) && allowed.includes(modulePath(m.href))));
   return MODULES
