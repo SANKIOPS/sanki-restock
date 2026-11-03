@@ -78,6 +78,11 @@
         <label>Roles</label>
         <div class="checks" id="n-roles"></div>
       </div>
+      <div id="n-special-wrap" style="margin-top:12px;display:none;">
+        <label>Special access</label>
+        <div class="checks" id="n-special"></div>
+        <p class="hint">You may create a user with only special access; no general role is required.</p>
+      </div>
       <div style="margin-top:14px;"><button id="add-btn">Add user</button></div>
       <div class="msg" id="add-msg"></div>
     </div>
@@ -113,6 +118,11 @@
       el.textContent = text || '';
       el.className = 'msg' + (kind ? ' ' + kind : '');
     }
+
+    function roleLabel(id) {
+      var found = ROLES.find(function (role) { return role.id === id; });
+      return found ? found.label : id;
+    }
     function api(url, payload) {
       return fetch(url, {
         method: 'POST',
@@ -131,7 +141,7 @@
       host.textContent = '';
       var sel = {}; (selected || []).forEach(function (r) { sel[r] = 1; });
       var boxes = [];
-      ROLES.forEach(function (r) {
+      ROLES.filter(function (r) { return !r.assignmentHidden; }).forEach(function (r) {
         var lab = document.createElement('label'); lab.className = 'chk';
         var cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = r.id;
         if (sel[r.id]) cb.checked = true;
@@ -165,7 +175,7 @@
         var tdRole = document.createElement('td');
         var pills = document.createElement('div');
         (u.roles || []).forEach(function (r) {
-          var s = document.createElement('span'); s.className = 'role-pill'; s.textContent = r;
+          var s = document.createElement('span'); s.className = 'role-pill'; s.textContent = roleLabel(r);
           pills.appendChild(s);
         });
         var editor = document.createElement('div');
@@ -287,7 +297,7 @@
     function renderPermissions() {
       var host = document.getElementById('perm-host');
       host.textContent = '';
-      ROLES.forEach(function (r) {
+      ROLES.filter(function (r) { return !r.assignmentHidden; }).forEach(function (r) {
         var block = document.createElement('div'); block.className = 'perm-block';
         var head = document.createElement('div'); head.className = 'perm-head';
         var name = document.createElement('strong'); name.textContent = r.label;
@@ -381,17 +391,33 @@
     }
 
     var readAddRoles = function () { return []; };
+    var readAddPermissions = function () { return {}; };
     function renderAddRoles() {
       readAddRoles = roleChecks(document.getElementById('n-roles'), []);
+      var host = document.getElementById('n-special'); host.textContent = '';
+      var wrap = document.getElementById('n-special-wrap');
+      var boxes = [];
+      if (CAN_EDIT_USER_PERMISSIONS) USER_PERMISSIONS.forEach(function (permission) {
+        var lab = document.createElement('label'); lab.className = 'chk'; lab.title = permission.description || '';
+        var cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = permission.id;
+        lab.appendChild(cb); lab.appendChild(document.createTextNode(permission.label));
+        host.appendChild(lab); boxes.push(cb);
+      });
+      wrap.style.display = boxes.length ? '' : 'none';
+      readAddPermissions = function () {
+        var permissions = {}; boxes.forEach(function (box) { permissions[box.value] = box.checked; }); return permissions;
+      };
     }
 
     document.getElementById('add-btn').addEventListener('click', function () {
       var username = document.getElementById('n-user').value.trim();
       var password = document.getElementById('n-pass').value;
       var roles = readAddRoles();
+      var permissions = readAddPermissions();
+      var hasSpecialAccess = Object.keys(permissions).some(function (key) { return permissions[key]; });
       if (!username || !password) { setMsg(document.getElementById('add-msg'), 'Enter a username and password', 'err'); return; }
-      if (!roles.length) { setMsg(document.getElementById('add-msg'), 'Pick at least one role', 'err'); return; }
-      api('/api/admin/users', { username: username, password: password, roles: roles }).then(function (d) {
+      if (!roles.length && !hasSpecialAccess) { setMsg(document.getElementById('add-msg'), 'Pick at least one role or special access option', 'err'); return; }
+      api('/api/admin/users', { username: username, password: password, roles: roles, permissions: permissions }).then(function (d) {
         if (d.success) {
           setMsg(document.getElementById('add-msg'), 'Added ' + d.username + ' (' + (d.roles || []).join(', ') + ')', 'ok');
           document.getElementById('n-user').value = '';

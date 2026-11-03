@@ -54,6 +54,11 @@ const USER_PERMISSION_CATALOG = [
     id: 'personalAccounting',
     label: 'Personal accounting — full access',
     description: 'View and operate all PERSONAL expenses, accounts, ledgers, transfers and reconciliations.'
+  },
+  {
+    id: 'metaAds',
+    label: 'Meta Ads — full access',
+    description: 'View and operate the Meta Ads section, including campaigns, creatives, imports, results and change history.'
   }
 ];
 const USER_PERMISSION_IDS = USER_PERMISSION_CATALOG.map(x => x.id);
@@ -100,6 +105,7 @@ const ROLES = [
   { id: 'claimant',    label: 'Claimant (log expenses only)' },
   { id: 'revenue',     label: 'Revenue / Accounts' },
   { id: 'warehouse',   label: 'Warehouse / Rack' },
+  { id: 'special_access', label: 'Special access only', assignmentHidden: true },
   // Keep the stable role id so existing assigned users continue to work, but
   // present the role by its operational name in Users & Roles.
   { id: 'stocksearch', label: 'Stylists (Stock Search & Inventory — view only)' }
@@ -122,7 +128,8 @@ const ROLE_HOME = {
   claimant:    '/expenses.html',
   revenue:     '/dashboard.html',
   warehouse:   '/dashboard.html',
-  stocksearch: '/rack-locations.html'
+  stocksearch: '/rack-locations.html',
+  special_access: '/dashboard.html'
 };
 // '*' = all pages. Otherwise an allow-list of exact page paths. This is the
 // DEFAULT (seed) map — the admin can override it per role (persisted in the
@@ -140,7 +147,8 @@ const DEFAULT_ROLE_PAGES = {
   claimant:    ['/expenses.html'],
   revenue:     ['/orders.html', '/coming-soon.html'],
   warehouse:   ['/orders.html', '/rack-locations.html'],
-  stocksearch: ['/rack-locations.html', '/inventory.html']
+  stocksearch: ['/rack-locations.html', '/inventory.html'],
+  special_access: ['/dashboard.html']
 };
 
 // The module registry pushes its catalog here at boot (avoids a circular
@@ -477,15 +485,20 @@ router.get('/api/admin/users', requireAdmin, (req, res) => {
 router.post('/api/admin/users', requireAdmin, (req, res) => {
   const b = req.body || {};
   const uname = String(b.username || '').trim();
-  const roles = rolesFromBody(b);
+  let roles = rolesFromBody(b).filter(role => role !== 'special_access');
+  const requestedPermissions = b.permissions && typeof b.permissions === 'object' ? b.permissions : {};
+  const permissions = Object.fromEntries(USER_PERMISSION_IDS.map(id => [id, requestedPermissions[id] === true]));
+  const hasSpecialAccess = permissions.metaAds === true;
   if (!uname) return res.json({ success: false, error: 'Username required' });
   if (!b.password || String(b.password).length < 4) return res.json({ success: false, error: 'Password must be at least 4 characters' });
-  if (!roles.length) return res.json({ success: false, error: 'Pick at least one role' });
+  if (hasSpecialAccess && !rolesOf(req.user).includes('owner')) return res.status(403).json({ success: false, error: 'Only the Owner can grant special access.' });
+  if (!roles.length && hasSpecialAccess) roles = ['special_access'];
+  if (!roles.length) return res.json({ success: false, error: 'Pick at least one role or special access option' });
   const store = loadUsers();
   if (store.users.some(u => u.username === uname)) return res.json({ success: false, error: 'That username already exists' });
-  store.users.push({ username: uname, roles, password: hashPassword(b.password), createdAt: Date.now() });
+  store.users.push({ username: uname, roles, permissions, password: hashPassword(b.password), createdAt: Date.now() });
   saveUsers(store);
-  res.json({ success: true, username: uname, roles });
+  res.json({ success: true, username: uname, roles, permissions });
 });
 
 function resetPassword(req, res) {
@@ -528,7 +541,7 @@ router.post('/api/admin/users/permissions', requireOwner, (req, res) => {
   const body = req.body || {}, username = String(body.username || '').trim();
   const store = loadUsers(), user = store.users.find(x => x.username === username);
   if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-  if (normalizeRoles(user).includes('owner')) return res.status(400).json({ success: false, error: 'The Owner always has full PERSONAL access.' });
+  if (normalizeRoles(user).includes('owner')) return res.status(400).json({ success: false, error: 'The Owner always has all special access.' });
   const requested = body.permissions && typeof body.permissions === 'object' ? body.permissions : {};
   user.permissions = Object.fromEntries(USER_PERMISSION_IDS.map(id => [id, requested[id] === true]));
   saveUsers(store);

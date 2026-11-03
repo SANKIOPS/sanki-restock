@@ -57,10 +57,10 @@
     <p id="exclusionError" class="form-error" role="alert"></p><div class="exclusion-buttons"><button type="button" id="exclusionRefresh">Refresh impact preview</button><button type="submit" class="primary" id="exclusionSave" disabled>Exclude order and recalculate</button><button type="button" data-close>Cancel</button></div>
   </div></form></dialog>
 
-  <dialog id="paymentDialog"><form id="paymentForm" method="dialog"><div class="dialog-head"><div><h2>Record incentive payment</h2><p id="paymentBalance" class="muted"></p></div><button type="button" data-close aria-label="Close">×</button></div><div class="dialog-body grid">
-    <input id="paymentPerson" type="hidden"><label>Amount ₹<input id="paymentAmount" type="number" min="0.01" step="0.01" required></label><label>Payment date<input id="paymentDate" type="date" required></label><label>Paying account<select id="paymentAccount"></select></label><label>Reference<input id="paymentReference" maxlength="100"></label><label class="full">Payment proof<input id="paymentProof" type="file" accept="image/*,.pdf" multiple required></label><label class="full">Note<textarea id="paymentNote" maxlength="500"></textarea></label><p class="form-error full" id="paymentError"></p><button class="primary full" type="submit">Record payment</button>
+  <dialog id="paymentDialog"><form id="paymentForm" method="dialog"><div class="dialog-head"><div><h2 id="paymentTitle">Record incentive payment</h2><p id="paymentBalance" class="muted"></p></div><button type="button" data-close aria-label="Close">×</button></div><div class="dialog-body grid">
+    <input id="paymentPerson" type="hidden"><input id="paymentId" type="hidden"><label>Amount ₹<input id="paymentAmount" type="number" min="0.01" step="0.01" required></label><label>Payment date<input id="paymentDate" type="date" required></label><label>Paying account<select id="paymentAccount"></select></label><label>Reference<input id="paymentReference" maxlength="100"></label><label class="full">Payment proof<input id="paymentProof" type="file" accept="image/*,.pdf" multiple><span id="paymentExistingProofs" class="subline"></span></label><label class="full">Note<textarea id="paymentNote" maxlength="500"></textarea></label><label class="full" id="paymentReasonWrap" hidden>Reason for correction (required)<textarea id="paymentReason" maxlength="500"></textarea></label><p class="form-error full" id="paymentError"></p><button id="paymentSubmit" class="primary full" type="submit">Record payment</button>
   </div></form></dialog>
 
-  <script src="/sidebar.js"></script><script src="/incentives.js?v=20261025-manual-exclusions"></script>
+  <script src="/sidebar.js"></script><script src="/incentives.js?v=20261103-edit-payments"></script>
 </body>
 </html>

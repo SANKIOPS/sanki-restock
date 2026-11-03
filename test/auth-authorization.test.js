@@ -212,12 +212,17 @@ test('confirmed owner account always retains distinct owner access', () => {
   assert.equal(apiAllowedForUser({ roles: ['accounting'] }, '/api/owner/summary'), false);
 });
 
-test('Owner has an extensible per-user switch for private PERSONAL accounting', () => {
+test('Owner has extensible per-user switches for sensitive sections', () => {
   const fs = require('node:fs'), path = require('node:path');
   const usersSource = fs.readFileSync(path.join(__dirname, '..', 'modules', 'auth-users.js'), 'utf8');
   const adminSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'admin-users.html'), 'utf8');
   const expenseSource = fs.readFileSync(path.join(__dirname, '..', 'modules', 'expenses.js'), 'utf8');
   assert.match(usersSource, /id: 'personalAccounting'/);
+  assert.match(usersSource, /id: 'metaAds'/);
+  assert.match(usersSource, /id: 'special_access'/);
+  assert.match(usersSource, /!roles\.length && hasSpecialAccess/);
+  assert.match(adminSource, /Pick at least one role or special access option/);
+  assert.match(adminSource, /permissions: permissions/);
   assert.match(usersSource, /router\.post\('\/api\/admin\/users\/permissions', requireOwner/);
   assert.match(usersSource, /verifySession[\s\S]*permissions: normalizeUserPermissions\(u\)/);
   assert.match(adminSource, /permission\.label/);

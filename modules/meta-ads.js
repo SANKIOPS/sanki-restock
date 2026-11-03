@@ -7,7 +7,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { rolesOf } = require('./auth-users');
+const { rolesOf, hasUserPermission } = require('./auth-users');
 
 const BASE = '/api/marketing/meta';
 const VERSION = 1;
@@ -518,7 +518,7 @@ function createRouter(store = createStore()) {
   const router = express.Router();
   router.use(BASE, (req, res, next) => {
     if (!req.user) return res.status(401).json({ success: false, error: 'Unauthorized' });
-    if (!rolesOf(req.user).includes('owner')) return res.status(403).json({ success: false, error: 'Owner only.' });
+    if (!rolesOf(req.user).includes('owner') && !hasUserPermission(req.user, 'metaAds')) return res.status(403).json({ success: false, error: 'Meta Ads access has not been granted.' });
     res.setHeader('Cache-Control', 'no-store');
     next();
   });
