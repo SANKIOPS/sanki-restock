@@ -43,6 +43,7 @@ const SCHEMAS = {
   results: {
     reportedSetDelivery:['text',100],reportGoal:['text',250],reportDestination:['text',160],resultIndicator:['text',200], attributionSetting:['text',200], reportedDelivery:['text',100],
     adSetId: ['id', true], adId: ['id'], periodStart: ['date', true], periodEnd: ['date', true],
+    frequency:['number'],
     ...Object.fromEntries(METRICS.map(key => [key, [MONEY.has(key) ? 'number' : 'count']])),
     source: ['text', 200], notes: ['text', 5000]
   }
