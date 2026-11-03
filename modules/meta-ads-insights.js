@@ -20,7 +20,7 @@ function selectRange(reports,start,end){
     }
     covers.sort((a,b)=>Math.max(...b.map(r=>Date.parse(r.updatedAt)||0))-Math.max(...a.map(r=>Date.parse(r.updatedAt)||0)));
     if(!covers.length){missing.push(id);continue;}
-    const parts=covers[0],row={...(parts.find(r=>!neutral(r))||parts[0]),periodStart:start,periodEnd:end,combinedRows:parts.length};
+    const parts=covers[0],row={...(parts.find(r=>!neutral(r))||parts[0]),periodStart:start,periodEnd:end,combinedRows:parts.length,frequency:null};
     for(const k of metrics)row[k]=k==='reach'?null:parts.every(r=>r[k]!=null||neutral(r))?parts.reduce((n,r)=>n+(r[k]??0),0):null;
     selected.push(row);
   }
@@ -51,7 +51,7 @@ function insights(state,selectedPeriod) {
     const prior=reports.filter(x=>x.adId===r.adId&&x.periodEnd<r.periodStart&&duration(x)===duration(r)&&x.attributionSetting===r.attributionSetting&&(x.reportGoal||goal)===goal).sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd))[0];
     const previousCost=prior&&metric&&prior[metric]>0&&prior.spend!=null?prior.spend/prior[metric]*costFactor:null;
     const campaign=state.campaigns?.find(c=>c.id===set.campaignId);
-    const item={...Object.fromEntries(metrics.map(k=>[k,r[k]??null])),ad:ad.name,adSet:set.name,adSetId:set.id,campaignId:set.campaignId,campaign:campaign?.name||'',adId:ad.id,goal:label,metric,costFactor,attribution:r.attributionSetting,collection:ad.collection||set.collection||'',creativeTypes:ad.creativeTypes||[],locations:set.locations||[],interests:set.interests||[],behaviors:set.behaviors||[],spend:r.spend,count,cost,previousDate:prior?(prior.periodStart===prior.periodEnd?prior.periodStart:prior.periodStart+' – '+prior.periodEnd):null,previousCost,impressions:r.impressions,reach:r.reach,videoPlays3s:r.videoPlays3s,thruPlays:r.thruPlays,reportedDelivery:r.reportedDelivery,storeVisits:r.storeVisits,orders:r.orders,revenue:r.revenue};
+    const item={...Object.fromEntries(metrics.map(k=>[k,r[k]??null])),ad:ad.name,adSet:set.name,adSetId:set.id,campaignId:set.campaignId,campaign:campaign?.name||'',adId:ad.id,goal:label,metric,costFactor,frequency:r.frequency??null,attribution:r.attributionSetting,collection:ad.collection||set.collection||'',creativeTypes:ad.creativeTypes||[],locations:set.locations||[],interests:set.interests||[],behaviors:set.behaviors||[],spend:r.spend,count,cost,previousDate:prior?(prior.periodStart===prior.periodEnd?prior.periodStart:prior.periodStart+' – '+prior.periodEnd):null,previousCost,impressions:r.impressions,reach:r.reach,videoPlays3s:r.videoPlays3s,thruPlays:r.thruPlays,reportedDelivery:r.reportedDelivery,storeVisits:r.storeVisits,orders:r.orders,revenue:r.revenue};
     creatives.push(item);
     if(metric&&cost!==null){const key=label+' · '+(r.attributionSetting||'attribution unconfirmed')+' · '+(goal||'goal unconfirmed');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
     if(r.impressions===0&&r.spend===0)actions.push({priority:3,title:'No delivery to judge',ad:ad.name,reason:'This report has zero spend and zero impressions.',next:'Check delivery in Meta if this ad was intended to run. Keep it unranked until it delivers.'});
