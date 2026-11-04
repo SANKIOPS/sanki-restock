@@ -137,6 +137,20 @@ async function preview(selectedDraftId = draftId) {
   return result.body.draft;
 }
 
+test('saved reconciliation loads compact history and fetches finalized rows only on demand', async () => {
+  seed();
+  const saved = await invoke('GET', '/api/expenses/bank-statements', { query: { nature:'SANKI', account, draftId } });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.imports.length, 1);
+  assert.equal(saved.body.imports[0].historyRows, 1);
+  assert.equal(saved.body.imports[0].historyLoaded, false);
+  assert.equal(saved.body.imports[0].reconciliationRows, undefined);
+  const history = await invoke('GET', '/api/expenses/bank-statements/history/' + previousImportId, { query: { nature:'SANKI', account } });
+  assert.equal(history.status, 200);
+  assert.equal(history.body.record.historyLoaded, true);
+  assert.equal(history.body.record.reconciliationRows.length, 1);
+});
+
 function financialSnapshot(store) {
   const expenses = Object.values(store.expenses).map(expense => ({ id: expense.id, nature: expense.nature,
     date: expense.date, status: expense.status, amount: expense.amount, paidAmount: expense.paidAmount,
