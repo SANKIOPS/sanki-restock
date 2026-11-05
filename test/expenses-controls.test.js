@@ -60,6 +60,22 @@ test('compact UPI RVS narration pairs a failed debit with its returned credit',(
   assert.equal(pairs[0].amount,300);
 });
 
+test('missing-bank expense refund is retained as a timing difference instead of being excluded',()=>{
+  const file=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(file)?fs.readFileSync(file):null,stored=baseline?JSON.parse(baseline):{},account='Axis Bank 3448',draftId='BRD-REFUND-TIMING',receiptId='REC-REFUND-TIMING',refundId='RF-REFUND-TIMING',date='2098-06-05';
+  stored.expenses=stored.expenses||{};
+  stored.expenses['EX-REFUND-TIMING']={id:'EX-REFUND-TIMING',nature:'SANKI',date,amount:134,paidAmount:134,status:'paid',approvedAt:date+'T08:00:00Z',vendor:'Porter',payments:[{id:'PAY-001',date,amount:134,account}]};
+  stored.receipts=[{id:receiptId,expenseRefundId:refundId,nature:'SANKI',date,account,amount:134,source:'Porter',receiptType:'expense_refund'}];
+  stored.expenseRefunds=[{id:refundId,nature:'SANKI',date,status:'received',amount:134,vendor:'Porter',sources:[{expenseId:'EX-REFUND-TIMING',paymentAllocations:[{paymentId:'PAY-001',amount:134,account}]}],components:[{id:'PART-001',mode:'bank',amount:134,receiver:'company',account,receiptId}]}];
+  stored.bankStatements={};stored.openingBalances=Object.assign({},stored.openingBalances,{[account]:0});stored.bankReconciliationDrafts={[draftId]:{id:draftId,nature:'SANKI',account,transactions:[],summary:{from:date,to:date,openingBalance:0,closingBalance:0,totalDebits:0,totalCredits:0,validated:true},resolutions:{},createdBy:'gaganlambasanki',createdAt:new Date().toISOString(),expiresAt:'2099-01-01T00:00:00.000Z'}};
+  fs.writeFileSync(file,JSON.stringify(stored));
+  const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId,account}}),row=view.body.rows.find(value=>value.app&&value.app.id===receiptId);
+  assert.equal(view.status,200);assert.equal(row.status,'missing_in_bank');assert.equal(row.app.kind,'expense_refund');
+  const resolved=invoke('POST','/api/expenses/bank-statements/resolve',{role:'owner',body:{draftId,rowId:row.id,action:'exclude',reason:'Already logged refund; bank entry belongs to another statement'}});
+  assert.equal(resolved.status,200,JSON.stringify(resolved.body));
+  const saved=JSON.parse(fs.readFileSync(file));assert.equal(saved.receipts.find(value=>value.id===receiptId).accountingExcluded,undefined);assert.equal(saved.bankReconciliationDrafts[draftId].resolutions[row.id].action,'timing_difference');assert.equal(saved.bankReconciliationDrafts[draftId].resolutions[row.id].protectedSourceRetained,true);
+  if(baseline)fs.writeFileSync(file,baseline);else fs.rmSync(file,{force:true});
+});
+
 test('ICICI 0992 Sep 6 repair pairs the failed 300 debit and reversal while preserving the successful retry',()=>{
   const draftId='BRD-ICICI0992-SEP06',store={oneTimeMigrations:{},auditLog:[],auditSeq:0,receipts:[{id:'REC-00081',date:'2026-09-06',amount:300,account:'ICICI Bank 0992',from:'RVSLLUVKUS'}],bankDateOverrides:{'REC-00081':{bankDate:'2026-09-06',reconciliationDraft:draftId}},bankReconciliationLinks:{'REC-00081':{reconciliationDraft:draftId}},bankReconciliationApprovals:{APP:{id:'APP',draftId,status:'pending'}},bankReconciliationDrafts:{[draftId]:{id:draftId,nature:'PERSONAL',account:'ICICI Bank 0992',transactions:[{date:'2026-09-06',description:'UPI/RVSLLUVKUS/7982361268@axl/UPI/Kotak Mahi',reference:'7982361268',debit:0,credit:300},{date:'2026-09-06',description:'UPI/LUVKUSH/7982361268-2@i/UPI/INDUSIND B',reference:'7982361268',debit:300,credit:0},{date:'2026-09-06',description:'UPI/LUVKUSH/7982361268@axl/UPI/Kotak Mahi',reference:'7982361268',debit:300,credit:0}],resolutions:{'bank-0':{action:'link_existing',appId:'REC-00081'},'bank-1':{action:'create_expense',appId:'EX-01028/PAY-001',vendor:'Common Vendor',category:'Miscellaneous Expenses'}}}}};
   assert.deepEqual(bankReversalPairCandidates(store.bankReconciliationDrafts[draftId].transactions).map(pair=>pair.bankRowIds),[['bank-2','bank-0']]);
