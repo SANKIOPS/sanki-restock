@@ -7557,7 +7557,6 @@ router.post('/api/expenses/balances', (req, res) => {
     if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can set an opening balance.' });
     const requestedOpeningAccount=String(b.setOpening.account||'').trim(),openingAccount=ledgerAccountsForNature(s,nature).find(account=>account.toLowerCase()===requestedOpeningAccount.toLowerCase())||'';
     if (!openingAccount) return res.status(400).json({ success:false, error:'Select an account assigned to this entity.' });
-    if(Object.values(s.bankReconciliationDrafts||{}).some(draft=>draft.originalStatementPeriod&&draft.account===openingAccount&&normalizedNature(draft.nature)===nature))return res.status(409).json({success:false,error:'This account has a reconciliation locked for safe recovery. Finalize or discard that temporary preview before changing its opening balance.'});
     const rawAmount=String(b.setOpening.amount==null?'':b.setOpening.amount).trim(),amount=Number(rawAmount),effectiveDate=String(b.setOpening.effectiveDate||'').slice(0,10),reason=String(b.setOpening.reason||'').trim();
     if(rawAmount===''||!Number.isFinite(amount))return res.status(400).json({success:false,error:'Enter a valid opening balance. Zero and negative balances are allowed.'});
     if(!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)||Number.isNaN(new Date(effectiveDate+'T00:00:00Z').getTime()))return res.status(400).json({success:false,error:'Choose a valid effective date.'});

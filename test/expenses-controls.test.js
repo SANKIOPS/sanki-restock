@@ -3894,7 +3894,7 @@ test('IndusInd 8181 is a complete SANKI bank account from 5 September 2026',()=>
 });
 
 test('only the Owner can set a dated custom opening balance with an audit reason',()=>{
-  const expenseFile=path.join(tempDir,'expenses.json'),before=JSON.parse(fs.readFileSync(expenseFile,'utf8'));before.bankReconciliationDrafts=before.bankReconciliationDrafts||{};before.bankReconciliationDrafts['OPENING-LIVE']={id:'OPENING-LIVE',nature:'SANKI',account:'Prashant Axis 3645',transactions:[],summary:{from:'2026-09-06',to:'2026-09-06',closingBalance:0},resolutions:{},openingResolution:{amount:999,reason:'stale'}};fs.writeFileSync(expenseFile,JSON.stringify(before));
+  const expenseFile=path.join(tempDir,'expenses.json'),before=JSON.parse(fs.readFileSync(expenseFile,'utf8'));before.bankReconciliationDrafts=before.bankReconciliationDrafts||{};before.bankReconciliationDrafts['OPENING-LIVE']={id:'OPENING-LIVE',nature:'SANKI',account:'Prashant Axis 3645',transactions:[],summary:{from:'2026-09-06',to:'2026-09-06',closingBalance:0},originalStatementPeriod:{from:'2026-09-06',to:'2026-09-06'},resolutions:{},openingResolution:{amount:999,reason:'stale'}};fs.writeFileSync(expenseFile,JSON.stringify(before));
   const denied=invoke('POST','/api/expenses/balances',{role:'admin',body:{nature:'SANKI',setOpening:{account:'Prashant Axis 3645',amount:-123.45,effectiveDate:'2026-09-06',reason:'Owner correction'}}});
   assert.equal(denied.status,403);
   const missingReason=invoke('POST','/api/expenses/balances',{role:'owner',body:{nature:'SANKI',setOpening:{account:'Prashant Axis 3645',amount:0,effectiveDate:'2026-09-06'}}});
@@ -3905,6 +3905,7 @@ test('only the Owner can set a dated custom opening balance with an audit reason
   assert.equal(stored.openingBalances['Prashant Axis 3645'],-123.45);
   assert.equal(stored.openingBalanceDates['Prashant Axis 3645'],'2026-09-06');
   assert.equal(stored.bankReconciliationDrafts['OPENING-LIVE'].openingResolution,undefined,'active reconciliation immediately follows the Owner opening');
+  assert.equal(stored.bankReconciliationDrafts['OPENING-LIVE'].openingBalanceUpdatedBy,'owner-user');
   const event=stored.auditLog.filter(x=>x.action==='OPENING_BALANCE_CHANGED'&&x.subjectId==='Prashant Axis 3645').at(-1);
   assert.equal(event.note,'Verified from opening statement');
   assert.deepEqual(event.after,{amount:-123.45,effectiveDate:'2026-09-06'});
