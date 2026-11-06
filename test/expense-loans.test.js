@@ -52,6 +52,24 @@ test('repayments reduce bank and outstanding principal, not P&L, with as-of hist
   const ledger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account,from:day,to:'2098-12-31'}}).body;assert.equal(ledger.entries.filter(e=>e.kind==='loan_repayment').length,2);assert.equal(ledger.balance,0);
   const report=buildReport({expenses:store(),orders:{orders:{}},purchases:{},opening:{lots:[]},salary:{},manualSales:{},feeds:[]},{from:day,to:'2098-12-31'});assert.equal(report.totals.otherIncome,0);assert.equal(report.totals.expenses,0);
 });
+test('flat and reducing terms create automatic schedules and split one instalment safely',()=>{
+  const base={amount:120000,date:'2098-01-01'};
+  const flat=loans.terms({loanTerms:{lenderKind:'person',interestMethod:'flat',annualRate:12,frequency:'monthly',installmentCount:12,firstPaymentDate:'2098-02-01'}},base.date);
+  const flatRows=loans.schedule({...base,loanTerms:flat});assert.equal(flatRows.length,12);assert.equal(flatRows[0].principal,10000);assert.equal(flatRows[0].interest,1200);assert.equal(flatRows.reduce((n,row)=>n+row.interest,0),14400);assert.equal(flatRows.at(-1).balance,0);
+  const reducing=loans.terms({loanTerms:{lenderKind:'person',interestMethod:'reducing',annualRate:12,frequency:'monthly',installmentCount:12,firstPaymentDate:'2098-02-01'}},base.date);
+  const reducingRows=loans.schedule({...base,loanTerms:reducing});assert.equal(reducingRows.length,12);assert.equal(reducingRows[0].interest,1200);assert.ok(reducingRows[0].principal>9400&&reducingRows[0].principal<9500);assert.ok(reducingRows[1].interest<reducingRows[0].interest);assert.equal(reducingRows.at(-1).balance,0);
+
+  reset();const receipt=borrow({amount:120000,loanTerms:{lenderKind:'company',interestMethod:'reducing',annualRate:12,frequency:'monthly',installmentCount:12,firstPaymentDate:'2098-11-10'}}).body.receipt;
+  const first=loans.schedule(receipt)[0],paid=repay(receipt.id,{amount:first.amount,reference:'AUTO-EMI-1'});assert.equal(paid.status,200,JSON.stringify(paid));
+  assert.equal(paid.body.repayment.principalAmount,first.principal);assert.equal(paid.body.repayment.interestAmount,first.interest);assert.equal(paid.body.position.totalPaid,first.amount);assert.equal(paid.body.position.principalRepaid,first.principal);assert.equal(paid.body.position.interestPaid,first.interest);assert.equal(paid.body.position.outstanding,120000-first.principal);
+  const ledger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account,from:day,to:'2098-12-31'}}).body;assert.equal(ledger.entries.find(row=>row.id===paid.body.repayment.id).debit,first.amount,'bank is reduced once by the total instalment');
+  assert.equal(summaryForPL(day,'2098-12-31').Shared.running,first.interest);
+  const report=buildReport({expenses:store(),orders:{orders:{}},purchases:{},opening:{lots:[]},salary:{},manualSales:{},feeds:[]},{from:day,to:'2098-12-31'});assert.equal(report.totals.expenses,first.interest,'only loan interest enters Results');
+});
+test('existing loans can receive audited terms without changing principal or bank balances',()=>{
+  reset();const receipt=borrow().body.receipt,before=position();const response=invoke('POST','/api/expenses/loans/:id/terms',{params:{id:receipt.id},body:{reason:'Confirmed signed repayment agreement',loanTerms:{lenderKind:'company',interestMethod:'flat',annualRate:15,frequency:'monthly',installmentCount:10,firstPaymentDate:'2098-11-10'}}});
+  assert.equal(response.status,200,JSON.stringify(response));assert.equal(response.body.schedule.length,10);assert.equal(response.body.loan.loanTerms.interestMethod,'flat');const after=position();assert.deepEqual(after.assets,before.assets);assert.equal(after.liabilities.loans,before.liabilities.loans);assert.equal(after.liabilities.total,before.liabilities.total);assert.equal(store().auditLog.at(-1).action,'LOAN_TERMS_UPDATED');
+});
 test('request retries are idempotent and reference reuse cannot double-post',()=>{
   reset();const l=borrow().body.receipt;assert.equal(borrow().body.duplicate,true);assert.equal(store().receipts.length,1);
   assert.equal(borrow({amount:500001}).status,409);assert.equal(borrow({requestId:'loan-other-request'}).status,409);

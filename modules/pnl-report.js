@@ -359,6 +359,16 @@ function buildReport(sources = {}, options = {}) {
     }
     paymentExpense({ ...expense, ledger: expense.category }, { id: 'BANK', refundPaymentId: expense.creditCardId ? 'STATEMENT' : 'BANK', date: expense.date, amount: expense.amount, account: expense.account, paymentType: expense.creditCardId ? 'Credit card' : 'Bank statement' }, number(expense.amount));
   }
+  // The bank is reduced once by the full loan instalment in the loan ledger.
+  // Results includes only its interest component; principal remains a
+  // balance-sheet liability movement and never becomes an expense.
+  for (const payment of list(books.loanRepayments)) {
+    const interest = number(payment.interestAmount);
+    if (!business(payment.nature) || payment.accountingExcluded || payment.voided || !(interest > 0)) continue;
+    paymentExpense({ id: payment.id, date: payment.date, type: 'running', ledger: 'Loan Interest', vendor: payment.source,
+      particulars: 'Loan interest · ' + payment.source }, { id: 'LOAN-INTEREST', refundPaymentId: payment.id,
+      date: payment.date, amount: interest, account: payment.account, paymentType: 'Loan instalment', proof: payment.proof }, interest, 'loan_interest');
+  }
   const receivedRefunds = list(books.expenseRefunds).filter(r => business(r.nature) && r.status === 'received' && !r.accountingExcluded && !activeDraft(r) && !r.creditNote).sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.id).localeCompare(String(b.id)));
   for (const refund of receivedRefunds) {
     const date = day(refund.date);
