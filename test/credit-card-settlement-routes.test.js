@@ -122,6 +122,56 @@ test('owner can record card payments from both personal reconciliation banks for
   }
 });
 
+test('bank reconciliation restores one orphaned card payment instead of creating a duplicate', () => {
+  const card = newCard(), amount = 71118, date = '2026-10-16', reference = 'ORPHAN-7883-CARD';
+  const recorded = invoke('POST', '/api/expenses/credit-cards/payments', { body: {
+    cardId: card.id, nature: 'PERSONAL', account: 'IndusInd Bank 7883', amount, date, reference,
+    allocations: [{ nature: 'PERSONAL', amount }]
+  }});
+  assert.equal(recorded.status, 200, recorded.body && recorded.body.error);
+  const exp = read(expensesFile), removed = exp.transfers.find(row => row.creditCardPaymentId === recorded.body.payment.id);
+  exp.transfers = exp.transfers.filter(row => row.id !== removed.id);
+  exp.bankReconciliationDrafts = { DRAFT: { id: 'DRAFT', account: 'IndusInd Bank 7883', nature: 'PERSONAL', transactions: [
+    { date, debit: amount, credit: 0, reference, description: 'Card payment', balance: 1000 }
+  ], resolutions: {} } };
+  fs.writeFileSync(expensesFile, JSON.stringify(exp));
+  const restored = invoke('POST', '/api/expenses/credit-cards/payments/attach-bank', { body: {
+    draftId: 'DRAFT', rowId: 'bank-0', cardId: card.id, nature: 'PERSONAL', note: 'Restore verified bank link'
+  }});
+  assert.equal(restored.status, 200, restored.body && restored.body.error);
+  assert.equal(restored.body.restored, true);
+  assert.equal(restored.body.created, false);
+  const cards = read(cardsFile), after = read(expensesFile);
+  assert.equal(cards.payments.filter(row => row.cardId === card.id && row.amount === amount).length, 1);
+  const links = after.transfers.filter(row => row.creditCardPaymentId === recorded.body.payment.id);
+  assert.equal(links.length, 1);
+  assert.equal(links[0].fromAccount, 'IndusInd Bank 7883');
+  assert.equal(after.bankReconciliationDrafts.DRAFT.resolutions['bank-0'].appId, links[0].id);
+  const repeated = invoke('POST', '/api/expenses/credit-cards/payments/attach-bank', { body: {
+    draftId: 'DRAFT', rowId: 'bank-0', cardId: card.id, nature: 'PERSONAL', note: 'Do not duplicate'
+  }});
+  assert.equal(repeated.status, 409);
+  assert.equal(read(cardsFile).payments.filter(row => row.cardId === card.id && row.amount === amount).length, 1);
+});
+
+test('bank reconciliation creates one linked card payment when no prior payment exists', () => {
+  const card = newCard(), amount = 51296.45, date = '2026-10-29', reference = 'NEW-0993-CARD', exp = read(expensesFile);
+  exp.bankReconciliationDrafts = { NEWDRAFT: { id: 'NEWDRAFT', account: 'ICICI Bank 0993', nature: 'PERSONAL', transactions: [
+    { date, debit: amount, credit: 0, reference, description: 'Autodebit card payment', balance: 1000 }
+  ], resolutions: {} } };
+  fs.writeFileSync(expensesFile, JSON.stringify(exp));
+  const attached = invoke('POST', '/api/expenses/credit-cards/payments/attach-bank', { body: {
+    draftId: 'NEWDRAFT', rowId: 'bank-0', cardId: card.id, nature: 'PERSONAL', note: 'Verified new card payment'
+  }});
+  assert.equal(attached.status, 200, attached.body && attached.body.error);
+  assert.equal(attached.body.created, true);
+  assert.equal(attached.body.restored, false);
+  const after = read(expensesFile), links = after.transfers.filter(row => row.creditCardPaymentId === attached.body.payment.id);
+  assert.equal(links.length, 1);
+  assert.equal(links[0].fromAccount, 'ICICI Bank 0993');
+  assert.equal(after.bankReconciliationDrafts.NEWDRAFT.resolutions['bank-0'].appId, links[0].id);
+});
+
 test('a payment on a different card cannot be linked or leaked as a candidate', () => {
   const first = newCard(), second = newCard(), paid = payment(first);
   assert.equal(paid.status, 200);

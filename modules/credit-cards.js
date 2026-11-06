@@ -335,5 +335,50 @@ router.post('/api/expenses/credit-cards/payments',(req,res)=>{
   try{commitStores(s,exp,before);}catch(error){return res.status(409).json({success:false,error:'Payment could not be committed safely. '+error.message});}
   res.json({success:true,payment:p,transfer,outstanding:liability(s,c.id)});
 });
+router.post('/api/expenses/credit-cards/payments/attach-bank',(req,res)=>{
+  const s=load(),exp=loadExpenses(),b=req.body||{},draft=(exp.bankReconciliationDrafts||{})[String(b.draftId||'')],c=s.cards[b.cardId],nature=NATURES.includes(b.nature)?b.nature:'',note=String(b.note||'').trim();
+  if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired. Refresh the statement and try again.'});
+  const account=String(draft.account||''),rowMatch=String(b.rowId||'').match(/^bank-(\d+)$/),bank=rowMatch&&(draft.transactions||[])[Number(rowMatch[1])],amount=round2(bank&&bank.debit),date=String(bank&&bank.date||''),reference=String(bank&&bank.reference||'').trim();
+  if(!c||!visibleCard(req,c)||!nature||!bank||!(amount>0)||num(bank.credit)>0||!validDate(date)||!note)return res.status(400).json({success:false,error:'Choose an unmatched bank debit, related credit card and a reason.'});
+  if(!/(?:7883|0993)$/.test(account.trim()))return res.status(400).json({success:false,error:'Credit-card payment attachment is available from 7883 and 0993 reconciliation.'});
+  if((draft.resolutions||{})[b.rowId])return res.status(409).json({success:false,error:'This bank transaction already has a reconciliation decision. Undo it before attaching a card payment.'});
+  const policy=expenseModule.creditCardSettlementPolicy,allowedAccount=policy&&policy.allowedPayingAccount(req,nature,account);
+  if(!allowedAccount||!settlementSourceVisible(req,nature,allowedAccount)||nature==='PERSONAL'&&!canReviewPersonal(req))return res.status(403).json({success:false,error:'This paying account or entity is not accessible. No payment was attached.'});
+  const activePayment=row=>row&&row.active!==false&&!row.accountingExcluded&&!row.deletedAt&&!row.voidedAt&&!row.reversedAt;
+  const sameReference=(left,right)=>String(left||'').replace(/[^a-z0-9]/ig,'').toLowerCase()===String(right||'').replace(/[^a-z0-9]/ig,'').toLowerCase();
+  const matches=(s.payments||[]).filter(p=>activePayment(p)&&p.cardId===c.id&&round2(p.amount)===amount&&p.date===date&&p.account===allowedAccount&&p.nature===nature&&(!reference||!p.reference||sameReference(p.reference,reference)));
+  if(matches.length>1)return res.status(409).json({success:false,error:'More than one existing card payment matches this bank debit. Correct the duplicate card payments before reconciling.'});
+  const before=storeSnapshots(),at=new Date().toISOString();let payment=matches[0],transfer,restored=false,created=false;
+  if(payment){
+    const related=(exp.transfers||[]).filter(t=>t&&t.creditCardPaymentId===payment.id||payment.transferId&&t&&t.id===payment.transferId||payment.creditCardTransferId&&t&&t.id===payment.creditCardTransferId);
+    if(related.length>1)return res.status(409).json({success:false,error:'The existing card payment has multiple bank transfers. Correct it from Credit cards first.'});
+    transfer=related[0];
+    if(transfer){
+      if(transfer.classification!=='credit_card_payment'||transfer.creditCardId&&transfer.creditCardId!==c.id||transfer.fromAccount!==allowedAccount||String(transfer.fromNature||transfer.nature)!==nature||transfer.toAccount!==cardName(c)||round2(transfer.amount)!==amount||transfer.date!==date)return res.status(409).json({success:false,error:'The existing card payment and its saved bank transfer disagree. Correct that payment from Credit cards first.'});
+      transfer.active=true;delete transfer.accountingExcluded;delete transfer.deletedAt;delete transfer.voidedAt;delete transfer.reversedAt;transfer.restoredAt=at;transfer.restoredBy=req.user.username;transfer.restoreReason=note;restored=true;
+    }else{
+      exp.transfers=Array.isArray(exp.transfers)?exp.transfers:[];exp.transferSeq=num(exp.transferSeq)+1;
+      transfer={id:'TR-'+String(exp.transferSeq).padStart(5,'0'),nature,fromNature:nature,toNature:nature,classification:'credit_card_payment',fromAccount:allowedAccount,toAccount:cardName(c),amount,date,proof:String(payment.proof||''),reference:reference||String(payment.reference||''),note:'Restored bank link for credit card payment '+payment.id+' · '+note,creditCardId:c.id,creditCardPaymentId:payment.id,createdBy:req.user.username,createdAt:at,restoredFromExistingPayment:true};
+      exp.transfers.push(transfer);restored=true;
+    }
+    payment.reference=payment.reference||reference;payment.note=payment.note||note;payment.transferId=transfer.id;
+  }else{
+    s.paymentSeq=(s.paymentSeq||0)+1;
+    payment={id:'CCP-'+String(s.paymentSeq).padStart(5,'0'),cardId:c.id,amount,date,nature,account:allowedAccount,allocations:[{nature,amount}],paymentKind:'partial',proof:'',reference,note,createdAt:at,createdBy:req.user.username,active:true};
+    s.payments.push(payment);exp.transfers=Array.isArray(exp.transfers)?exp.transfers:[];exp.creditCardSettlementAllocations=Array.isArray(exp.creditCardSettlementAllocations)?exp.creditCardSettlementAllocations:[];exp.transferSeq=num(exp.transferSeq)+1;
+    transfer={id:'TR-'+String(exp.transferSeq).padStart(5,'0'),nature,fromNature:nature,toNature:nature,classification:'credit_card_payment',fromAccount:allowedAccount,toAccount:cardName(c),amount,date,proof:'',reference,note:'Credit card payment '+payment.id+' · '+note,creditCardId:c.id,creditCardPaymentId:payment.id,createdBy:req.user.username,createdAt:at};
+    payment.transferId=transfer.id;exp.transfers.push(transfer);created=true;
+  }
+  exp.creditCardSettlementAllocations=Array.isArray(exp.creditCardSettlementAllocations)?exp.creditCardSettlementAllocations:[];
+  let allocations=exp.creditCardSettlementAllocations.filter(row=>row&&row.creditCardPaymentId===payment.id&&!row.accountingExcluded);
+  if(!allocations.length){const splits=normalizeAllocations(payment.allocations,amount,nature);if(Math.abs(allocationTotal(splits)-amount)>.01)return res.status(409).json({success:false,error:'The existing card payment ownership split is incomplete. Correct it from Credit cards first.'});splits.forEach(split=>exp.creditCardSettlementAllocations.push({id:'CCA-'+payment.id+'-'+split.nature,cardId:c.id,cardName:cardName(c),creditCardPaymentId:payment.id,date,amount:split.amount,payerNature:nature,beneficiaryNature:split.nature,payingAccount:allowedAccount,status:split.nature===nature?'self':'due',note:split.nature===nature?'Own share of card payment':split.nature+' owes '+nature+' for mixed-use card payment',createdBy:req.user.username,createdAt:at}));allocations=exp.creditCardSettlementAllocations.filter(row=>row.creditCardPaymentId===payment.id);}
+  if(Math.abs(allocationTotal(allocations)-amount)>.01)return res.status(409).json({success:false,error:'The existing card-payment ownership records do not equal the bank debit. Correct them from Credit cards first.'});
+  const foreignClaim=Object.values(exp.bankReconciliationDrafts||{}).some(other=>other.id!==draft.id&&Object.values(other.resolutions||{}).some(decision=>decision&&(decision.appId===transfer.id||decision.appId===payment.id)));
+  if(foreignClaim)return res.status(409).json({success:false,error:'Another reconciliation already claims this card payment. Open that reconciliation before changing it.'});
+  draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'accept_match',appId:transfer.id,reason:note,remark:note,by:req.user.username,at};
+  audit(s,req,restored?'CARD_PAYMENT_BANK_LINK_RESTORED':'CARD_PAYMENT_RECORDED_FROM_BANK',payment.id,{draftId:draft.id,rowId:b.rowId,transferId:transfer.id,account:allowedAccount,amount,date,reference,note});
+  try{commitStores(s,exp,before);}catch(error){return res.status(409).json({success:false,error:'The card payment could not be attached safely. '+error.message});}
+  res.json({success:true,payment,transfer,restored,created,outstanding:liability(s,c.id)});
+});
 router.get('/api/expenses/credit-cards/:id/ledger',(req,res)=>{const s=load(),c=s.cards[req.params.id];if(!c||!visibleCard(req,c))return res.status(404).json({success:false,error:'Card not found.'});const entries=[{id:'OPENING',date:'',description:'Opening outstanding',debit:num(c.openingOutstanding),credit:0}];Object.values(s.statements).filter(st=>st.cardId===c.id&&st.status==='finalized').forEach(st=>st.rows.forEach(r=>{if(!cardAccounting.activeRow(r))return;if(['expense','fee','emi_principal','emi_interest'].includes(r.classification))entries.push({id:r.id,date:r.date,description:r.narration,debit:r.amount,credit:0,statementId:st.id});if(['refund','card_payment'].includes(r.classification))entries.push({id:r.id,date:r.date,description:r.narration,debit:0,credit:r.amount,statementId:st.id});}));if(!Object.values(s.statements).some(st=>st.cardId===c.id&&st.status==='finalized'&&st.statementSourceOfTruth)){directCardPurchases(c.id).forEach(p=>entries.push({id:p.id,date:p.date,description:p.description,debit:p.amount,credit:0,proof:p.proof}));s.payments.filter(p=>p.cardId===c.id&&p.active!==false).forEach(p=>entries.push({id:p.id,date:p.date,description:p.paymentKind+' card payment from '+p.account,debit:0,credit:p.amount,proof:p.proof}));}expenseRefunds.manualCardRefunds(loadExpenses(),c.id,cardName(c)).forEach(r=>entries.push({id:r.id,date:r.date,description:r.source,debit:0,credit:r.amount}));entries.sort((a,b)=>String(a.date+a.id).localeCompare(String(b.date+b.id)));let balance=0;entries.forEach(e=>{balance+=num(e.debit)-num(e.credit);e.balance=round2(balance);});res.json({success:true,card:Object.assign({},c,{displayName:cardName(c)}),outstanding:round2(balance),entries:entries.slice().reverse()});});
 module.exports={router,merchantKey,inferClassification};

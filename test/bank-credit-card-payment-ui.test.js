@@ -26,4 +26,6 @@ test('card-payment dialog uses the selected bank and keeps the card choice gener
   assert.match(html, /available in that card’s reconciliation/);
   assert.doesNotMatch(html, /paid from ICICI Bank 0993/);
   assert.doesNotMatch(html, /Choose Card 8000 and enter a note/);
+  assert.match(html, /credit-cards\/payments\/attach-bank/);
+  assert.match(html, /draftId:bankDraftId,rowId:bankCardPaymentRowId/);
 });
