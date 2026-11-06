@@ -665,7 +665,14 @@
   <script src="/sidebar.js"></script>
 <script src="/expense-refunds.js?v=061394c40440"></script>
   <script src="/expense-payment-credits.js?v=c6f1629604f4"></script>
-  <script src="/expense-loans.js?v=7dad67caab1e"></script>
+  <style>
+    .loan-detail-card>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer}
+    .loan-detail-toggle{flex:0 0 auto;pointer-events:none}
+    .loan-detail-hide{display:none}
+    .loan-detail-card[open]>summary .loan-detail-show{display:none}
+    .loan-detail-card[open]>summary .loan-detail-hide{display:inline}
+  </style>
+  <script src="/expense-loans.js?v=cb9dc95-loan-details"></script>
   <script src="/reconciliation-status.js?v=146cfb1cbcc1"></script>
   <script src="/credit-card-review.js?v=20261025-merchant-once-discard-1"></script>
   <script src="/credit-card-payment-corrections.js?v=ef73172147fe"></script>
