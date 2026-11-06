@@ -15,6 +15,106 @@ function isIciciCreditCardText(text) {
     && /Transaction\s+Details\s*Reward/i.test(text);
 }
 
+function isIciciCurrentStatementText(text) {
+  const value = String(text || '');
+  return /VIEW\s+CURRENT\s+STATEMENT/i.test(value)
+    && /My\s+Credit\s+Card\s+Details\s+for/i.test(value)
+    && /Statement\s+Period/i.test(value)
+    && /Purchases\s+and\s+Other\s+Charges/i.test(value)
+    && /Payments\s+and\s+Other\s+Credits/i.test(value)
+    && /Transaction\s+Date\s+Details\s+Amount\s*\(INR\)\s+Reward\s+Points\s+Reference\s+Number/i.test(value);
+}
+
+function shortDate(text) {
+  const match = String(text || '').match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  return match ? calendar(match[3], Number(match[2]), Number(match[1])) : '';
+}
+
+function currentStatementAmount(text, label) {
+  const match = String(text || '').replace(/,/g, '').trim().match(/^(\d+(?:\.\d{1,2})?)$/);
+  if (!match) fail(label + ' is not a complete currency value.');
+  const amount = Math.round(Number(match[1]) * 100);
+  if (!Number.isSafeInteger(amount) || amount < 0 || amount > 1e12) fail(label + ' is outside the supported amount range.');
+  return amount;
+}
+
+// ICICI's "View Current Statement" export is a pdfmake document, not the
+// monthly statement layout above. Its text has a real Unicode table, so parse
+// that narrowly-defined table and independently reproduce every printed total.
+function parseIciciCurrentStatementPdf(pdf) {
+  const extracted = String(pdf && pdf.text || '').replace(/\r/g, '');
+  // PDF.js returns every pdfmake text fragment on its own line. Rebuild the
+  // visible rows from their original y/x positions before applying the strict
+  // row grammar. Tests and other extractors may already provide row text.
+  const positioned = Array.isArray(pdf && pdf.pages) && pdf.pages.length
+    ? pdf.pages.flatMap(page => pageLines(page).map(line => line.items.map(item => item.text).join(' '))).join('\n') : '';
+  const text = positioned || extracted;
+  if (!isIciciCurrentStatementText(text)) return null;
+  const declared = label => {
+    const match = text.match(new RegExp(label + '\\s+INR\\s+([0-9,]+(?:\\.\\d{1,2})?)', 'i'));
+    if (!match) fail('the declared ' + label.replace(/\\s\+/g, ' ') + ' total is missing.');
+    return currentStatementAmount(match[1], label.replace(/\\s\+/g, ' '));
+  };
+  const opening = declared('Previous\\s+Balance');
+  const purchases = declared('Purchases\\s+and\\s+Other\\s+Charges');
+  const cashAdvances = declared('Cash\\s+Advances');
+  const credits = declared('Payments\\s+and\\s+Other\\s+Credits');
+  const reportedDue = declared('Total\\s+Amount\\s+Due');
+  const period = text.match(/Statement\s+Period\s+(\d{2}-\d{2}-\d{4})\s+TO\s+(\d{2}-\d{2}-\d{4})/i);
+  const from = period && shortDate(period[1]), to = period && shortDate(period[2]);
+  if (!from || !to || from > to) fail('the current statement period is missing or invalid.');
+  const card = text.match(/My\s+Credit\s+Card\s+Details\s+for[^\n]*?(\d{4})\s*$/im);
+  if (!card) fail('the card last four digits are missing.');
+
+  const tableStart = text.search(/Transaction\s+Date\s+Details\s+Amount\s*\(INR\)\s+Reward\s+Points\s+Reference\s+Number/i);
+  if (tableStart < 0) fail('the current transaction table heading is missing.');
+  const lines = text.slice(tableStart).split('\n').map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const records = [];
+  const transaction = /^(\d{2}-\d{2}-\d{4})\s+(.+?)\s+([0-9,]+(?:\.\d{1,2})?)\s+(Dr|Cr)\.\s+-?\d+\s+(\d{11})$/i;
+  let active = null;
+  for (const line of lines.slice(1)) {
+    const match = line.match(transaction);
+    if (match) {
+      const date = shortDate(match[1]);
+      if (!date || date > to) fail('a current-statement transaction date is invalid or later than the statement period.');
+      const amount = currentStatementAmount(match[3], 'transaction amount');
+      if (!amount) fail('a current-statement transaction has a zero amount.');
+      active = { date, description: match[2], reference: match[5], debit: /^dr$/i.test(match[4]) ? amount : 0,
+        credit: /^cr$/i.test(match[4]) ? amount : 0, row: records.length + 1, cardLast4: card[1] };
+      records.push(active);
+      continue;
+    }
+    if (/^\d{2}-\d{2}-\d{4}\b/.test(line)) fail('a current-statement transaction row is incomplete or malformed.');
+    // pdfmake wraps long merchant locations onto a following Details-only row.
+    // A continuation cannot contain another amount, direction or reference.
+    if (active && !/^(?:Transaction Details|VIEW CURRENT STATEMENT|My Credit Card Details)/i.test(line)) {
+      if (/\b(?:Dr|Cr)\.\b/i.test(line) || /\b\d{11}\b/.test(line)) fail('an orphaned amount or reference was found in the current statement table.');
+      active.description += ' ' + line;
+    }
+  }
+  if (!records.length) fail('no complete dated transactions were found in the current statement.');
+  const debits = records.reduce((sum, row) => sum + row.debit, 0);
+  const parsedCredits = records.reduce((sum, row) => sum + row.credit, 0);
+  if (debits !== purchases + cashAdvances || parsedCredits !== credits) {
+    fail('parsed Purchases / Charges ₹' + debits / 100 + ' and Payments / Credits ₹' + parsedCredits / 100
+      + ' do not match declared totals ₹' + (purchases + cashAdvances) / 100 + ' and ₹' + credits / 100 + '.');
+  }
+  const calculatedOutstanding = opening + debits - parsedCredits;
+  if (calculatedOutstanding < 0) fail('the current outstanding balance is negative.');
+  let running = opening;
+  records.sort((a, b) => a.date.localeCompare(b.date) || a.row - b.row);
+  const rows = records.map(record => {
+    running += record.debit - record.credit;
+    return { ...record, debit: record.debit / 100, credit: record.credit / 100, balance: running / 100 };
+  });
+  if (running !== calculatedOutstanding) fail('transactions do not reproduce the current outstanding balance.');
+  rows.statementSummary = { format: 'ICICI Bank current credit-card PDF', from, to, openingBalance: opening / 100,
+    closingBalance: calculatedOutstanding / 100, reportedTotalAmountDue: reportedDue / 100,
+    totalDebits: debits / 100, totalCredits: parsedCredits / 100, validated: true,
+    accountType: 'credit_card', accountLast4: card[1], cardLast4s: [card[1]], nonPostingEntries: [] };
+  return rows;
+}
+
 function cents(value, label) {
   const match = String(value || '').trim().match(AMOUNT);
   if (!match) fail(label + ' is not a complete currency value.');
@@ -226,4 +326,4 @@ function parseIciciCreditCardPdf(pdf) {
   return rows;
 }
 
-module.exports = { parseIciciCreditCardPdf, isIciciCreditCardText };
+module.exports = { parseIciciCreditCardPdf, parseIciciCurrentStatementPdf, isIciciCreditCardText, isIciciCurrentStatementText };

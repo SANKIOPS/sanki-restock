@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { parseIciciCreditCardPdf, isIciciCreditCardText } = require('../modules/icici-credit-card-pdf');
+const { parseIciciCreditCardPdf, parseIciciCurrentStatementPdf, isIciciCreditCardText } = require('../modules/icici-credit-card-pdf');
 
 // Synthetic cells model ICICI's positioned PDF text, including its overlaid
 // numeric font. No customer statement, card number or transaction is a fixture.
@@ -400,6 +400,53 @@ test('ICICI requires original positioned cells and stays out of unrelated statem
   assert.equal(parseIciciCreditCardPdf({ text: 'Other Bank Statement\nDate Debit Credit Balance', pages: pdf.pages }), null);
 });
 
+test('ICICI View Current Statement validates its Unicode table and current outstanding separately from billed due', () => {
+  const text = `VIEW CURRENT STATEMENT
+My Credit Card Details for TEST USER-123456******8005
+Available Credit Limit INR 0 Total Credit Limit INR 0
+Total Amount Due INR 0 Purchases and Other Charges INR 31807.81
+Cash Advances INR 0 Payments and Other Credits INR 55401.62
+Statement Date 06-11-2026 Previous Balance INR 55401.62
+Statement Period 12-10-2026 TO 06-11-2026
+Transaction Details
+Transaction Date Details Amount (INR) Reward Points Reference Number
+02-11-2026 SYNTHETIC SOFTWARE, DUBLIN, IRL 1199 Dr. 47 14488491775
+02-11-2026 DCC Fee 41.97 Dr. 0 14488569565
+02-11-2026 IGST-CI@18% 125.37 Dr. 0 14483392065
+02-11-2026 DCC Fee 696.5 Dr. 0 14483392063
+02-11-2026 IGST-CI@18% 7.56 Dr. 0 14488569568
+31-10-2026 SYNTHETIC SUBSCRIPTION, 19900 Dr. 796 14483368288
+SAN FRANCISCO, USA
+29-10-2026 Autodebit Payment Recd. 51296.45 Cr. 0 14458258768
+27-10-2026 DCC Fee 143.68 Dr. 0 14450137767
+27-10-2026 IGST-CI@18% 25.86 Dr. 0 14450137769
+25-10-2026 SYNTHETIC PLAN REFUND, 4105.17 Cr. -164 14450079439
+NEW YORK, USA
+24-10-2026 SYNTHETIC SERVICES, 384 Dr. 7 14432841592
+24-10-2026 DCC Fee 143.68 Dr. 0 14431197820
+24-10-2026 IGST-CI@18% 25.86 Dr. 0 14431197821
+23-10-2026 SYNTHETIC PLAN, 4105.17 Dr. 164 14431142726
+NEW YORK, USA
+21-10-2026 SYNTHETIC PLAY, 1950 Dr. 39 14417898842
+20-10-2026 Markup Fee 33.18 Dr. 0 14403791357
+20-10-2026 IGST-CI@18% 5.97 Dr. 0 14403791360
+19-10-2026 SYNTHETIC HOSTING, 947.87 Dr. 37 14403765135
+15-10-2026 IGST-CI@18% 7.09 Dr. 0 14369957935
+15-10-2026 Markup Fee 39.36 Dr. 0 14369957933
+14-10-2026 SYNTHETIC SERVICES, 553 Dr. 11 14376189676
+14-10-2026 SYNTHETIC AI, 1124.69 Dr. 44 14369904229
+14-10-2026 SYNTHETIC RETAIL, 348 Dr. 6 14364581226`;
+  const rows = parseIciciCurrentStatementPdf({ text });
+  assert.equal(rows.length, 23);
+  assert.equal(rows.statementSummary.accountLast4, '8005');
+  assert.equal(rows.statementSummary.openingBalance, 55401.62);
+  assert.equal(rows.statementSummary.totalDebits, 31807.81);
+  assert.equal(rows.statementSummary.totalCredits, 55401.62);
+  assert.equal(rows.statementSummary.closingBalance, 31807.81);
+  assert.equal(rows.statementSummary.reportedTotalAmountDue, 0);
+  assert.match(rows.find(row => row.reference === '14483368288').description, /SAN FRANCISCO, USA/);
+});
+
 function uploadHarness(options = {}) {
   const pdf = fixture(), amount = pdf.pages[0].items.find(cell => cell.str === '125.25');
   amount.str = '129.99';
@@ -422,7 +469,7 @@ function uploadHarness(options = {}) {
       }),
       destroy: () => { state.destroyed = true; }
     }) },
-    parseIciciCreditCardPdf, isIciciCreditCardText,
+    parseIciciCreditCardPdf, parseIciciCurrentStatementPdf, isIciciCreditCardText,
     parseIndusIndSavingsStatement: () => null, parseIndieBusinessStatement: () => null,
     parseIndusIndMobileStatement: () => null,
     parseBankStatementText: () => { state.fallbacks++; throw new Error('Recognized ICICI PDF must not fall through to legacy text parsing.'); }
