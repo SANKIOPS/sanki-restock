@@ -105,6 +105,23 @@ test('linking an existing card payment adds no second bank transfer and records 
   assert.equal((after.reconciliationExpenses || []).some(x => x.creditCardStatementId === statement.id), false);
 });
 
+test('owner can record card payments from both personal reconciliation banks for later statement linking', () => {
+  const card = newCard();
+  for (const [account, amount, date, reference] of [
+    ['IndusInd Bank 7883', 71118, '2026-10-16', 'BANK-7883-CARD'],
+    ['ICICI Bank 0993', 51296.45, '2026-10-29', 'BANK-0993-CARD']
+  ]) {
+    const result = invoke('POST', '/api/expenses/credit-cards/payments', { body: {
+      cardId: card.id, nature: 'PERSONAL', account, paymentKind: 'partial', amount, date, reference,
+      allocations: [{ nature: 'PERSONAL', amount }]
+    }});
+    assert.equal(result.status, 200, result.body && result.body.error);
+    assert.equal(result.body.payment.account, account);
+    assert.equal(result.body.transfer.fromAccount, account);
+    assert.equal(result.body.transfer.creditCardPaymentId, result.body.payment.id);
+  }
+});
+
 test('a payment on a different card cannot be linked or leaked as a candidate', () => {
   const first = newCard(), second = newCard(), paid = payment(first);
   assert.equal(paid.status, 200);
