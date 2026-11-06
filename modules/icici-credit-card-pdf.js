@@ -9,6 +9,10 @@ const compact = text => String(text || '').replace(/\s+/g, '').toLowerCase();
 const MONEY = '(?:\\d+|\\d{1,3}(?:,\\d{3})+|\\d{1,2}(?:,\\d{2})*,\\d{3})\\.\\d{2}';
 const AMOUNT = new RegExp('^(' + MONEY + ')\\s*(CR|DR)?$', 'i');
 const VARTA_DIGITS = { H: '1', I: '2', J: '3', K: '4', L: '5', M: '6', N: '7', O: '8', P: '9', Q: '0' };
+// Owner-verified ICICI quirk: the pdfmake "View Current Statement" export for
+// the saved Sapphiro 8000 card prints 8005 in its header. Preserve that raw
+// identifier for audit, but bind the validated statement to the real account.
+const CURRENT_STATEMENT_ACCOUNT_ALIASES = { '8005': '8000' };
 
 function isIciciCreditCardText(text) {
   return /CREDIT\s+CARD\s+STATEMENT/i.test(text) && /STATEMENT\s+DATE/i.test(text)
@@ -108,10 +112,12 @@ function parseIciciCurrentStatementPdf(pdf) {
     return { ...record, debit: record.debit / 100, credit: record.credit / 100, balance: running / 100 };
   });
   if (running !== calculatedOutstanding) fail('transactions do not reproduce the current outstanding balance.');
+  const exportedLast4 = card[1], accountLast4 = CURRENT_STATEMENT_ACCOUNT_ALIASES[exportedLast4] || exportedLast4;
+  rows.forEach(row => { row.cardLast4 = accountLast4; });
   rows.statementSummary = { format: 'ICICI Bank current credit-card PDF', from, to, openingBalance: opening / 100,
     closingBalance: calculatedOutstanding / 100, reportedTotalAmountDue: reportedDue / 100,
     totalDebits: debits / 100, totalCredits: parsedCredits / 100, validated: true,
-    accountType: 'credit_card', accountLast4: card[1], cardLast4s: [card[1]], nonPostingEntries: [] };
+    accountType: 'credit_card', accountLast4, cardLast4s: [accountLast4], exportedLast4, nonPostingEntries: [] };
   return rows;
 }
 

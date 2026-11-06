@@ -438,7 +438,9 @@ NEW YORK, USA
 14-10-2026 SYNTHETIC RETAIL, 348 Dr. 6 14364581226`;
   const rows = parseIciciCurrentStatementPdf({ text });
   assert.equal(rows.length, 23);
-  assert.equal(rows.statementSummary.accountLast4, '8005');
+  assert.equal(rows.statementSummary.accountLast4, '8000');
+  assert.equal(rows.statementSummary.exportedLast4, '8005');
+  assert.ok(rows.every(row => row.cardLast4 === '8000'));
   assert.equal(rows.statementSummary.openingBalance, 55401.62);
   assert.equal(rows.statementSummary.totalDebits, 31807.81);
   assert.equal(rows.statementSummary.totalCredits, 55401.62);
