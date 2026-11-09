@@ -193,6 +193,11 @@ function transferAmountCandidate(bank, principal, account) {
 function findTransferCreationConflicts({ store = {}, draft = {}, rowId, bank, fromAccount, toAccount, fromNature, toNature, principalAmount } = {}) {
   if (!bank || fromNature === 'PERSONAL' && toNature === 'PERSONAL') return [];
   const incoming = cents(bank.credit) > 0, conflicts = [], expectedDate = date(bank.date);
+  const differentPhysicalRowInThisDraft = (originDraft, originRow) => {
+    if (text(originDraft) !== text(draft.id) || !originRow || text(originRow) === text(rowId)) return false;
+    const match = text(originRow).match(/^bank-(\d+)$/), otherBank = match && draft.transactions && draft.transactions[Number(match[1])];
+    return !!otherBank && signature(otherBank) !== signature(bank);
+  };
   const matches = transfer => {
     if (date(transfer.date) !== expectedDate) return false;
     const side = incoming ? transfer.toAccount : transfer.fromAccount;
@@ -204,6 +209,7 @@ function findTransferCreationConflicts({ store = {}, draft = {}, rowId, bank, fr
   };
   for (const transfer of store.transfers || []) {
     if (!matches(transfer)) continue;
+    if (differentPhysicalRowInThisDraft(transfer.reconciliationDraft || transfer.bankReconciliationEvidence && transfer.bankReconciliationEvidence.draftId, transfer.bankRowId || transfer.bankReconciliationEvidence && transfer.bankReconciliationEvidence.rowId)) continue;
     if (!sameOrigin(transfer, draft, rowId) && verifiedDistinct(bank, transferBankEvidence(store, transfer, draft.account))) continue;
     conflicts.push({ type: 'posted', id: transfer.id, draftId: transfer.reconciliationDraft || '', rowId: transfer.bankRowId || '', excluded: !!transfer.accountingExcluded, sameOrigin: sameOrigin(transfer, draft, rowId), reason: 'An existing transfer represents or may represent this bank transaction; review and link its evidence before creating another transfer.' });
   }
@@ -214,6 +220,7 @@ function findTransferCreationConflicts({ store = {}, draft = {}, rowId, bank, fr
       if (!otherBank) continue;
       const otherIncoming = cents(otherBank.credit) > 0, nature = resolution.postingNature || other.nature, counterpartNature = resolution.otherNature || nature;
       const candidate = { date: otherBank.date, amount: cents(resolution.principalAmount) > 0 ? resolution.principalAmount : money(cents(otherBank.debit) + cents(otherBank.credit) - cents(resolution.chargeAmount)), fromAccount: otherIncoming ? resolution.otherAccount : other.account, toAccount: otherIncoming ? other.account : resolution.otherAccount, fromNature: otherIncoming ? counterpartNature : nature, toNature: otherIncoming ? nature : counterpartNature, bankReference: otherBank.reference };
+      if (other.id === draft.id && signature(otherBank) !== signature(bank)) continue;
       if (!matches(candidate) || other.account === draft.account && verifiedDistinct(bank, [otherBank])) continue;
       conflicts.push({ type: 'pending', id: '', draftId: other.id, rowId: otherRowId, reason: 'This transfer is already pending in another bank reconciliation decision; review that decision before creating another transfer.' });
     }

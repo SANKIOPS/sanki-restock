@@ -15,6 +15,26 @@ const row = (action = 'create_internal_transfer') => ({ id: 'bank-0', status: 'r
 const posted = (s = store(), list = movements, current = draft, currentBank = bank) => postedBankRowMovements({ store: s, draft: current, rowId: 'bank-0', bank: currentBank, movements: list });
 const candidate = (s = {}, extra = {}) => findTransferCreationConflicts({ store: s, draft, rowId: 'bank-0', bank, fromAccount: account, toAccount: destination, fromNature: 'SANKI', toNature: 'PERSONAL', principalAmount: 10444, ...extra });
 
+test('separate same-day same-amount rows in one statement may each create a transfer', () => {
+  const weakA = { date: day, debit: 5000, credit: 0, reference: '', description: 'First UPI payment', balance: 10000 };
+  const weakB = { date: day, debit: 5000, credit: 0, reference: '', description: 'Second UPI payment', balance: 5000 };
+  const current = { id: 'BRD-SAME-AMOUNT', nature: 'SANKI', account, transactions: [weakA, weakB], resolutions: {
+    'bank-0': { action: 'create_internal_transfer', otherAccount: destination, otherNature: 'PERSONAL', postingNature: 'SANKI', principalAmount: 5000, chargeAmount: 0 }
+  } };
+  const conflicts = findTransferCreationConflicts({ store: { bankReconciliationDrafts: { [current.id]: current }, transfers: [] }, draft: current, rowId: 'bank-1', bank: weakB, fromAccount: account, toAccount: destination, fromNature: 'SANKI', toNature: 'PERSONAL', principalAmount: 5000 });
+  assert.deepEqual(conflicts, []);
+});
+
+test('an identical duplicate row in one statement remains blocked', () => {
+  const repeated = { date: day, debit: 5000, credit: 0, reference: '', description: 'Same imported bank row', balance: 5000 };
+  const current = { id: 'BRD-IDENTICAL-ROW', nature: 'SANKI', account, transactions: [repeated, { ...repeated }], resolutions: {
+    'bank-0': { action: 'create_internal_transfer', otherAccount: destination, otherNature: 'PERSONAL', postingNature: 'SANKI', principalAmount: 5000, chargeAmount: 0 }
+  } };
+  const conflicts = findTransferCreationConflicts({ store: { bankReconciliationDrafts: { [current.id]: current }, transfers: [] }, draft: current, rowId: 'bank-1', bank: current.transactions[1], fromAccount: account, toAccount: destination, fromNature: 'SANKI', toNature: 'PERSONAL', principalAmount: 5000 });
+  assert.equal(conflicts.length, 1);
+  assert.equal(conflicts[0].rowId, 'bank-0');
+});
+
 test('the screenshot retains both staged transfers and exactly one automatic fee', () => {
   const rows = [
     { id: 'bank-1', status: 'resolved', bank: { date: day, debit: 71123.9, credit: 0 }, resolution: { action: 'create_internal_transfer' } },
