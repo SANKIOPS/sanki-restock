@@ -2571,6 +2571,7 @@ router.use((req,res,next)=>{if(req.method!=='GET'||!['/api/expenses/bank-stateme
 router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{
   const s=loadStore(),draft=(s.bankReconciliationDrafts||{})[String(req.body&&req.body.draftId||'')];
   if(!draft||!canAccessBankDraft(req,s,draft))return next();
+  if(repairMissingReceiptReportingEvidence(s,draft,req))saveStore(s);
   const receiptIssue=receiptReportingEvidenceError(s,draft,true)||receiptAccountEvidenceError(s,draft,req,true);
   if(receiptIssue&&typeof receiptIssue==='object'){const identify=[receiptIssue.date,receiptIssue.amount?'₹'+receiptIssue.amount:'',receiptIssue.reference,receiptIssue.description].filter(Boolean).join(' · ');return res.status(409).json({success:false,error:receiptIssue.message+(identify?' Affected transaction: '+identify+'.':'')+' Open Review / Resolve for '+receiptIssue.rowId+' and save its correct entity again. Nothing was posted.',affectedRows:[receiptIssue]});}
   const error=stagedOwnerPersonalTransferError(draft,s,req);
@@ -5727,6 +5728,25 @@ function receiptAccountInference(draft,row){
 function receiptIssueDetails(draft,rowId,resolution,bank,receipt,selected,message){
   return{message,rowId,date:String(bank&&bank.date||receipt&&receipt.date||''),amount:roundMoney(num(bank&&bank.credit||receipt&&receipt.amount)),reference:String(bank&&bank.reference||''),description:String(bank&&bank.description||''),receiptId:String(receipt&&receipt.id||resolution&&resolution.receiptId||''),savedEntity:String(resolution&&resolution.reportingNature||receipt&&receipt.reportingNature||resolution&&resolution.postingNature||receipt&&receipt.nature||''),currentEntity:String(selected&&selected.nature||''),action:'review_receipt'};
 }
+function repairMissingReceiptReportingEvidence(s,draft,req){
+  let changed=0;
+  for(const[rowId,resolution]of Object.entries(draft&&draft.resolutions||{})){
+    if(!resolution||resolution.action!=='create_receipt')continue;
+    const selected=reconciliationEntityAssignment.assignment(draft,rowId);if(!selected)continue;
+    const index=String(rowId).match(/^bank-(\d+)$/),bank=index&&(draft.transactions||[])[Number(index[1])],receipts=(s.receipts||[]).filter(value=>value.id===resolution.receiptId&&!value.accountingExcluded),receipt=receipts[0],evidence=receipt&&receipt.bankReconciliationEvidence;
+    if(!bank||receipts.length!==1||resolution.appId!==receipt.id||receipt.nature!==resolution.postingNature||receipt.account!==draft.account||receipt.date!==bank.date||num(receipt.amount)!==num(bank.credit)||!evidence||evidence.draftId!==draft.id||evidence.rowId!==rowId||String(evidence.reference||'')!==String(bank.reference||'')||String(evidence.description||'')!==String(bank.description||''))continue;
+    // Versioned rows were created by the current workflow and must remain
+    // strict.  Unversioned rows predate the paired evidence contract; their
+    // two saved values can be absent or stale after an old entity correction.
+    // Exact immutable bank evidence is required before upgrading both halves.
+    if(num(resolution.reportingEvidenceVersion)>=1||num(receipt.reportingEvidenceVersion)>=1)continue;
+    const before={resolutionReportingNature:String(resolution.reportingNature||''),receiptReportingNature:String(receipt.reportingNature||'')};
+    resolution.reportingNature=selected.nature;receipt.reportingNature=selected.nature;resolution.reportingEvidenceVersion=1;receipt.reportingEvidenceVersion=1;changed+=1;
+    draft.decisionAudit=Array.isArray(draft.decisionAudit)?draft.decisionAudit:[];draft.decisionAudit.push({action:'upgrade_legacy_receipt_reporting_evidence',rowId,receiptId:receipt.id,before,after:{reportingNature:selected.nature,reportingEvidenceVersion:1},by:req&&req.user&&req.user.username||'system',at:new Date().toISOString()});
+    if(req)audit(s,req,'LEGACY_RECEIPT_REPORTING_EVIDENCE_UPGRADED','receipt',receipt.id,{nature:receipt.nature,account:receipt.account,before,after:{reportingNature:selected.nature,reportingEvidenceVersion:1},draftId:draft.id,bankRowId:rowId,bankMovementPreserved:true});
+  }
+  return changed;
+}
 function receiptReportingEvidenceError(s,draft,withDetails){
   for(const[rowId,resolution]of Object.entries(draft.resolutions||{})){
     if(!resolution||resolution.action!=='create_receipt')continue;
@@ -6703,7 +6723,7 @@ router.post('/api/expenses/bank-statements/retag',(req,res)=>{
       // selected entity, linked receipt and bank evidence all agree, repair
       // both halves together instead of leaving an unfinalizable draft.
       if(resolution.action==='create_receipt'&&assignment&&assignment.nature===targetNature&&receipt&&receipt.nature===targetNature&&receipt.bankReconciliationEvidence&&receipt.bankReconciliationEvidence.draftId===draft.id&&receipt.bankReconciliationEvidence.rowId===rowId){
-        resolution.reportingNature=targetNature;receipt.reportingNature=targetNature;
+        resolution.reportingNature=targetNature;receipt.reportingNature=targetNature;resolution.reportingEvidenceVersion=1;receipt.reportingEvidenceVersion=1;
       }
     }
   }else{delete draft.transactionOwnership[rowId];if(draft.resolutions&&draft.resolutions[rowId])delete draft.resolutions[rowId].postingNature;}
@@ -6844,7 +6864,7 @@ router.post('/api/expenses/bank-statements/create-rental',(req,res)=>{
   const now=new Date().toISOString(),user=req.user&&req.user.username||'system',receiptType=kind==='rent'?'rental_income':'rental_security',category=kind==='rent'?'Rental Income':'Rental Security Deposit',source=[tenancy.tenant,tenancy.property,tenancy.floor].filter(Boolean).join(' · '),reportEntity=reconciliationEntityAssignment.assignment(draft,b.rowId);
   if(reportEntity&&reportEntity.nature!==selectedNature)return res.status(409).json({success:false,error:'The reviewed reporting entity no longer matches this rental receipt. Review the row entity again.'});
   s.receiptSeq=(s.receiptSeq||0)+1;s.receipts=Array.isArray(s.receipts)?s.receipts:[];
-  const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:selectedNature,account,amount,receiptType,category,source,date:bank.date,note,proof:'',proofs:[],proofException:'Verified directly against uploaded bank statement',createdBy:user,createdAt:now,tenancyId:tenancy.id,rentalKind:kind,bankReconciliationEvidence:{draftId:draft.id,rowId:b.rowId,reference:String(bank.reference||''),description:String(bank.description||'')},...(reportEntity?{reportingNature:reportEntity.nature}:{})};
+  const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:selectedNature,account,amount,receiptType,category,source,date:bank.date,note,proof:'',proofs:[],proofException:'Verified directly against uploaded bank statement',createdBy:user,createdAt:now,tenancyId:tenancy.id,rentalKind:kind,bankReconciliationEvidence:{draftId:draft.id,rowId:b.rowId,reference:String(bank.reference||''),description:String(bank.description||'')},...(reportEntity?{reportingNature:reportEntity.nature,reportingEvidenceVersion:1}:{})};
   s.receipts.push(receipt);draft.transactionOwnership=draft.transactionOwnership||{};draft.transactionOwnership[b.rowId]={nature:selectedNature,reason:note,by:user,at:now,source:'rental_workflow'};const linked=[];
   if(kind==='security'){
     const deposit={id:'SEC-'+crypto.randomUUID(),tenancyId:tenancy.id,receiptId:receipt.id,amount,date:bank.date,reason:note,createdAt:now,createdBy:user};register.deposits.push(deposit);linked.push(deposit.id);
@@ -6854,7 +6874,7 @@ router.post('/api/expenses/bank-statements/create-rental',(req,res)=>{
     if(remaining>0){const credit={id:'CREDIT-'+crypto.randomUUID(),tenancyId:tenancy.id,receiptId:receipt.id,amount:remaining,date:bank.date,reason:note,createdAt:now,createdBy:user};register.credits.push(credit);linked.push(credit.id);}
   }
   register.activity.push({at:now,by:user,action:kind==='rent'?'bank_rent_receipt':'bank_security_deposit',tenancyId:tenancy.id,detail:note+' · '+receipt.id});register.revision++;s.rentals=register;
-  draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_receipt',reason:note,remark:note,appId:receipt.id,receiptId:receipt.id,rentalKind:kind,tenancyId:tenancy.id,rentalRecordIds:linked,postingNature:selectedNature,by:user,at:now,...(reportEntity?{reportingNature:reportEntity.nature}:{})};
+  draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_receipt',reason:note,remark:note,appId:receipt.id,receiptId:receipt.id,rentalKind:kind,tenancyId:tenancy.id,rentalRecordIds:linked,postingNature:selectedNature,by:user,at:now,...(reportEntity?{reportingNature:reportEntity.nature,reportingEvidenceVersion:1}:{})};
   audit(s,req,'RENTAL_RECEIPT_FROM_BANK_RECONCILIATION','receipt',receipt.id,{nature:selectedNature,account,after:receipt,note,draftId:draft.id,bankRowId:b.rowId,tenancyId:tenancy.id,rentalKind:kind});saveStore(s);
   res.json(Object.assign({receipt,tenancy:{id:tenancy.id,tenant:tenancy.tenant,floor:tenancy.floor,property:tenancy.property},rentalKind:kind},draftReconciliation(s,draft)));
 });
@@ -6935,8 +6955,8 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
     s.receiptSeq=(s.receiptSeq||0)+1;s.receipts=Array.isArray(s.receipts)?s.receipts:[];receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:toNature,account:toAccount,amount,receiptType,category,source,date:bank.date,note,proof:'',proofException:'Verified directly against uploaded bank statement',createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:b.rowId,reference:String(bank.reference||''),description:String(bank.description||'')}};
     if(loanFields){try{assertLoanOpenPeriod(s,toNature,toAccount,loanFields.date);}catch(error){return res.status(error.status||400).json({success:false,error:error.message});}Object.assign(receipt,loanFields);}
     if(receiptAccount)receipt.receiptAccount=receiptAccount;
-    if(reportEntity)receipt.reportingNature=reportEntity.nature;
-    s.receipts.push(receipt);draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_receipt',reason:note,remark:note,appId:receipt.id,receiptId:receipt.id,postingNature:toNature,by:user,at:now,...(receiptAccount?{receiptAccount}:{}),...(reportEntity?{reportingNature:reportEntity.nature}:{})};
+    if(reportEntity){receipt.reportingNature=reportEntity.nature;receipt.reportingEvidenceVersion=1;}
+    s.receipts.push(receipt);draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_receipt',reason:note,remark:note,appId:receipt.id,receiptId:receipt.id,postingNature:toNature,by:user,at:now,...(receiptAccount?{receiptAccount}:{}),...(reportEntity?{reportingNature:reportEntity.nature,reportingEvidenceVersion:1}:{})};
     audit(s,req,'CREATED_FROM_BANK_RECONCILIATION','receipt',receipt.id,{nature:toNature,account:toAccount,after:receipt,note,draftId:draft.id,bankRowId:b.rowId});
   }else return res.status(400).json({success:false,error:'Choose internal transfer or external receipt.'});
   saveStore(s);res.json(Object.assign({transfer,receipt},draftReconciliation(s,draft)));

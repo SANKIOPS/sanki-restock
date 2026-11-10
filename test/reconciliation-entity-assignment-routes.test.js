@@ -184,7 +184,7 @@ test('receipt reporting entity preserves physical bank ownership and cannot bypa
   seed({ incoming: true }); assert.equal((await assign({ targetNature: 'PERSONAL', rowIds: ['bank-0'] })).status, 200);
   await unchanged(() => incoming({ receiptType: 'bank_interest', category: 'Bank Interest Received' }, { role: 'admin' }), 403);
   const made = await incoming({ receiptType: 'bank_interest', category: 'Bank Interest Received' }); assert.equal(made.status, 200, JSON.stringify(made.body));
-  assert.equal(made.body.receipt.nature, 'SANKI'); assert.equal(made.body.receipt.account, 'Axis Bank 3448'); assert.equal(made.body.receipt.reportingNature, 'PERSONAL'); assert.equal(read().bankReconciliationDrafts[draftId].resolutions['bank-0'].reportingNature, 'PERSONAL');
+  assert.equal(made.body.receipt.nature, 'SANKI'); assert.equal(made.body.receipt.account, 'Axis Bank 3448'); assert.equal(made.body.receipt.reportingNature, 'PERSONAL'); assert.equal(made.body.receipt.reportingEvidenceVersion, 1); assert.equal(read().bankReconciliationDrafts[draftId].resolutions['bank-0'].reportingNature, 'PERSONAL'); assert.equal(read().bankReconciliationDrafts[draftId].resolutions['bank-0'].reportingEvidenceVersion, 1);
   await unchanged(() => invoke('/api/expenses/bank-statements/finalize', { draftId }, { role: 'admin' }), 409);
   for (const rowId of ['bank-1', 'bank-2']) assert.equal((await incoming({ rowId })).status, 200);
   const before = read(), finalized = await invoke('/api/expenses/bank-statements/finalize', { draftId }); assert.equal(finalized.status, 200, JSON.stringify(finalized.body)); assert.deepEqual(read().receipts, before.receipts);
@@ -205,4 +205,13 @@ test('receipt reporting assignment and its linked source are rechecked before an
     const s = read(); change(s); write(s); const rejected = await unchanged(() => invoke('/api/expenses/bank-statements/finalize', { draftId }), 409);
     assert.match(rejected.body.error, /reporting entity|changed source evidence/); assert.deepEqual(read().bankStatements, {}); assert.deepEqual(read().bankReconciliationApprovals, {});
   }
+});
+
+test('finalization upgrades stale legacy receipt reporting metadata when bank evidence is unchanged', async () => {
+  seed({ incoming: true }); assert.equal((await assign({ rowIds: ['bank-0'] })).status, 200); assert.equal((await incoming()).status, 200);
+  const legacy=read(),receipt=legacy.receipts[0],resolution=legacy.bankReconciliationDrafts[draftId].resolutions['bank-0'];
+  receipt.reportingNature='PERSONAL';resolution.reportingNature='PERSONAL';delete receipt.reportingEvidenceVersion;delete resolution.reportingEvidenceVersion;write(legacy);
+  for (const rowId of ['bank-1', 'bank-2']) assert.equal((await incoming({ rowId })).status, 200);
+  const finalized=await invoke('/api/expenses/bank-statements/finalize',{draftId});assert.equal(finalized.status,200,JSON.stringify(finalized.body));
+  const saved=read(),finalizedReceipt=saved.receipts.find(value=>value.id===receipt.id);assert.equal(finalizedReceipt.reportingNature,'SAMAST');assert.equal(finalizedReceipt.reportingEvidenceVersion,1);assert.ok(saved.auditLog.some(value=>value.action==='LEGACY_RECEIPT_REPORTING_EVIDENCE_UPGRADED'&&value.subjectId===receipt.id));
 });
