@@ -2235,12 +2235,24 @@ function claimantTransferBankNature(draft,row){
   if(draft.account==='IndusInd Bank 7883')return retained||'PERSONAL';
   return draft.account==='Arshpreet 1919'&&['SANKI','SAMAST'].includes(retained)?retained:'';
 }
+function claimantTransferOwnershipEvidence(draft,rowId,row){
+  const manual=draft&&draft.transactionOwnership&&draft.transactionOwnership[rowId]||null,tag=row&&row.entityTag;
+  // Candidate and derived display tags are recalculated whenever the ledger
+  // changes. They are not ownership evidence and must not make an already
+  // reviewed claimant transfer stale. Manual attribution and an explicitly
+  // linked/finalized source remain authoritative and are fingerprinted.
+  const authoritativeTag=tag&&!tag.sourceConflict&&['manual','linked_ledger','finalized_bank_record'].includes(tag.source)?tag:null;
+  return{manual,tag:authoritativeTag};
+}
+function claimantTransferOwnershipFingerprint(draft,rowId,row){
+  return crypto.createHash('sha256').update(JSON.stringify(claimantTransferOwnershipEvidence(draft,rowId,row))).digest('hex');
+}
 function claimantTransferBankSelection(req,draft,row,otherNature,otherAccount){
   const nature=claimantTransferBankNature(draft,row),incoming=num(row&&row.bank&&row.bank.credit)>0;
   if(!nature)return null;
   const selection=prepareClaimantTransferSelection(req,incoming?otherNature:nature,incoming?nature:otherNature,incoming?otherAccount:draft.account,incoming?draft.account:otherAccount);
   if(!selection)return null;
-  return Object.assign(selection,{bankSignature:reconciliationBankStrongSignature(row.bank),bankNature:nature,bankOwnershipFingerprint:crypto.createHash('sha256').update(JSON.stringify({manual:draft.transactionOwnership&&draft.transactionOwnership[row.id]||null,tag:row.entityTag||null})).digest('hex')});
+  return Object.assign(selection,{bankSignature:reconciliationBankStrongSignature(row.bank),bankNature:nature,bankOwnershipFingerprint:claimantTransferOwnershipFingerprint(draft,row.id,row)});
 }
 function claimantTransferEvidenceError(s,draft,req){
   for(const[rowId,resolution]of Object.entries(draft.resolutions||{})){
@@ -2256,8 +2268,13 @@ function claimantTransferEvidenceError(s,draft,req){
       if(retained.length>1||transfer&&(!split||transfer.accountingExcluded||JSON.stringify(transfer.claimantTransferSelection)!==JSON.stringify(selected)||['fromNature','toNature','fromAccount','toAccount','classification'].some(key=>transfer[key]!==selected[key])||transfer.date!==bank.date||Math.abs(num(transfer.amount)-split.principal)>.005||String(transfer.bankReference||'')!==String(bank.reference||'')))return 'The retained claimant transfer no longer matches its exact bank evidence. Review its source workflow.';
     }
     const reviewStore=Object.assign({},s,{transfers:(s.transfers||[]).filter(t=>!(resolution.action==='create_internal_transfer'&&t.reconciliationDraft===draft.id&&t.bankRowId===rowId&&JSON.stringify(t.claimantTransferSelection)===JSON.stringify(selected)))});
-    const clean=ownTransferReviewRow(reviewStore,draft,rowId,resolution),currentNature=claimantTransferBankNature(clean.draft,clean.row),ownershipFingerprint=crypto.createHash('sha256').update(JSON.stringify({manual:clean.draft.transactionOwnership&&clean.draft.transactionOwnership[rowId]||null,tag:clean.row&&clean.row.entityTag||null})).digest('hex');
-    if(currentNature!==selected.bankNature||ownershipFingerprint!==selected.bankOwnershipFingerprint)return 'The claimant transfer has changed or conflicting bank-side ownership evidence. Review or link its existing source.';
+    const clean=ownTransferReviewRow(reviewStore,draft,rowId,resolution),currentNature=claimantTransferBankNature(clean.draft,clean.row),ownershipEvidence=claimantTransferOwnershipEvidence(clean.draft,rowId,clean.row),ownershipFingerprint=claimantTransferOwnershipFingerprint(clean.draft,rowId,clean.row),hasAuthoritativeOwnership=!!(ownershipEvidence.manual||ownershipEvidence.tag);
+    // Legacy selections fingerprinted volatile display tags. If no durable
+    // ownership evidence exists, retain the reviewed canonical 7883 ownership
+    // instead of forcing the user to resolve the same row again. Any new
+    // manual or linked source must still match exactly and therefore fails
+    // closed when it changes.
+    if(currentNature!==selected.bankNature||hasAuthoritativeOwnership&&ownershipFingerprint!==selected.bankOwnershipFingerprint)return 'The claimant transfer has changed or conflicting bank-side ownership evidence. Review or link its existing source.';
     if(resolution.action==='create_transfer'){
       const matches=(s.transfers||[]).filter(t=>t.id===resolution.transferId&&!t.accountingExcluded),transfer=matches[0];
       if(matches.length!==1||resolution.appId!==transfer.id||JSON.stringify(transfer.claimantTransferSelection)!==JSON.stringify(selected)||['fromNature','toNature','fromAccount','toAccount','classification'].some(key=>transfer[key]!==selected[key])||transfer.date!==bank.date||Math.abs(num(transfer.amount)-num(bank.credit))>.005||!transfer.bankReconciliationEvidence||transfer.bankReconciliationEvidence.draftId!==draft.id||transfer.bankReconciliationEvidence.rowId!==rowId||String(transfer.bankReconciliationEvidence.reference||'')!==String(bank.reference||'')||String(transfer.bankReconciliationEvidence.description||'')!==String(bank.description||''))return 'The recorded claimant transfer no longer matches its original bank evidence.';

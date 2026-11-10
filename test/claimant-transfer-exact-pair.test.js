@@ -250,6 +250,19 @@ test('changed authoritative manual attribution blocks finalization without parti
   await assertRejectedUnchanged('/api/expenses/bank-statements/finalize', { draftId: draft.id });
 });
 
+test('legacy volatile claimant ownership fingerprints do not force an unchanged 7883 row to be reviewed again', async () => {
+  const draft = fixture();
+  assert.equal((await dispatch('/api/expenses/bank-statements/resolve', resolveBody(draft, 'SAMAST'), admin)).status, 200);
+  const store = read();
+  store.bankReconciliationDrafts[draft.id].resolutions['bank-0'].claimantTransferSelection.bankOwnershipFingerprint = 'a'.repeat(64);
+  write(store);
+  const submitted = await dispatch('/api/expenses/bank-statements/finalize', { draftId: draft.id }, admin);
+  assert.equal(submitted.status, 202, JSON.stringify(submitted.body));
+  const approved = await dispatch('/api/expenses/bank-statements/finalize', { draftId: draft.id, approveRequestId: submitted.body.approval.id });
+  assert.equal(approved.status, 200, JSON.stringify(approved.body));
+  assert.equal(read().transfers.length, 1);
+});
+
 test('stale or forged source identity and claimant selection fail prefinalization', async () => {
   for (const change of ['reference', 'claimant account', 'claimant entity', 'selection version']) {
     const draft = fixture();
