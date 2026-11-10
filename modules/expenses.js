@@ -2016,9 +2016,21 @@ function personalAccountsForReq(req) {
   if (roles.includes('admin')) return visibleAccountsForReq(req,USER_PAYMENT_ACCOUNTS[username] || []);
   return (CLAIMANT_ACCOUNTS[username] || []).slice();
 }
+function canSelectAllTransactionAccounts(req){
+  return isPrashant(req)&&isAdmin(req)&&canManagePersonalAccounting(req);
+}
+function allCompanyTransactionAccounts(){
+  return Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS))));
+}
 function payingAccountsForReq(req, nature) {
   const username = String((req.user && req.user.username) || '').trim().toLowerCase();
   if (isOwner(req)) return normalizedNature(nature)==='PERSONAL'?Array.from(new Set(companyAccountsForNature('PERSONAL').concat(companyAccountsForNature('SANKI')))):companyAccountsForNature(nature);
+  // The Owner's PERSONAL-account switch grants Prashant operational authority
+  // to record the account that actually moved, irrespective of the expense's
+  // reporting entity. The expense keeps its own entity; ledger/reconciliation
+  // projections follow the selected physical account and preserve that entity
+  // on the audit row.
+  if(canSelectAllTransactionAccounts(req))return allCompanyTransactionAccounts();
   if (normalizedNature(nature)==='PERSONAL' && canManagePersonalAccounting(req)) return companyAccountsForNature('PERSONAL');
   // Every admin may record an actual cash payment made from Gagan Sir Cash.
   // Keep the permission role-based so the option is available in both the web
@@ -2773,7 +2785,11 @@ router.get('/api/expenses/config', (req, res) => {
     bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,ledgerAccountsForNature(s,n).filter(isBankLedgerName)) : []])),
     reconciliationAccountsByNature: Object.fromEntries(NATURES.map(n => [n, (approvalNatures(req).includes(n)||n==='SAMAST'&&(canManagePersonalAccounting(req)||isPrashant(req))) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,reconciliationAccountsForNature(s,n).filter(name=>accountBelongsInLedgerBook(n,name)).filter(name=>{const card=creditCardByAccount(name);return !card||canManageRestrictedCard(req,card);})) : []])),
     ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, n==='SANKI'&&isPrashant(req)&&!isAdmin(req)?[DEFAULT_COUNTER_CASH].concat(PRASHANT_VISIBLE_OWNER_ACCOUNTS):(allowed.includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).filter(name=>accountBelongsInLedgerBook(n,name)).sort((a,b)=>a.localeCompare(b)) : [])])),
-    transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req)&&n!=='PERSONAL' ? (n==='SANKI'&&approvalNatures(req).includes(n)?visibleAccountsForReq(req,transferAccountsForNature(n)):[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
+    transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, canSelectAllTransactionAccounts(req)
+      ? (approvalNatures(req).includes(n)?visibleAccountsForReq(req,transferAccountsForNature(n)):[])
+      : isPrashant(req)&&n!=='PERSONAL'
+        ? (n==='SANKI'&&approvalNatures(req).includes(n)?visibleAccountsForReq(req,transferAccountsForNature(n)):[])
+        : (approvalNatures(req).includes(n)?visibleAccountsForReq(req,transferAccountsForNature(n)):[])])),
     ownerPersonalTransferAccounts: canSelectOwnerPersonalTransferAccounts(req)?OWNER_PERSONAL_TRANSFER_ACCOUNTS.map(account=>({nature:'PERSONAL',account,label:'Gagan Sir Personal · '+account})):[],
     ownTransferAccounts: ownTransferAccountsForReq(req),
     claimantTransferRoutes: claimantTransferRoutesForReq(req),

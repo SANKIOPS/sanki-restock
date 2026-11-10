@@ -1600,6 +1600,12 @@ test('per-user PERSONAL accounting switch grants and revokes the complete privat
   assert.deepEqual(invoke('GET','/api/expenses/config',{role:'claimant',username:'shivam'}).body.reconciliationNatureByAccount,{},'claimants must not receive a shared-bank reconciliation route');
   for(const account of ['ICICI Bank 0993','ICICI Bank 0992','Namita 5464'])assert.ok(granted.reconciliationAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL reconciliation');
   for(const account of ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash'])assert.ok(granted.payingAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL payment choices');
+  const allCompanyAccounts=[].concat(...Object.values(granted.accountsByNature));
+  for(const nature of ['SANKI','SAMAST','PERSONAL'])for(const account of allCompanyAccounts){
+    assert.ok(granted.payingAccountsByNature[nature].includes(account),account+' missing from '+nature+' actual-paying-account choices');
+    assert.ok(granted.vendorPaymentAccountsByNature[nature].includes(account),account+' missing from '+nature+' vendor-payment choices');
+  }
+  for(const account of granted.accountsByNature.SAMAST)assert.ok(granted.transferAccountsByNature.SAMAST.includes(account),account+' missing from SAMAST transfer choices');
   assert.equal(granted.canManagePersonalAccounting,true);
   assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',username:'prashant',permissions,query:{nature:'PERSONAL',account:'ICICI Bank 0992'}}).status,200);
   const businessBalances=invoke('GET','/api/expenses/balances',{role:'admin',username:'prashant',permissions,query:{nature:'SANKI'}}).body.accounts.map(x=>x.name);
