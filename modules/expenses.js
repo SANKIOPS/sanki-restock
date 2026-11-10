@@ -6677,7 +6677,20 @@ router.post('/api/expenses/bank-statements/retag',(req,res)=>{
   let sourceCorrection=null;
   if(authoritativeSource&&targetNature&&sourceNature!==targetNature){sourceCorrection=reconciliationSourceNatureCorrectionPlan(s,row,targetNature,req);if(!sourceCorrection.success)return res.status(409).json({success:false,error:sourceCorrection.error,sourceNature,requestedNature:targetNature,unsupported:sourceCorrection.unsupported||[]});sourceCorrection.apply();sourceCorrection.changes.forEach(change=>audit(s,req,'BANK_RECONCILIATION_SOURCE_ENTITY_CORRECTED',change.kind,change.id,{nature:targetNature,account:draft.account,before:change.before,after:Object.assign({},change.after,{linkedRecordIds:change.linkedRecordIds}),note:reason,draftId:draft.id,bankRowId:rowId,bankMovementPreserved:true}));}
   draft.transactionOwnership=draft.transactionOwnership||{};const previous=draft.transactionOwnership[rowId]||row.entityTag||null,at=new Date().toISOString();
-  if(targetNature){draft.transactionOwnership[rowId]={nature:targetNature,reason,by:req.user.username,at,source:'manual'};if(draft.resolutions&&draft.resolutions[rowId])draft.resolutions[rowId].postingNature=targetNature;}else{delete draft.transactionOwnership[rowId];if(draft.resolutions&&draft.resolutions[rowId])delete draft.resolutions[rowId].postingNature;}
+  if(targetNature){
+    draft.transactionOwnership[rowId]={nature:targetNature,reason,by:req.user.username,at,source:'manual'};
+    const resolution=draft.resolutions&&draft.resolutions[rowId];if(resolution){
+      resolution.postingNature=targetNature;
+      const assignment=reconciliationEntityAssignment.assignment(draft,rowId),receipt=(s.receipts||[]).find(value=>value.id===resolution.receiptId&&!value.accountingExcluded);
+      // A reviewed Results entity is separate from the physical receiving
+      // account.  Older rental receipts predate that metadata; when the
+      // selected entity, linked receipt and bank evidence all agree, repair
+      // both halves together instead of leaving an unfinalizable draft.
+      if(resolution.action==='create_receipt'&&assignment&&assignment.nature===targetNature&&receipt&&receipt.nature===targetNature&&receipt.bankReconciliationEvidence&&receipt.bankReconciliationEvidence.draftId===draft.id&&receipt.bankReconciliationEvidence.rowId===rowId){
+        resolution.reportingNature=targetNature;receipt.reportingNature=targetNature;
+      }
+    }
+  }else{delete draft.transactionOwnership[rowId];if(draft.resolutions&&draft.resolutions[rowId])delete draft.resolutions[rowId].postingNature;}
   const after=targetNature?Object.assign({},draft.transactionOwnership[rowId]):{nature:'',reason,by:req.user.username,at,source:'manual_clear'};draft.decisionAudit=Array.isArray(draft.decisionAudit)?draft.decisionAudit:[];draft.decisionAudit.push({action:'retag_transaction_ownership',rowId,before:previous,after,reason,by:req.user.username,at});
   audit(s,req,'BANK_RECONCILIATION_TRANSACTION_RETAGGED','bank_reconciliation',draft.id,{nature:targetNature||draft.nature,account:draft.account,before:previous,after,sourceCorrections:sourceCorrection?sourceCorrection.changes.map(change=>({type:change.kind,id:change.id,before:change.before,after:change.after})):[],note:reason,bankRowId:rowId,bankMovementPreserved:true});saveStore(s);res.json(draftReconciliation(s,draft));
 });
@@ -6812,9 +6825,10 @@ router.post('/api/expenses/bank-statements/create-rental',(req,res)=>{
   if(!tenancy)return res.status(400).json({success:false,error:'Choose the rental floor / unit.'});
   if(kind==='security'&&tenancy.securityOpening!=null&&tenancy.securityOpeningDate&&bank.date<=tenancy.securityOpeningDate)return res.status(409).json({success:false,error:'This tenant has a recorded opening security balance as of '+tenancy.securityOpeningDate+'. Review that opening balance before adding an earlier security deposit, so it is not counted twice.'});
   const account=allowedTransferAccount(selectedNature,draft.account);if(!account)return res.status(400).json({success:false,error:'The receiving account is not valid.'});
-  const now=new Date().toISOString(),user=req.user&&req.user.username||'system',receiptType=kind==='rent'?'rental_income':'rental_security',category=kind==='rent'?'Rental Income':'Rental Security Deposit',source=[tenancy.tenant,tenancy.property,tenancy.floor].filter(Boolean).join(' · ');
+  const now=new Date().toISOString(),user=req.user&&req.user.username||'system',receiptType=kind==='rent'?'rental_income':'rental_security',category=kind==='rent'?'Rental Income':'Rental Security Deposit',source=[tenancy.tenant,tenancy.property,tenancy.floor].filter(Boolean).join(' · '),reportEntity=reconciliationEntityAssignment.assignment(draft,b.rowId);
+  if(reportEntity&&reportEntity.nature!==selectedNature)return res.status(409).json({success:false,error:'The reviewed reporting entity no longer matches this rental receipt. Review the row entity again.'});
   s.receiptSeq=(s.receiptSeq||0)+1;s.receipts=Array.isArray(s.receipts)?s.receipts:[];
-  const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:selectedNature,account,amount,receiptType,category,source,date:bank.date,note,proof:'',proofs:[],proofException:'Verified directly against uploaded bank statement',createdBy:user,createdAt:now,tenancyId:tenancy.id,rentalKind:kind,bankReconciliationEvidence:{draftId:draft.id,rowId:b.rowId,reference:String(bank.reference||''),description:String(bank.description||'')}};
+  const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:selectedNature,account,amount,receiptType,category,source,date:bank.date,note,proof:'',proofs:[],proofException:'Verified directly against uploaded bank statement',createdBy:user,createdAt:now,tenancyId:tenancy.id,rentalKind:kind,bankReconciliationEvidence:{draftId:draft.id,rowId:b.rowId,reference:String(bank.reference||''),description:String(bank.description||'')},...(reportEntity?{reportingNature:reportEntity.nature}:{})};
   s.receipts.push(receipt);draft.transactionOwnership=draft.transactionOwnership||{};draft.transactionOwnership[b.rowId]={nature:selectedNature,reason:note,by:user,at:now,source:'rental_workflow'};const linked=[];
   if(kind==='security'){
     const deposit={id:'SEC-'+crypto.randomUUID(),tenancyId:tenancy.id,receiptId:receipt.id,amount,date:bank.date,reason:note,createdAt:now,createdBy:user};register.deposits.push(deposit);linked.push(deposit.id);
@@ -6824,7 +6838,7 @@ router.post('/api/expenses/bank-statements/create-rental',(req,res)=>{
     if(remaining>0){const credit={id:'CREDIT-'+crypto.randomUUID(),tenancyId:tenancy.id,receiptId:receipt.id,amount:remaining,date:bank.date,reason:note,createdAt:now,createdBy:user};register.credits.push(credit);linked.push(credit.id);}
   }
   register.activity.push({at:now,by:user,action:kind==='rent'?'bank_rent_receipt':'bank_security_deposit',tenancyId:tenancy.id,detail:note+' · '+receipt.id});register.revision++;s.rentals=register;
-  draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_receipt',reason:note,remark:note,appId:receipt.id,receiptId:receipt.id,rentalKind:kind,tenancyId:tenancy.id,rentalRecordIds:linked,postingNature:selectedNature,by:user,at:now};
+  draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_receipt',reason:note,remark:note,appId:receipt.id,receiptId:receipt.id,rentalKind:kind,tenancyId:tenancy.id,rentalRecordIds:linked,postingNature:selectedNature,by:user,at:now,...(reportEntity?{reportingNature:reportEntity.nature}:{})};
   audit(s,req,'RENTAL_RECEIPT_FROM_BANK_RECONCILIATION','receipt',receipt.id,{nature:selectedNature,account,after:receipt,note,draftId:draft.id,bankRowId:b.rowId,tenancyId:tenancy.id,rentalKind:kind});saveStore(s);
   res.json(Object.assign({receipt,tenancy:{id:tenancy.id,tenant:tenancy.tenant,floor:tenancy.floor,property:tenancy.property},rentalKind:kind},draftReconciliation(s,draft)));
 });

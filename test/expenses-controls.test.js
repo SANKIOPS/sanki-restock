@@ -2623,14 +2623,15 @@ test('7883 rental and security receipts honor the reviewed entity and remain lin
       const stored=JSON.parse(baseline),rental=require('../modules/rental-register'),register=rental.state(stored),tenancy=register.tenancies[0],amount=20000;
       tenancy.securityOpening=0;tenancy.securityOpeningDate='2098-07-03';
       register.invoices=[{id:'INV-RENT-SHARED',tenancyId:tenancy.id,month:'2098-07',dueDate:'2098-07-01',bankDue:10000}];register.allocations=[];register.credits=[];register.deposits=[];stored.rentals=register;
-      stored.bankStatements={};stored.bankReconciliationDrafts={[draftId]:{id:draftId,nature:'SAMAST',account,transactions:[{date,description:'Tenant '+kind,reference:'RENT-SHARED-'+nature+'-'+kind,debit:0,credit:amount,balance:amount}],summary:{from:date,to:date,openingBalance:0,closingBalance:amount,totalCredits:amount,totalDebits:0,validated:true},resolutions:{},transactionOwnership:{'bank-0':{nature,reason:'Reviewed tenant receipt'}},createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'}};
+      const bankRow={date,description:'Tenant '+kind,reference:'RENT-SHARED-'+nature+'-'+kind,debit:0,credit:amount,balance:amount},bankSignature=crypto.createHash('sha256').update(JSON.stringify(bankRow)).digest('hex');
+      stored.bankStatements={};stored.bankReconciliationDrafts={[draftId]:{id:draftId,nature:'SAMAST',account,transactions:[bankRow],summary:{from:date,to:date,openingBalance:0,closingBalance:amount,totalCredits:amount,totalDebits:0,validated:true},resolutions:{},transactionOwnership:{'bank-0':{nature,reason:'Reviewed tenant receipt'}},entityAssignments:{'bank-0':{nature,reason:'Reviewed tenant receipt',bankSignature}},createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'}};
       fs.writeFileSync(file,JSON.stringify(stored));
       const body={draftId,rowId:'bank-0',tenancyId:tenancy.id,kind,note:'Reviewed '+nature+' '+kind};
       const response=invoke('POST','/api/expenses/bank-statements/create-rental',{role:'admin',body});
       assert.equal(response.status,200,JSON.stringify(response.body));
       const receipt=response.body.receipt,after=JSON.parse(fs.readFileSync(file,'utf8')),resolution=after.bankReconciliationDrafts[draftId].resolutions['bank-0'];
       assert.deepEqual([receipt.nature,receipt.account,receipt.amount,receipt.tenancyId],[nature,account,amount,tenancy.id]);
-      assert.equal(resolution.postingNature,nature);assert.equal(after.bankReconciliationDrafts[draftId].transactionOwnership['bank-0'].nature,nature);
+      assert.equal(resolution.postingNature,nature);assert.equal(resolution.reportingNature,nature);assert.equal(receipt.reportingNature,nature);assert.equal(after.bankReconciliationDrafts[draftId].transactionOwnership['bank-0'].nature,nature);
       assert.equal(receipt.receiptType,kind==='security'?'rental_security':'rental_income');
       assert.ok(after.auditLog.some(x=>x.action==='RENTAL_RECEIPT_FROM_BANK_RECONCILIATION'&&x.subjectId===receipt.id&&x.nature===nature));
       if(kind==='security'){
@@ -2646,6 +2647,9 @@ test('7883 rental and security receipts honor the reviewed entity and remain lin
       assert.ok(rentalView.body.receipts.some(x=>x.id===receipt.id));assert.deepEqual(rentalView.body.integrity,[]);
       const duplicate=invoke('POST','/api/expenses/bank-statements/create-rental',{role:'admin',body});assert.equal(duplicate.status,409);
       assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).receipts.filter(x=>x.id===receipt.id).length,1);
+      const legacy=JSON.parse(fs.readFileSync(file,'utf8'));delete legacy.receipts.find(x=>x.id===receipt.id).reportingNature;delete legacy.bankReconciliationDrafts[draftId].resolutions['bank-0'].reportingNature;fs.writeFileSync(file,JSON.stringify(legacy));
+      const repaired=invoke('POST','/api/expenses/bank-statements/retag',{role:'owner',body:{draftId,rowId:'bank-0',nature,reason:'Repair legacy rental reporting entity'}});assert.equal(repaired.status,200,JSON.stringify(repaired.body));
+      const repairedStore=JSON.parse(fs.readFileSync(file,'utf8'));assert.equal(repairedStore.receipts.find(x=>x.id===receipt.id).reportingNature,nature);assert.equal(repairedStore.bankReconciliationDrafts[draftId].resolutions['bank-0'].reportingNature,nature);
       const beforeDependency=fs.readFileSync(file,'utf8'),dependent=JSON.parse(beforeDependency);
       dependent.rentals.allocations.push({id:'RA-LATER-DEPENDENCY',tenancyId:tenancy.id,invoiceId:'INV-RENT-SHARED',kind:kind==='security'?'security':'credit',creditId:kind==='rent'?dependent.rentals.credits.find(x=>x.receiptId===receipt.id).id:'',amount:10000,date,reason:'Later rental settlement'});
       fs.writeFileSync(file,JSON.stringify(dependent));const held=fs.readFileSync(file,'utf8');
