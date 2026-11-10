@@ -39,6 +39,7 @@ const saleStoreCreditCorrections = require('./sale-store-credit-corrections');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const v8 = require('v8');
 const crypto = require('crypto');
 const multer = require('multer');
 const XLSX = require('xlsx');
@@ -106,6 +107,12 @@ const STATEMENT_DRAFT_DIR = path.join(DATA_DIR, 'bank-statement-drafts');
 const ACCOUNTING_READ_FILES = [EXP_PATH,CREDIT_CARD_PATH,PROC_PATH,SALES_PATH,SALARY_PATH,SAMAST_SALARY_PATH,INCENTIVES_PATH,ORDERS_PATH,VELOCITY_REMITTANCE_PATH];
 const accountingReadCache = new Map();
 let accountingReadRevision = 0;
+let normalizedStoreSnapshot = null;
+let normalizedStoreFingerprint = '';
+function cacheNormalizedStore(store){
+  try { normalizedStoreSnapshot=v8.serialize(store);normalizedStoreFingerprint=accountingReadFingerprint(); }
+  catch(error){ normalizedStoreSnapshot=null;normalizedStoreFingerprint='';console.error('[expenses] Could not cache normalized store:',error.message); }
+}
 function accountingReadFingerprint(){
   return ACCOUNTING_READ_FILES.map(file=>{try{const stat=fs.statSync(file,{bigint:true});return file+':'+stat.size+':'+stat.mtimeNs+':'+stat.ctimeNs;}catch{return file+':missing';}}).join('|');
 }
@@ -1232,6 +1239,11 @@ function applyIcici0992HotelIncomeBulkUndo(s){
 }
 function loadStore() {
   bankAuthorityTransaction.recover(DATA_DIR);
+  const fingerprint=accountingReadFingerprint();
+  if(normalizedStoreSnapshot&&normalizedStoreFingerprint===fingerprint){
+    try { return v8.deserialize(normalizedStoreSnapshot); }
+    catch(error){ normalizedStoreSnapshot=null;normalizedStoreFingerprint='';console.error('[expenses] Could not clone cached store:',error.message); }
+  }
   let s;
   try { s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8'))); }
   catch(error) { console.error('[expenses] Could not read expenses.json:',error);return blankStore(); }
@@ -1467,7 +1479,7 @@ function loadStore() {
     if(mergeSharedIndus7883BankBook(s))saveStore(s);
     if(ledgerConnections.repairCreatedTransferLinks(s,({transfer,record,row,key,before})=>audit(s,null,'BANK_CREATED_TRANSFER_LINK_RESTORED','transfer',transfer.id,{nature:transfer.nature,account:key,before,after:{recordId:record.id,rowId:row.id,linkedRecordIds:row.linkedRecordIds},note:'Restored by exact finalized bank-row provenance; amounts, approvals and bank evidence unchanged.'})))saveStore(s);
     try{const apiFile=path.join(DATA_DIR,'gokwik_api_evidence.json');if(fs.existsSync(apiFile)){const evidence=JSON.parse(fs.readFileSync(apiFile,'utf8')),orders=JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};require('./gokwik-api-accounting').stage(s,Object.values(evidence.days||{}).flat(),Object.values(orders),{readOnly:true});}}catch(e){console.error('[gokwik-accounting-api] '+e.message);}
-    return s;
+    cacheNormalizedStore(s);return s;
   }
   catch(error) { console.error('[expenses] Store repair failed; serving the original financial records:',error);return s; }
 }
@@ -1498,12 +1510,13 @@ function saveStore(s, options = {}) {
   if(s._bankAuthorityExternal&&s._bankAuthorityExternal.length){
     const entries=[{fileName:'expenses.json',before:fs.existsSync(EXP_PATH)?fs.readFileSync(EXP_PATH,'utf8'):null,after:JSON.stringify(s)}];
     for(const change of s._bankAuthorityExternal){if(change.store!=='creditCards')throw new Error('Invalid linked bank-authority store.');entries.push({fileName:'credit-cards.json',before:change.before,after:change.after});}
-    bankAuthorityTransaction.commit(DATA_DIR,entries);delete s._bankAuthorityExternal;invalidateAccountingReadCache();return;
+    bankAuthorityTransaction.commit(DATA_DIR,entries);delete s._bankAuthorityExternal;cacheNormalizedStore(s);invalidateAccountingReadCache();return;
   }
   const tmp = EXP_PATH + '.tmp-' + process.pid + '-' + Date.now();
   try {
     fs.writeFileSync(tmp, JSON.stringify(s));
     fs.renameSync(tmp, EXP_PATH);
+    cacheNormalizedStore(s);
     invalidateAccountingReadCache();
   } finally {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
@@ -5948,7 +5961,7 @@ function pendingTransferConflicts(s,draft,rows){
   }
   return conflicts;
 }
-function bankAmountAuthorityOptions(s,draft){
+function bankAmountAuthorityOptions(s,draft,precomputedMovements){
   // The matching decision may authorize a correction within THIS unfinished
   // draft. It never unlocks a different active draft or finalized evidence.
   const lockStore={...s,bankReconciliationDrafts:{...(s.bankReconciliationDrafts||{})}};
@@ -5958,7 +5971,10 @@ function bankAmountAuthorityOptions(s,draft){
   const creditCardsText=fs.existsSync(CREDIT_CARD_PATH)?fs.readFileSync(CREDIT_CARD_PATH,'utf8'):null,creditCards=creditCardsText?JSON.parse(creditCardsText):{cards:{},payments:[],statements:{}};
   return{
     universal:true,externalStores:{creditCards},externalStoreText:{creditCards:creditCardsText},
-    resolveMovement:(candidateStore,candidateDraft,id)=>appBankMovements(candidateStore,candidateDraft.account,candidateDraft.nature).filter(row=>row.id===id),
+    resolveMovement:(candidateStore,candidateDraft,id)=>{
+      const movements=candidateStore===s&&candidateDraft===draft&&precomputedMovements?precomputedMovements:appBankMovements(candidateStore,candidateDraft.account,candidateDraft.nature);
+      return movements.filter(row=>row.id===id);
+    },
     isLocked:expense=>expenseFinancialLock(lockStore,expense,{blockedReferences}),
     isProtected:(id,record)=>transferReimbursements.protectsMovement(s,id)||gokwikAccounting.protectsMovement(s,id)||expenseLoans.protectsMovement(s,id)||expenseRefunds.protectsMovement(s,id)||!!(record&&(record.manualSaleId||record.paytmTransactionId||record.confirmedBankSplit||record.bankReconciliationEvidence))
   };
@@ -5966,6 +5982,7 @@ function bankAmountAuthorityOptions(s,draft){
 function draftReconciliation(s,draft,options={}){
   const view=draftReconciliationBase(s,draft,options);
   if(view.success){
+    Object.defineProperty(view,'_bankMovements',{value:options.precomputedMovements||[],enumerable:false});
     const pending=Object.values(s.bankReconciliationApprovals||{}).some(value=>value&&value.draftId===draft.id&&value.status==='pending');
     view.rows.forEach(row=>{const selected=reconciliationEntityAssignment.assignment(draft,row.id);if(selected)row.entityAssignment=Object.assign({},selected);row.entityAssignmentEditable=!pending&&reconciliationEntityAssignment.editable(draft,row);const receiptAccount=receiptAccountInference(draft,row);if(receiptAccount)row.receiptAccountNature=receiptAccount.nature;});
   }
@@ -5998,7 +6015,7 @@ function draftReconciliationBase(s,draft,options={}){
   // ledger movements so that late evidence can still match, while keeping
   // previously linked rows and previously posted automatic Axis fees closed.
   const gokwikPlan=gokwikBank.plan(s,draft,gokwikOrderList());
-  const wasPreviouslyLinked=x=>priorLinkedIds.has(x.id)||(x.sourceIds||[]).some(id=>priorLinkedIds.has(id)),isCurrentPeriodMovement=x=>!effectiveFrom||x.date>effectiveFrom||x.date===effectiveFrom&&!wasPreviouslyLinked(x)&&!x.automaticAxisTransferCharge,allApp=appBankMovements(s,draft.account,draft.nature).concat(gokwikPlan.items.map(x=>x.app));let app=allApp.filter(x=>isCurrentPeriodMovement(x)&&(!statement.from||x.date>=statement.from)&&(!statement.to||x.date<=statement.to));const used=new Set(),rows=[];
+  const wasPreviouslyLinked=x=>priorLinkedIds.has(x.id)||(x.sourceIds||[]).some(id=>priorLinkedIds.has(id)),isCurrentPeriodMovement=x=>!effectiveFrom||x.date>effectiveFrom||x.date===effectiveFrom&&!wasPreviouslyLinked(x)&&!x.automaticAxisTransferCharge,allApp=appBankMovements(s,draft.account,draft.nature).concat(gokwikPlan.items.map(x=>x.app));options.precomputedMovements=allApp;let app=allApp.filter(x=>isCurrentPeriodMovement(x)&&(!statement.from||x.date>=statement.from)&&(!statement.to||x.date<=statement.to));const used=new Set(),rows=[];
   const multiActions=['link_multiple_existing','link_with_rounding','vendor_advance_split'],multiBankAction='link_multiple_bank_entries',singleLinkActions=['accept_match','link_existing','opening_vendor_payable_split','split_allocation','create_receipt','create_transfer','create_expense','create_loan_repayment'],appIndexForId=id=>app.findIndex(x=>x.id===id||(x.sourceIds||[]).includes(id)),appForId=id=>{const index=appIndexForId(id);return index>=0?app[index]:null;};
   const priorByBankIndex=new Map(),priorMatches=matchFinalizedBankRows(Object.values(book.transactions||{}),bank);priorMatches.matches.forEach((row,index)=>priorByBankIndex.set(index,row));bank.forEach((b,i)=>{if(!priorByBankIndex.has(i)&&effectiveFrom&&String(b.date||'')<effectiveFrom)priorByBankIndex.set(i,{id:'RECONCILED-THROUGH-'+effectiveFrom,date:b.date,continuityCutoff:true});});
   // A ledger row created after finalization may describe a cutoff-day bank row

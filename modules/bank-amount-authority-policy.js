@@ -11,7 +11,7 @@ module.exports = function createPolicy(engine, deps) {
   function prepare(store, draft, bank, movement, rowId, mode, overrides = {}) {
     if (!deps.accountEligible(draft)) throw new Error('This amount rule is for bank accounts, not cash, credit cards, wallets or settlement clearing accounts.');
     if (deps.knownCharge && deps.knownCharge(bank, movement, draft)) throw new Error('This bank total includes a recognized transfer charge. Preserve the separate principal and Bank Charges allocation.');
-    return engine.plan(store, draft, bank, movement, { ...deps.options(store, draft), bankRowId: rowId, mode, amountAuthorityAllocations: overrides.amountAuthorityAllocations });
+    return engine.plan(store, draft, bank, movement, { ...deps.options(store, draft, overrides.movements), bankRowId: rowId, mode, amountAuthorityAllocations: overrides.amountAuthorityAllocations });
   }
   function publicPlan(plan) {
     // Access to the physical bank does not grant access to a private invoice.
@@ -43,7 +43,7 @@ module.exports = function createPolicy(engine, deps) {
   }
   function decorate(store, draft, view) {
     const plans = [], candidates = [], originalStatuses = new Map();
-    const enabled = deps.accountEligible(draft), movements = enabled ? deps.movements(store, draft) : [];
+    const enabled = deps.accountEligible(draft), movements = enabled ? (view._bankMovements || deps.movements(store, draft)) : [];
     const banks = (draft.transactions || []), errors = [];
     for (const row of view.rows || []) {
       if (!row.bank || !row.app || row.status === 'already_reconciled') continue;
@@ -58,7 +58,7 @@ module.exports = function createPolicy(engine, deps) {
           if (!planId || !saved || saved.id !== planId) throw new Error('The private bank amount proposal is missing.');
           if (!enabled || !['accept_match', 'link_existing'].includes(resolution.action) || saved.movementId !== row.app.id || saved.bankRowId !== row.id) throw new Error('The saved bank amount decision no longer identifies this one-to-one match.');
           if (saved.draftId !== draft.id || saved.bankFingerprint !== engine.fingerprint(row.bank)) throw new Error('The private bank amount proposal belongs to different or changed statement evidence.');
-          engine.validate(store, saved, deps.options(store, draft));
+          engine.validate(store, saved, deps.options(store, draft, movements));
           row.bankAmountAuthority = publicPlan(saved); plans.push(saved);
         } catch (error) { row.bankAmountAuthorityBlocked = error.message; errors.push({ type: 'stale_bank_amount_authority', bankRowIds: [row.id], message: error.message + ' Undo and review this amount decision again; nothing was posted.' }); }
         continue;
@@ -68,14 +68,14 @@ module.exports = function createPolicy(engine, deps) {
       try { difference = amount(row.bank) - amount(row.app); } catch { continue; }
       if (!difference) continue;
       let manual;
-      try { manual = prepare(store, draft, row.bank, row.app, row.id, 'manual'); row.bankAmountAuthority = publicPlan(manual); }
+      try { manual = prepare(store, draft, row.bank, row.app, row.id, 'manual', { movements }); row.bankAmountAuthority = publicPlan(manual); }
       catch (error) { row.bankAmountAuthorityBlocked = error.message; }
       // Exact-reference or unique-party evidence is required in addition to
       // proximity. A small difference alone never establishes a match.
       const automatic = manual && Math.abs(difference) <= 100 && !row.axisTransferCharge && automaticIdentity(row.bank, row.app, banks, movements);
       if (automatic) {
         try {
-          const plan = prepare(store, draft, row.bank, row.app, row.id, 'auto');
+          const plan = prepare(store, draft, row.bank, row.app, row.id, 'auto', { movements });
           originalStatuses.set(row.id, row.status); row.status = 'matched';
           row.bankAmountAuthority = publicPlan(plan); plans.push(plan); candidates.push(row);
           row.matchExplanation = [row.matchExplanation, 'Verified bank amount is authoritative within ₹1; correction posts only with Owner finalization'].filter(Boolean).join('. ');
