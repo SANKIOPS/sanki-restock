@@ -411,7 +411,8 @@ function startGoKwikSync(){
  const production=String(process.env.RAILWAY_ENVIRONMENT_NAME||'').toLowerCase()==='production';
  const configured=Number(process.env.GOKWIK_BACKGROUND_SYNC_MINUTES);
  const minutes=Number.isFinite(configured)&&configured>0?configured:(production?360:30);
- setTimeout(tick,45000);setInterval(tick,Math.max(1,minutes)*60*1000);
+ const startupMinutes=production?25:0.75;
+ setTimeout(tick,startupMinutes*60*1000);setInterval(tick,Math.max(1,minutes)*60*1000);
 }
 router.post('/api/orders-ledger/gokwik-sync',(req,res)=>{
  if(!process.env.GOKWIK_APP_ID||!process.env.GOKWIK_APP_SECRET)return res.status(503).json({success:false,error:'GoKwik API credentials are not configured'});
@@ -569,7 +570,7 @@ function startAutoSync() {
   const tick = () => runSync().then(r => {
     if (r && r.imported) console.log(`[orders] sync: +${r.imported} (${r.mode}), total ${r.total}`);
   }).catch(e => console.error('[orders] sync error:', e.message));
-  setTimeout(tick, 15 * 1000);        // first run shortly after boot
+  setTimeout(tick, production ? 5 * 60 * 1000 : 15 * 1000);
   setInterval(tick, every);
 }
 

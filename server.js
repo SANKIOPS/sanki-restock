@@ -2849,6 +2849,10 @@ app.listen(PORT, async () => {
     const configured = Number(process.env[name]);
     return Math.max(60 * 1000, (Number.isFinite(configured) && configured > 0 ? configured : fallbackMinutes) * 60 * 1000);
   };
+  const startupDelay = (name, fallbackMinutes) => {
+    const configured = Number(process.env[name]);
+    return Math.max(1000, (Number.isFinite(configured) && configured >= 0 ? configured : fallbackMinutes) * 60 * 1000);
+  };
   setImmediate(()=>recoverExpenseProofStorage().catch(error=>console.error('[storage] proof recovery failed safely:',error)));
   const hasVelocity = VELOCITY_API_KEY || (VELOCITY_USERNAME && VELOCITY_PASSWORD);
   console.log(`🚀 SANKI Business OS v4.0 — port ${PORT}`);
@@ -2877,15 +2881,19 @@ app.listen(PORT, async () => {
   loadCache();
   loadVelCache();
 
-  // Initial syncs on startup
+  // Stagger initial provider work in production. Webhooks keep current orders
+  // flowing while the server becomes available immediately for accounting.
   if (SHOPIFY_STORE && SHOPIFY_TOKEN) {
-    console.log('[sync] Starting initial Shopify sync...');
-    // Do not let a slow historical Shopify pull delay independent payment pollers.
-    backgroundSync(SYNC_DAYS).catch(e=>console.error('[sync] Initial Shopify sync failed: '+e.message));
+    setTimeout(() => {
+      console.log('[sync] Starting deferred Shopify sync...');
+      backgroundSync(SYNC_DAYS).catch(e=>console.error('[sync] Initial Shopify sync failed: '+e.message));
+    }, startupDelay('SHOPIFY_STARTUP_SYNC_MINUTES', production ? 10 : 0));
   }
   if (hasVelocity) {
-    console.log('[velocity] Starting initial Velocity sync...');
-    setTimeout(() => syncVelocityShipments(), 5000); // 5s after Shopify sync
+    setTimeout(() => {
+      console.log('[velocity] Starting deferred Velocity sync...');
+      syncVelocityShipments();
+    }, startupDelay('VELOCITY_STARTUP_SYNC_MINUTES', production ? 15 : 0.1));
   }
 
   // Shopify catalogue/order mirrors do not need to monopolise the accounting
@@ -2899,7 +2907,7 @@ app.listen(PORT, async () => {
   // Discover shipments by Shopify external ID, including orders with no Shopify AWB.
   const autoSyncLogistics=()=>require('./modules/orders').syncLogistics().then(r=>console.log('[velocity-orders] Matched '+r.matchedOrders+' orders from '+r.total+' shipments')).catch(e=>console.error('[velocity-orders] '+e.message));
   setInterval(autoSyncLogistics, interval('VELOCITY_LOGISTICS_SYNC_MINUTES', production ? 60 : 10));
-  setTimeout(autoSyncLogistics,20*1000);
+  setTimeout(autoSyncLogistics, startupDelay('VELOCITY_LOGISTICS_STARTUP_MINUTES', production ? 20 : 0.33));
 
   // Provider remittance evidence refresh; bank reconciliation remains separate.
   async function autoSyncRemittance() {
@@ -2908,11 +2916,11 @@ app.listen(PORT, async () => {
     catch(e) { console.log('[velocity-finance] Sync unavailable: '+e.message); }
   }
   setInterval(autoSyncRemittance, interval('VELOCITY_FINANCE_SYNC_MINUTES', production ? 360 : 60));
-  setTimeout(autoSyncRemittance, 30 * 1000); // also try 30s after startup
+  setTimeout(autoSyncRemittance, startupDelay('VELOCITY_FINANCE_STARTUP_MINUTES', production ? 30 : 0.5));
 
   const syncVelocityPayouts=()=>{if(!process.env.VELOCITY_MCP_ACCESS_TOKEN||!process.env.VELOCITY_MCP_UID)return;require('./modules/orders').syncVelocityPayouts().then(r=>console.log('[velocity-payouts] Synced '+r.batches+' batches; '+r.allocationIssues+' allocation issues')).catch(e=>console.error('[velocity-payouts] '+e.message));};
   setInterval(syncVelocityPayouts, interval('VELOCITY_PAYOUT_SYNC_MINUTES', production ? 360 : 60));
-  setTimeout(syncVelocityPayouts,40000);
+  setTimeout(syncVelocityPayouts, startupDelay('VELOCITY_PAYOUT_STARTUP_MINUTES', production ? 40 : 0.67));
 
   // Self-ping every 14 min to keep Render free tier alive
   setInterval(async () => {
