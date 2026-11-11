@@ -2147,7 +2147,11 @@
       tasks.push(loadReconciliationAttention());
       var paytmToken=paytmStatusGeneration,creditToken=creditStatusGeneration;
       if(paytmHost)tasks.push(api('/api/expenses/paytm-reports',{cache:'no-store'}).then(function(d){if(paytmToken===paytmStatusGeneration&&tab===currentTab&&el('ptSaved')===paytmHost&&!reconciliationStatusBusy()){if(!d.success)throw Error(d.error);showPaytmSaved(d);}}));
-      if(el('bs_account')&&el('ledgerRecon')&&el('ledgerRecon').style.display!=='none')tasks.push(loadBankStatement(bankDraftId,true));
+      // Bank reconciliation is intentionally excluded from passive polling. Building
+      // that view compares every statement row with the ledger, so running it on the
+      // timer/focus path can monopolize the server and replace an operator's current
+      // review. The bank status still refreshes after every explicit action and from
+      // its own Refresh shared status button below.
       if(cashHost)tasks.push(loadCounterCashReconciliation(Number(cashHost.dataset.currentBalance||0),true));
       if(tab==='creditcards')tasks.push(Promise.all([api('/api/expenses/credit-cards',{cache:'no-store'}),api('/api/expenses/credit-cards/statements',{cache:'no-store'})]).then(function(all){if(creditToken!==creditStatusGeneration||tab!==currentTab||reconciliationStatusBusy())return;if(!all[0].success||!all[1].success)throw Error('Could not refresh credit-card status.');ccData=all[0];ccStatements=all[1].statements||[];drawCreditCards();}));
       return Promise.all(tasks);
@@ -2155,7 +2159,7 @@
     function initializeReconciliationStatusRefresh(){
       sharedReconciliationRefresh=ReconciliationStatus.createRefreshController({isHidden:function(){return document.hidden;},isBusy:reconciliationStatusBusy,refresh:refreshSharedReconciliationStatus,onError:function(){var host=document.querySelector('.reconciliation-shared-status');if(host&&!host.querySelector('[data-refresh-warning]'))host.insertAdjacentHTML('beforeend','<p class="msg err" data-refresh-warning>Status refresh failed. The last loaded state is shown; use Refresh shared status or check the connection.</p>');}});
       ['input','change'].forEach(function(type){document.addEventListener(type,function(event){if(event.target.id==='ptReviewFilter'||event.target.id==='ptReviewSearch')return;var root=event.target.closest('#ptSaved,#bs_table,.cc-review');if(!root&&tab==='creditcards'&&el('panel')&&el('panel').contains(event.target))root=el('panel');if(root)root.dataset.reconciliationDirty='true';});});
-      document.addEventListener('click',function(event){if(event.target.closest('[data-reconciliation-refresh]'))sharedReconciliationRefresh.run();});
+      document.addEventListener('click',function(event){var button=event.target.closest('[data-reconciliation-refresh]');if(!button)return;if(button.closest('#bs_table')){if(!reconciliationStatusBusy())loadBankStatement(bankDraftId);return;}sharedReconciliationRefresh.run();});
       window.addEventListener('focus',function(){sharedReconciliationRefresh.run();});
       document.addEventListener('visibilitychange',function(){if(!document.hidden)sharedReconciliationRefresh.run();});
       window.setInterval(function(){sharedReconciliationRefresh.run();},30000);

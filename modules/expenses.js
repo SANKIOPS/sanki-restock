@@ -113,8 +113,16 @@ function cacheNormalizedStore(store){
   try { normalizedStoreSnapshot=v8.serialize(store);normalizedStoreFingerprint=accountingReadFingerprint(); }
   catch(error){ normalizedStoreSnapshot=null;normalizedStoreFingerprint='';console.error('[expenses] Could not cache normalized store:',error.message); }
 }
-function accountingReadFingerprint(){
-  return ACCOUNTING_READ_FILES.map(file=>{try{const stat=fs.statSync(file,{bigint:true});return file+':'+stat.size+':'+stat.mtimeNs+':'+stat.ctimeNs;}catch{return file+':missing';}}).join('|');
+function accountingReadFingerprint(files=ACCOUNTING_READ_FILES){
+  return files.map(file=>{try{const stat=fs.statSync(file,{bigint:true});return file+':'+stat.size+':'+stat.mtimeNs+':'+stat.ctimeNs;}catch{return file+':missing';}}).join('|');
+}
+function accountingRequestFingerprint(req){
+  // PERSONAL and SAMAST ledgers never project Shopify/Velocity sales. A new
+  // web order must not evict their bank-statement cache and force the entire
+  // personal reconciliation to be rebuilt for Owner and Admin.
+  const nature=String(req.query&&req.query.nature||'SANKI').trim().toUpperCase();
+  const files=nature==='SANKI'?ACCOUNTING_READ_FILES:ACCOUNTING_READ_FILES.filter(file=>file!==ORDERS_PATH&&file!==VELOCITY_REMITTANCE_PATH);
+  return accountingReadFingerprint(files);
 }
 function invalidateAccountingReadCache(){accountingReadRevision+=1;accountingReadCache.clear();}
 // The ledger and reconciliation views are expensive projections over the same
@@ -122,7 +130,7 @@ function invalidateAccountingReadCache(){accountingReadRevision+=1;accountingRea
 // every accounting save also clears this cache explicitly below.
 router.use((req,res,next)=>{
   if(req.method!=='GET'||!['/api/expenses/bank-statements','/api/expenses/account-ledger'].includes(req.path))return next();
-  const key=[accountingReadRevision,accountingReadFingerprint(),req.path,JSON.stringify(req.query||{}),req.user&&req.user.username||'',req.user&&req.user.role||'',JSON.stringify(req.user&&req.user.roles||[]),JSON.stringify(req.user&&req.user.permissions||{})].join('|');
+  const key=[accountingReadRevision,accountingRequestFingerprint(req),req.path,JSON.stringify(req.query||{}),req.user&&req.user.username||'',req.user&&req.user.role||'',JSON.stringify(req.user&&req.user.roles||[]),JSON.stringify(req.user&&req.user.permissions||{})].join('|');
   const cached=accountingReadCache.get(key);if(cached)return res.json(cached);
   const original=res.json.bind(res);res.json=payload=>{if(payload&&payload.success){accountingReadCache.set(key,payload);if(accountingReadCache.size>40)accountingReadCache.delete(accountingReadCache.keys().next().value);}return original(payload);};next();
 });
@@ -6031,8 +6039,11 @@ function draftReconciliationBase(s,draft,options={}){
   // date after its ledger entry was recorded. Admit only unused cutoff-day
   // ledger movements so that late evidence can still match, while keeping
   // previously linked rows and previously posted automatic Axis fees closed.
-  const gokwikPlan=gokwikBank.plan(s,draft,gokwikOrderList());
-  const wasPreviouslyLinked=x=>priorLinkedIds.has(x.id)||(x.sourceIds||[]).some(id=>priorLinkedIds.has(id)),isCurrentPeriodMovement=x=>!effectiveFrom||x.date>effectiveFrom||x.date===effectiveFrom&&!wasPreviouslyLinked(x)&&!x.automaticAxisTransferCharge,allApp=appBankMovements(s,draft.account,draft.nature).concat(gokwikPlan.items.map(x=>x.app));options.precomputedMovements=allApp;let app=allApp.filter(x=>isCurrentPeriodMovement(x)&&(!statement.from||x.date>=statement.from)&&(!statement.to||x.date<=statement.to));const used=new Set(),rows=[];
+  // Only 0437 can contain GoKwik settlements.  Parsing the complete Shopify
+  // order archive for every 7883/0992/3448 reconciliation made an otherwise
+  // ordinary statement view pay the cost of an unrelated sales workflow.
+  const gokwikPlan=gokwikBank.plan(s,draft,draft.account===gokwikAccounting.BANK&&normalizedNature(draft.nature)==='SANKI'?gokwikOrderList():[]);
+  const wasPreviouslyLinked=x=>priorLinkedIds.has(x.id)||(x.sourceIds||[]).some(id=>priorLinkedIds.has(id)),isCurrentPeriodMovement=x=>!effectiveFrom||x.date>effectiveFrom||x.date===effectiveFrom&&!wasPreviouslyLinked(x)&&!x.automaticAxisTransferCharge,allApp=appBankMovements(s,draft.account,draft.nature).concat(gokwikPlan.items.map(x=>x.app)),allAppById=new Map();allApp.forEach(movement=>[movement.id].concat(movement.sourceIds||[]).forEach(id=>{if(id&&!allAppById.has(id))allAppById.set(id,movement);}));options.precomputedMovements=allApp;let app=allApp.filter(x=>isCurrentPeriodMovement(x)&&(!statement.from||x.date>=statement.from)&&(!statement.to||x.date<=statement.to));const used=new Set(),rows=[];
   const multiActions=['link_multiple_existing','link_with_rounding','vendor_advance_split'],multiBankAction='link_multiple_bank_entries',singleLinkActions=['accept_match','link_existing','opening_vendor_payable_split','split_allocation','create_receipt','create_transfer','create_expense','create_loan_repayment'],appIndexForId=id=>app.findIndex(x=>x.id===id||(x.sourceIds||[]).includes(id)),appForId=id=>{const index=appIndexForId(id);return index>=0?app[index]:null;};
   const priorByBankIndex=new Map(),priorMatches=matchFinalizedBankRows(Object.values(book.transactions||{}),bank);priorMatches.matches.forEach((row,index)=>priorByBankIndex.set(index,row));bank.forEach((b,i)=>{if(!priorByBankIndex.has(i)&&effectiveFrom&&String(b.date||'')<effectiveFrom)priorByBankIndex.set(i,{id:'RECONCILED-THROUGH-'+effectiveFrom,date:b.date,continuityCutoff:true});});
   // A ledger row created after finalization may describe a cutoff-day bank row
@@ -6054,7 +6065,7 @@ function draftReconciliationBase(s,draft,options={}){
   const foreignClaims=otherDraftClaimedAppIds(s,draft,allApp),blockedApp=new Set(used);app.forEach((movement,index)=>{if([movement.id].concat(movement.sourceIds||[]).some(id=>foreignClaims.has(id)))blockedApp.add(index);});
   app.forEach((movement,index)=>{if(movement.pendingPosting&&movement.gokwikSettlementId)blockedApp.add(index);});
   const reversalBankIds=new Set(bankReversalEvidenceGroups(bank).flatMap(group=>group.map(x=>'bank-'+x.index))),blockedBank=new Set(bank.map((x,i)=>i).filter(i=>reversalBankIds.has('bank-'+i)||priorByBankIndex.has(i)||gokwikPlan.items.some(item=>item.rowId==='bank-'+i)||gokwikPlan.errors.some(error=>error.bankRowIds.includes('bank-'+i))||!!(draft.resolutions&&draft.resolutions['bank-'+i])||!!(draft.matchingExclusions&&draft.matchingExclusions['bank-'+i]))),suggestions=reconciliationMatchPlan(bank,app,blockedBank,blockedApp,draft.matchingPolicy,draft.account);
-  bank.forEach((b,bi)=>{const id='bank-'+bi,resolution=draft.resolutions&&draft.resolutions[id],prior=priorByBankIndex.get(bi);if(prior){rows.push({id,status:'already_reconciled',bank:b,previousOwnership:prior.entityTag||prior.ownershipTag||prior.transactionOwnership||null,resolution:{action:'already_reconciled',reason:'Already finalized in an earlier overlapping statement',bankTransactionId:prior.id}});return;}if(resolution&&resolution.action===multiBankAction){const linked=appForId(resolution.appId)||appBankMovements(s,draft.account,draft.nature).find(x=>x.id===resolution.appId||(x.sourceIds||[]).includes(resolution.appId)),primary=id===resolution.primaryRowId;rows.push({id,status:'missing_in_app',bank:b,app:primary?linked:null,resolution});return;}if(resolution&&multiActions.includes(resolution.action)){const linked=(resolution.appIds||[]).map(appForId).filter(Boolean),aggregate={id:(resolution.appIds||[]).join(', '),date:b.date,description:resolution.description||linked.map(x=>x.description).filter(Boolean).join(' + ')||linked.length+' linked existing entries',debit:linked.reduce((n,x)=>n+num(x.debit),0),credit:linked.reduce((n,x)=>n+num(x.credit),0),linkedEntries:linked};rows.push({id,status:'missing_in_app',bank:b,app:aggregate,resolution});return;}if(resolution&&singleLinkActions.includes(resolution.action)&&resolution.appId){const linkedIndex=appIndexForId(resolution.appId),linked=linkedIndex>=0?app[linkedIndex]:appBankMovements(s,draft.account,draft.nature).find(x=>x.id===resolution.appId||(x.sourceIds||[]).includes(resolution.appId));if(linked){if(linkedIndex>=0)used.add(linkedIndex);rows.push({id,status:'missing_in_app',bank:b,app:linked,resolution});return;}}if(draft.matchingExclusions&&draft.matchingExclusions[id]){rows.push({id,status:'missing_in_app',bank:b,resolution,matchingExclusion:draft.matchingExclusions[id]});return;}const suggestion=suggestions.get(bi),manualNature=reconciliationOwnershipNature(draft.transactionOwnership&&draft.transactionOwnership[id]&&draft.transactionOwnership[id].nature),suggestedNature=suggestion&&reconciliationLinkedOwnershipNature(app[suggestion.ai]&&app[suggestion.ai].entity);if(suggestion&&!used.has(suggestion.ai)&&manualNature&&suggestedNature&&manualNature!==suggestedNature){rows.push({id,status:'missing_in_app',bank:b,resolution,ownershipCandidateSuppressed:{appId:app[suggestion.ai].id,entity:suggestedNature,reason:'The manual transaction entity does not match this unconfirmed suggestion.'}});}else if(suggestion&&!used.has(suggestion.ai)){used.add(suggestion.ai);rows.push({id,status:suggestion.axisTransferCharge||suggestion.exactAmount&&!suggestion.requiresConfirmation?'matched':suggestion.exactAmount?'possible_match':'amount_mismatch',confidence:suggestion.score,confidenceLabel:suggestion.confidenceLabel,referenceVerified:suggestion.referenceMatch===true,matchExplanation:suggestion.explanation,axisTransferCharge:suggestion.axisTransferCharge||false,chargeAmount:num(suggestion.chargeAmount),bank:b,app:app[suggestion.ai],resolution});}else rows.push({id,status:'missing_in_app',bank:b,resolution});});
+  bank.forEach((b,bi)=>{const id='bank-'+bi,resolution=draft.resolutions&&draft.resolutions[id],prior=priorByBankIndex.get(bi);if(prior){rows.push({id,status:'already_reconciled',bank:b,previousOwnership:prior.entityTag||prior.ownershipTag||prior.transactionOwnership||null,resolution:{action:'already_reconciled',reason:'Already finalized in an earlier overlapping statement',bankTransactionId:prior.id}});return;}if(resolution&&resolution.action===multiBankAction){const linked=appForId(resolution.appId)||allAppById.get(resolution.appId),primary=id===resolution.primaryRowId;rows.push({id,status:'missing_in_app',bank:b,app:primary?linked:null,resolution});return;}if(resolution&&multiActions.includes(resolution.action)){const linked=(resolution.appIds||[]).map(appForId).filter(Boolean),aggregate={id:(resolution.appIds||[]).join(', '),date:b.date,description:resolution.description||linked.map(x=>x.description).filter(Boolean).join(' + ')||linked.length+' linked existing entries',debit:linked.reduce((n,x)=>n+num(x.debit),0),credit:linked.reduce((n,x)=>n+num(x.credit),0),linkedEntries:linked};rows.push({id,status:'missing_in_app',bank:b,app:aggregate,resolution});return;}if(resolution&&singleLinkActions.includes(resolution.action)&&resolution.appId){const linkedIndex=appIndexForId(resolution.appId),linked=linkedIndex>=0?app[linkedIndex]:allAppById.get(resolution.appId);if(linked){if(linkedIndex>=0)used.add(linkedIndex);rows.push({id,status:'missing_in_app',bank:b,app:linked,resolution});return;}}if(draft.matchingExclusions&&draft.matchingExclusions[id]){rows.push({id,status:'missing_in_app',bank:b,resolution,matchingExclusion:draft.matchingExclusions[id]});return;}const suggestion=suggestions.get(bi),manualNature=reconciliationOwnershipNature(draft.transactionOwnership&&draft.transactionOwnership[id]&&draft.transactionOwnership[id].nature),suggestedNature=suggestion&&reconciliationLinkedOwnershipNature(app[suggestion.ai]&&app[suggestion.ai].entity);if(suggestion&&!used.has(suggestion.ai)&&manualNature&&suggestedNature&&manualNature!==suggestedNature){rows.push({id,status:'missing_in_app',bank:b,resolution,ownershipCandidateSuppressed:{appId:app[suggestion.ai].id,entity:suggestedNature,reason:'The manual transaction entity does not match this unconfirmed suggestion.'}});}else if(suggestion&&!used.has(suggestion.ai)){used.add(suggestion.ai);rows.push({id,status:suggestion.axisTransferCharge||suggestion.exactAmount&&!suggestion.requiresConfirmation?'matched':suggestion.exactAmount?'possible_match':'amount_mismatch',confidence:suggestion.score,confidenceLabel:suggestion.confidenceLabel,referenceVerified:suggestion.referenceMatch===true,matchExplanation:suggestion.explanation,axisTransferCharge:suggestion.axisTransferCharge||false,chargeAmount:num(suggestion.chargeAmount),bank:b,app:app[suggestion.ai],resolution});}else rows.push({id,status:'missing_in_app',bank:b,resolution});});
   // A retried/saved decision can already have a posted principal or fee. Exact
   // origin/bank-row evidence consumes it for matching and staging, not money.
   rows.forEach(row=>{if(!row.bank)return;postedBankRowMovements({store:s,draft,rowId:row.id,bank:row.bank,movements:app}).forEach(movement=>{const index=appIndexForId(movement.id);if(index>=0)used.add(index);});});
@@ -6111,12 +6122,19 @@ function draftReconciliationBase(s,draft,options={}){
 function repairOrphanedReconciliationExpenses(s,draft){
   if(!draft)return 0;
   draft.resolutions=draft.resolutions||{};
-  let repaired=0;
-  Object.keys(draft.resolutions).forEach(rowId=>{
-    if(draft.resolutions[rowId]&&draft.resolutions[rowId].repairedAt){delete draft.resolutions[rowId];repaired+=1;}
+  // This is a one-way legacy repair.  A repaired decision is authoritative and
+  // must not be deleted and recreated on every read: doing that forced two full
+  // reconciliation projections, rewrote expenses.json, and invalidated the GET
+  // cache every time an operator opened or refreshed a statement.
+  const candidates=Object.values(s.expenses||{}).filter(expense=>{
+    const source=expense&&expense.reconciliationSource;
+    if(!source||source.draftId!==draft.id||!source.rowId||draft.resolutions[source.rowId])return false;
+    return !!((expense.payments||[]).find(x=>x.bankReconciliationDraft===draft.id&&x.bankReconciliationRow===source.rowId)||(expense.payments||[])[0]);
   });
+  if(!candidates.length)return 0;
+  let repaired=0;
   const baselineRows=new Map(draftReconciliation(s,draft).rows.map(row=>[row.id,row]));
-  Object.values(s.expenses||{}).forEach(expense=>{
+  candidates.forEach(expense=>{
     const source=expense&&expense.reconciliationSource;
     const baseline=source&&baselineRows.get(source.rowId);
     if(!source||source.draftId!==draft.id||!source.rowId||draft.resolutions[source.rowId]||!baseline||baseline.status!=='missing_in_app')return;
