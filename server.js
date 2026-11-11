@@ -102,10 +102,13 @@ function sweepAbandonedRuntimeFiles() {
   } catch {}
   return {removed,freedBytes};
 }
-try {
-  const swept=sweepAbandonedRuntimeFiles();
-  if(swept.removed)console.log('[storage] removed '+swept.removed+' abandoned file(s), freed '+(swept.freedBytes/1048576).toFixed(2)+' MB');
-} catch(error) { console.error('[storage] abandoned-file sweep failed safely:',error); }
+const RUN_STORAGE_MAINTENANCE=/^(?:1|true|yes)$/i.test(String(process.env.RUN_STORAGE_MAINTENANCE||''));
+if(RUN_STORAGE_MAINTENANCE){
+  try {
+    const swept=sweepAbandonedRuntimeFiles();
+    if(swept.removed)console.log('[storage] removed '+swept.removed+' abandoned file(s), freed '+(swept.freedBytes/1048576).toFixed(2)+' MB');
+  } catch(error) { console.error('[storage] abandoned-file sweep failed safely:',error); }
+}
 
 // Resumable recovery for a full volume. Linked files are never deleted. Large
 // JPEGs in the main proof/photo archives are decoded completely before their
@@ -2845,6 +2848,7 @@ app.listen(PORT, async () => {
   // hundreds of remote calls and large JSON writes.  Production uses a
   // deliberately quieter cadence; every interval remains overridable.
   const production = String(process.env.RAILWAY_ENVIRONMENT_NAME || '').toLowerCase() === 'production';
+  const providerPollersEnabled = !production || /^(?:1|true|yes)$/i.test(String(process.env.ENABLE_BACKGROUND_PROVIDER_SYNCS || ''));
   const interval = (name, fallbackMinutes) => {
     const configured = Number(process.env[name]);
     return Math.max(60 * 1000, (Number.isFinite(configured) && configured > 0 ? configured : fallbackMinutes) * 60 * 1000);
@@ -2853,7 +2857,7 @@ app.listen(PORT, async () => {
     const configured = Number(process.env[name]);
     return Math.max(1000, (Number.isFinite(configured) && configured >= 0 ? configured : fallbackMinutes) * 60 * 1000);
   };
-  setImmediate(()=>recoverExpenseProofStorage().catch(error=>console.error('[storage] proof recovery failed safely:',error)));
+  if(RUN_STORAGE_MAINTENANCE)setImmediate(()=>recoverExpenseProofStorage().catch(error=>console.error('[storage] proof recovery failed safely:',error)));
   const hasVelocity = VELOCITY_API_KEY || (VELOCITY_USERNAME && VELOCITY_PASSWORD);
   console.log(`🚀 SANKI Business OS v4.0 — port ${PORT}`);
   console.log(`   Shopify:   ${SHOPIFY_STORE ? '✅ ' + SHOPIFY_STORE : '❌ not configured'}`);
@@ -2874,7 +2878,10 @@ app.listen(PORT, async () => {
   // Sales spine — keep the local Shopify-order ledger fresh. Backfills on
   // first run, then incremental every few minutes. Read-only; never writes
   // back to Shopify.
-  try { require('./modules/orders').startAutoSync(); require('./modules/orders').startGoKwikSync(); }
+  try {
+    if(providerPollersEnabled){require('./modules/orders').startAutoSync();require('./modules/orders').startGoKwikSync();}
+    else console.log('[sync] background provider polling disabled; webhooks and manual sync remain active');
+  }
   catch (e) { console.error('[orders] auto-sync start error:', e.message); }
 
   // Load caches from disk
@@ -2883,13 +2890,13 @@ app.listen(PORT, async () => {
 
   // Stagger initial provider work in production. Webhooks keep current orders
   // flowing while the server becomes available immediately for accounting.
-  if (SHOPIFY_STORE && SHOPIFY_TOKEN) {
+  if (providerPollersEnabled && SHOPIFY_STORE && SHOPIFY_TOKEN) {
     setTimeout(() => {
       console.log('[sync] Starting deferred Shopify sync...');
       backgroundSync(SYNC_DAYS).catch(e=>console.error('[sync] Initial Shopify sync failed: '+e.message));
     }, startupDelay('SHOPIFY_STARTUP_SYNC_MINUTES', production ? 10 : 0));
   }
-  if (hasVelocity) {
+  if (providerPollersEnabled && hasVelocity) {
     setTimeout(() => {
       console.log('[velocity] Starting deferred Velocity sync...');
       syncVelocityShipments();
@@ -2898,16 +2905,18 @@ app.listen(PORT, async () => {
 
   // Shopify catalogue/order mirrors do not need to monopolise the accounting
   // process. Webhooks still provide immediate order updates.
-  setInterval(() => backgroundSync(SYNC_DAYS), interval('SHOPIFY_BACKGROUND_SYNC_MINUTES', production ? 30 : 15));
+  if(providerPollersEnabled)setInterval(() => backgroundSync(SYNC_DAYS), interval('SHOPIFY_BACKGROUND_SYNC_MINUTES', production ? 30 : 15));
 
   // Provider history is eventually consistent. Hourly polling is sufficient
   // in production and keeps bank reconciliation responsive.
-  setInterval(() => syncVelocityShipments(), interval('VELOCITY_BACKGROUND_SYNC_MINUTES', production ? 60 : 30));
+  if(providerPollersEnabled)setInterval(() => syncVelocityShipments(), interval('VELOCITY_BACKGROUND_SYNC_MINUTES', production ? 60 : 30));
 
   // Discover shipments by Shopify external ID, including orders with no Shopify AWB.
   const autoSyncLogistics=()=>require('./modules/orders').syncLogistics().then(r=>console.log('[velocity-orders] Matched '+r.matchedOrders+' orders from '+r.total+' shipments')).catch(e=>console.error('[velocity-orders] '+e.message));
-  setInterval(autoSyncLogistics, interval('VELOCITY_LOGISTICS_SYNC_MINUTES', production ? 60 : 10));
-  setTimeout(autoSyncLogistics, startupDelay('VELOCITY_LOGISTICS_STARTUP_MINUTES', production ? 20 : 0.33));
+  if(providerPollersEnabled){
+    setInterval(autoSyncLogistics, interval('VELOCITY_LOGISTICS_SYNC_MINUTES', production ? 60 : 10));
+    setTimeout(autoSyncLogistics, startupDelay('VELOCITY_LOGISTICS_STARTUP_MINUTES', production ? 20 : 0.33));
+  }
 
   // Provider remittance evidence refresh; bank reconciliation remains separate.
   async function autoSyncRemittance() {
@@ -2915,12 +2924,16 @@ app.listen(PORT, async () => {
     try { const result=await require('./modules/orders').syncFinance(); console.log('[velocity-finance] Checked '+result.checked+' AWBs; '+result.reportedSettled+' provider-reported payouts'); }
     catch(e) { console.log('[velocity-finance] Sync unavailable: '+e.message); }
   }
-  setInterval(autoSyncRemittance, interval('VELOCITY_FINANCE_SYNC_MINUTES', production ? 360 : 60));
-  setTimeout(autoSyncRemittance, startupDelay('VELOCITY_FINANCE_STARTUP_MINUTES', production ? 30 : 0.5));
+  if(providerPollersEnabled){
+    setInterval(autoSyncRemittance, interval('VELOCITY_FINANCE_SYNC_MINUTES', production ? 360 : 60));
+    setTimeout(autoSyncRemittance, startupDelay('VELOCITY_FINANCE_STARTUP_MINUTES', production ? 30 : 0.5));
+  }
 
   const syncVelocityPayouts=()=>{if(!process.env.VELOCITY_MCP_ACCESS_TOKEN||!process.env.VELOCITY_MCP_UID)return;require('./modules/orders').syncVelocityPayouts().then(r=>console.log('[velocity-payouts] Synced '+r.batches+' batches; '+r.allocationIssues+' allocation issues')).catch(e=>console.error('[velocity-payouts] '+e.message));};
-  setInterval(syncVelocityPayouts, interval('VELOCITY_PAYOUT_SYNC_MINUTES', production ? 360 : 60));
-  setTimeout(syncVelocityPayouts, startupDelay('VELOCITY_PAYOUT_STARTUP_MINUTES', production ? 40 : 0.67));
+  if(providerPollersEnabled){
+    setInterval(syncVelocityPayouts, interval('VELOCITY_PAYOUT_SYNC_MINUTES', production ? 360 : 60));
+    setTimeout(syncVelocityPayouts, startupDelay('VELOCITY_PAYOUT_STARTUP_MINUTES', production ? 40 : 0.67));
+  }
 
   // Self-ping every 14 min to keep Render free tier alive
   setInterval(async () => {
@@ -2933,8 +2946,10 @@ app.listen(PORT, async () => {
     // 1) Ensure the orders/paid webhook is registered (real-time sale → queue)
     setTimeout(ensureOrdersPaidWebhook, 8 * 1000);
     // 2) Reconcile catch-up scan: 60s after boot, then hourly
-    setTimeout(reconcileFrontDeficits, 60 * 1000);
-    setInterval(reconcileFrontDeficits, 60 * 60 * 1000);
+    if(providerPollersEnabled){
+      setTimeout(reconcileFrontDeficits, 60 * 1000);
+      setInterval(reconcileFrontDeficits, 60 * 60 * 1000);
+    }
     // 3) Notification tick every 5 min (handles 09:30 IST digest + 2-hourly nudge)
     setInterval(notificationTick, 5 * 60 * 1000);
     console.log(`[showroom] notifications → ${NOTIFY_EMAIL_TO} ${RESEND_API_KEY ? '(Resend live)' : '(log-only, set RESEND_API_KEY)'}`);
