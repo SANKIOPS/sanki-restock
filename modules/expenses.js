@@ -6206,10 +6206,17 @@ async function recoverStoredBankReversalMetadata(req,draft){
   if(crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')!==expectedHash)return false;
   let parsed;try{parsed=await parseBankStatementUpload(file,source.originalName||path.basename(file),'');}catch{return false;}
   const accountLast4=(String(draft.account||'').match(/(\d{4})(?!.*\d)/)||[])[1]||'',patches=recoverReversalSourceMetadata({currentTransactions:draft.transactions,parsedTransactions:parsed,accountLast4});
-  if(!patches.length)return false;
   // Reload after parsing to retain decisions saved concurrently by another reviewer.
   const s=loadStore(),current=(s.bankReconciliationDrafts||{})[draft.id];
   if(!current||current.account!==draft.account||JSON.stringify(current.transactions)!==JSON.stringify(draft.transactions)||!canAccessBankDraft(req,s,current))return false;
+  // Persist a negative result too. Previously, a statement with no reversal
+  // patches was read, hashed and fully PDF-parsed again on every GET and every
+  // 30-second status refresh.
+  if(!patches.length){
+    current.reversalSourceMetadataVersion=1;
+    current.reversalSourceMetadataRecovery={at:new Date().toISOString(),sourceHash:expectedHash,rows:[],result:'checked_no_reversal_metadata'};
+    saveStore(s);return true;
+  }
   const before=patches.map(x=>({rowId:'bank-'+x.index,description:current.transactions[x.index].description,reference:current.transactions[x.index].reference,reversal:current.transactions[x.index].reversal}));
   patches.forEach(x=>Object.assign(current.transactions[x.index],x.metadata));current.reversalSourceMetadataVersion=1;
   current.reversalSourceMetadataRecovery={at:new Date().toISOString(),sourceHash:expectedHash,rows:patches.map(x=>'bank-'+x.index)};
