@@ -2839,6 +2839,16 @@ app.get('*', (req, res) => {
 // Railway health check waiting. Recovery remains resumable and runs in the
 // background without changing accounting JSON.
 app.listen(PORT, async () => {
+  // Railway runs the API and all provider pollers in one Node process.  The
+  // historical defaults started several large Shopify/Velocity scans within
+  // minutes of each other, so reconciliation requests had to compete with
+  // hundreds of remote calls and large JSON writes.  Production uses a
+  // deliberately quieter cadence; every interval remains overridable.
+  const production = String(process.env.RAILWAY_ENVIRONMENT_NAME || '').toLowerCase() === 'production';
+  const interval = (name, fallbackMinutes) => {
+    const configured = Number(process.env[name]);
+    return Math.max(60 * 1000, (Number.isFinite(configured) && configured > 0 ? configured : fallbackMinutes) * 60 * 1000);
+  };
   setImmediate(()=>recoverExpenseProofStorage().catch(error=>console.error('[storage] proof recovery failed safely:',error)));
   const hasVelocity = VELOCITY_API_KEY || (VELOCITY_USERNAME && VELOCITY_PASSWORD);
   console.log(`🚀 SANKI Business OS v4.0 — port ${PORT}`);
@@ -2878,15 +2888,17 @@ app.listen(PORT, async () => {
     setTimeout(() => syncVelocityShipments(), 5000); // 5s after Shopify sync
   }
 
-  // Shopify: sync every 15 min
-  setInterval(() => backgroundSync(SYNC_DAYS), 15 * 60 * 1000);
+  // Shopify catalogue/order mirrors do not need to monopolise the accounting
+  // process. Webhooks still provide immediate order updates.
+  setInterval(() => backgroundSync(SYNC_DAYS), interval('SHOPIFY_BACKGROUND_SYNC_MINUTES', production ? 30 : 15));
 
-  // Velocity: sync every 30 min
-  setInterval(() => syncVelocityShipments(), 30 * 60 * 1000);
+  // Provider history is eventually consistent. Hourly polling is sufficient
+  // in production and keeps bank reconciliation responsive.
+  setInterval(() => syncVelocityShipments(), interval('VELOCITY_BACKGROUND_SYNC_MINUTES', production ? 60 : 30));
 
   // Discover shipments by Shopify external ID, including orders with no Shopify AWB.
   const autoSyncLogistics=()=>require('./modules/orders').syncLogistics().then(r=>console.log('[velocity-orders] Matched '+r.matchedOrders+' orders from '+r.total+' shipments')).catch(e=>console.error('[velocity-orders] '+e.message));
-  setInterval(autoSyncLogistics,10*60*1000);
+  setInterval(autoSyncLogistics, interval('VELOCITY_LOGISTICS_SYNC_MINUTES', production ? 60 : 10));
   setTimeout(autoSyncLogistics,20*1000);
 
   // Provider remittance evidence refresh; bank reconciliation remains separate.
@@ -2895,11 +2907,11 @@ app.listen(PORT, async () => {
     try { const result=await require('./modules/orders').syncFinance(); console.log('[velocity-finance] Checked '+result.checked+' AWBs; '+result.reportedSettled+' provider-reported payouts'); }
     catch(e) { console.log('[velocity-finance] Sync unavailable: '+e.message); }
   }
-  setInterval(autoSyncRemittance, 60 * 60 * 1000); // hourly
+  setInterval(autoSyncRemittance, interval('VELOCITY_FINANCE_SYNC_MINUTES', production ? 360 : 60));
   setTimeout(autoSyncRemittance, 30 * 1000); // also try 30s after startup
 
   const syncVelocityPayouts=()=>{if(!process.env.VELOCITY_MCP_ACCESS_TOKEN||!process.env.VELOCITY_MCP_UID)return;require('./modules/orders').syncVelocityPayouts().then(r=>console.log('[velocity-payouts] Synced '+r.batches+' batches; '+r.allocationIssues+' allocation issues')).catch(e=>console.error('[velocity-payouts] '+e.message));};
-  setInterval(syncVelocityPayouts,60*60*1000);
+  setInterval(syncVelocityPayouts, interval('VELOCITY_PAYOUT_SYNC_MINUTES', production ? 360 : 60));
   setTimeout(syncVelocityPayouts,40000);
 
   // Self-ping every 14 min to keep Render free tier alive

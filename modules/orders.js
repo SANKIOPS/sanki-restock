@@ -408,7 +408,10 @@ function syncGoKwik(force=false){
 }
 function startGoKwikSync(){
  const tick=()=>{if(!process.env.GOKWIK_APP_ID||!process.env.GOKWIK_APP_SECRET)return;syncGoKwik().then(r=>{if(!r.skipped)console.log('[gokwik-api] Synced '+r.rows+' settlement records across '+r.days+' days');}).catch(e=>console.error('[gokwik-api] '+e.message));};
- setTimeout(tick,45000);setInterval(tick,30*60*1000);
+ const production=String(process.env.RAILWAY_ENVIRONMENT_NAME||'').toLowerCase()==='production';
+ const configured=Number(process.env.GOKWIK_BACKGROUND_SYNC_MINUTES);
+ const minutes=Number.isFinite(configured)&&configured>0?configured:(production?360:30);
+ setTimeout(tick,45000);setInterval(tick,Math.max(1,minutes)*60*1000);
 }
 router.post('/api/orders-ledger/gokwik-sync',(req,res)=>{
  if(!process.env.GOKWIK_APP_ID||!process.env.GOKWIK_APP_SECRET)return res.status(503).json({success:false,error:'GoKwik API credentials are not configured'});
@@ -561,7 +564,8 @@ router.post('/api/orders-ledger/:id/dispatch', (req, res) => {
 // ── Auto-sync poller (kept lightweight; incremental only) ────────
 function startAutoSync() {
   if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) { console.warn('[orders] Shopify env unset — auto-sync disabled'); return; }
-  const every = parseInt(process.env.ORDERS_SYNC_INTERVAL_MS, 10) || 10 * 60 * 1000; // 10 min
+  const production = String(process.env.RAILWAY_ENVIRONMENT_NAME || '').toLowerCase() === 'production';
+  const every = parseInt(process.env.ORDERS_SYNC_INTERVAL_MS, 10) || (production ? 30 : 10) * 60 * 1000;
   const tick = () => runSync().then(r => {
     if (r && r.imported) console.log(`[orders] sync: +${r.imported} (${r.mode}), total ${r.total}`);
   }).catch(e => console.error('[orders] sync error:', e.message));
