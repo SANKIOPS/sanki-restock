@@ -68,12 +68,17 @@ function harness({ account = bankAccount, owner = false, reconcile = false, url 
 test('late cash responses cannot replace 0993 ledger or its pending Owner approval', async () => {
   const ui = harness({ account: cashAccount, reconcile: true });
   ui.context.loadAccountLedger(); ui.nodes.lg_account.value = bankAccount; ui.context.loadAccountLedger();
-  const ledgers = ui.requests('account-ledger'), statements = ui.requests('bank-statements');
-  statements[1].resolve(bankResponse()); ledgers[1].resolve(ledgerResponse()); await flush();
+  const ledgers = ui.requests('account-ledger');
+  assert.equal(ledgers.length, 2); assert.equal(ui.requests('bank-statements').length, 0, 'reconciliation waits for the winning ledger response');
+  ledgers[1].resolve(ledgerResponse()); await flush();
+  const statements = ui.requests('bank-statements');
+  assert.equal(statements.length, 1, 'the current ledger starts exactly one reconciliation read');
+  statements[0].resolve(bankResponse()); await flush();
   assert.match(ui.nodes.ledgerTable.innerHTML, /Usable balance · ICICI Bank 0993/);
   assert.match(ui.nodes.bs_table.innerHTML, /Awaiting Owner approval/);
   const currentLedger = ui.nodes.ledgerTable.innerHTML, currentStatement = ui.nodes.bs_table.innerHTML;
-  statements[0].resolve(bankResponse(cashAccount, false)); ledgers[0].resolve(ledgerResponse(cashAccount)); await flush();
+  ledgers[0].resolve(ledgerResponse(cashAccount)); await flush();
+  assert.equal(ui.requests('bank-statements').length, 1, 'the obsolete cash response cannot start a reconciliation read');
   assert.equal(ui.nodes.lg_account.value, bankAccount); assert.equal(ui.nodes.bs_account.value, bankAccount);
   assert.equal(ui.nodes.ledgerTable.innerHTML, currentLedger); assert.equal(ui.nodes.bs_table.innerHTML, currentStatement);
   assert.equal(ui.context.bankDraftId, draftId);
@@ -107,6 +112,19 @@ for (const failure of ['response error', 'network failure']) test('current ' + f
   stale.calls[1].resolve(ledgerResponse()); await flush(); const content = stale.nodes.ledgerTable.innerHTML;
   fail(stale.calls[0], 'Old cash ledger unavailable'); await flush(); assert.equal(stale.nodes.ledgerTable.innerHTML, content);
 });
+test('a failed ledger can be retried and only the successful retry loads reconciliation once', async () => {
+  const ui = harness({ reconcile: true });
+  const first = ui.context.loadAccountLedger();
+  ui.requests('account-ledger')[0].resolve({ success: false, error: 'Temporary ledger failure' }); await first;
+  assert.match(ui.nodes.ledgerTable.innerHTML, /Retry loading ledger/);
+  assert.equal(ui.requests('bank-statements').length, 0, 'a failed ledger never starts reconciliation');
+  const retry = ui.context.loadAccountLedger();
+  ui.requests('account-ledger')[1].resolve(ledgerResponse()); await flush();
+  assert.equal(ui.requests('bank-statements').length, 1, 'the successful retry starts one reconciliation request');
+  ui.requests('bank-statements')[0].resolve(bankResponse()); await retry;
+  assert.match(ui.nodes.ledgerTable.innerHTML, /Usable balance · ICICI Bank 0993/);
+  assert.match(ui.nodes.bs_table.innerHTML, /Awaiting Owner approval/);
+});
 test('visible account changes invalidate an arriving statement response even if hidden input has not caught up', async () => {
   const ui = harness(); const loading = ui.context.loadBankStatement();
   ui.nodes.lg_account.value = cashAccount; const content = ui.nodes.bs_table.innerHTML;
@@ -116,9 +134,13 @@ test('visible account changes invalidate an arriving statement response even if 
 test('statement loading syncs a stale hidden account to the visible selection', async () => {
   const ui = harness({ reconcile: true }); ui.nodes.bs_account.value = cashAccount;
   ui.context.loadBankStatement(); assert.equal(ui.nodes.bs_account.value, bankAccount);
-  const statement = ui.requests('bank-statements')[0], ledger = ui.requests('account-ledger')[0];
+  const ledger = ui.requests('account-ledger')[0];
+  assert.ok(ledger); assert.equal(ui.requests('bank-statements').length, 0, 'hidden-account correction loads the visible ledger first');
+  ledger.resolve(ledgerResponse()); await flush();
+  const statement = ui.requests('bank-statements')[0];
+  assert.ok(statement); assert.equal(ui.requests('bank-statements').length, 1);
   assert.equal(new URL(statement.url, 'https://example.test').searchParams.get('account'), bankAccount);
-  statement.resolve(bankResponse()); ledger.resolve(ledgerResponse()); await flush();
+  statement.resolve(bankResponse()); await flush();
   assert.equal(ui.context.bankDraftId, draftId); assert.match(ui.nodes.bs_table.innerHTML, /Awaiting Owner approval/);
 });
 test('explicit statement loading clears old cash status and actions before the response arrives', async () => {
@@ -138,10 +160,14 @@ for (const owner of [false, true]) test((owner ? 'Owner' : 'Admin') + ' deep lin
   vm.runInContext([line('var pageParams=new URLSearchParams(location.search),requestedAccount='), line("el('lg_from').value=SankiNavigation.date('ledgerFrom'")].join('\n'), ui.context);
   assert.equal(ui.nodes.lg_account.value, bankAccount, 'URL account restoration precedes the first load');
   ui.context.loadAccountLedger();
-  const statement = ui.requests('bank-statements')[0], ledger = ui.requests('account-ledger')[0], request = new URL(statement.url, 'https://example.test');
+  const ledger = ui.requests('account-ledger')[0];
+  assert.ok(ledger); assert.equal(ui.requests('bank-statements').length, 0, 'deep-link reconciliation waits for its ledger');
+  ledger.resolve(ledgerResponse()); await flush();
+  const statement = ui.requests('bank-statements')[0], request = new URL(statement.url, 'https://example.test');
+  assert.equal(ui.requests('bank-statements').length, 1, 'deep link issues one saved-reconciliation request');
   assert.equal(request.searchParams.get('account'), bankAccount); assert.equal(request.searchParams.get('nature'), 'PERSONAL'); assert.equal(request.searchParams.get('draftId'), draftId);
   const saved = bankResponse(), before = JSON.stringify(saved);
-  statement.resolve(saved); ledger.resolve(ledgerResponse()); await flush();
+  statement.resolve(saved); await flush();
   assert.equal(JSON.stringify(saved), before, 'read-only rendering preserves statement and approval data');
   assert.equal(ui.context.bankDraftId, draftId); assert.equal(ui.context.bankReconView.finalizationApproval.status, 'pending'); assert.equal(ui.context.bankReconView.balanceDifference, 0);
   assert.match(ui.nodes.bs_table.innerHTML, /Awaiting Owner approval/);
@@ -195,8 +221,10 @@ test('changing accounts clears the previous account upload or action message', a
   ui.nodes.lg_account.value = bankAccount;
   ui.context.loadAccountLedger();
   assert.equal(ui.nodes.bs_msg.textContent, '', 'old account message must not appear under 0993');
-  ui.requests('bank-statements')[1].resolve(bankResponse());
+  assert.equal(ui.requests('bank-statements').length, 1, 'new account reconciliation waits for its ledger');
   ui.requests('account-ledger')[0].resolve(ledgerResponse()); await flush();
+  assert.equal(ui.requests('bank-statements').length, 2, 'new account starts one reconciliation request after its ledger');
+  ui.requests('bank-statements')[1].resolve(bankResponse()); await flush();
   assert.equal(ui.nodes.bs_msg.textContent, '');
   assert.equal(ui.context.bankDraftId, draftId);
 });
