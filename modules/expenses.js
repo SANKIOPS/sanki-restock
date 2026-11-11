@@ -39,7 +39,6 @@ const saleStoreCreditCorrections = require('./sale-store-credit-corrections');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const v8 = require('v8');
 const crypto = require('crypto');
 const multer = require('multer');
 const XLSX = require('xlsx');
@@ -106,13 +105,9 @@ const STATEMENT_DIR = path.join(DATA_DIR, 'bank-statements');
 const STATEMENT_DRAFT_DIR = path.join(DATA_DIR, 'bank-statement-drafts');
 const ACCOUNTING_READ_FILES = [EXP_PATH,CREDIT_CARD_PATH,PROC_PATH,SALES_PATH,SALARY_PATH,SAMAST_SALARY_PATH,INCENTIVES_PATH,ORDERS_PATH,VELOCITY_REMITTANCE_PATH];
 const accountingReadCache = new Map();
+const ACCOUNTING_READ_CACHE_MAX = 2;
+const ACCOUNTING_READ_CACHE_TTL_MS = 45 * 1000;
 let accountingReadRevision = 0;
-let normalizedStoreSnapshot = null;
-let normalizedStoreFingerprint = '';
-function cacheNormalizedStore(store){
-  try { normalizedStoreSnapshot=v8.serialize(store);normalizedStoreFingerprint=accountingReadFingerprint(); }
-  catch(error){ normalizedStoreSnapshot=null;normalizedStoreFingerprint='';console.error('[expenses] Could not cache normalized store:',error.message); }
-}
 function accountingReadFingerprint(files=ACCOUNTING_READ_FILES){
   return files.map(file=>{try{const stat=fs.statSync(file,{bigint:true});return file+':'+stat.size+':'+stat.mtimeNs+':'+stat.ctimeNs;}catch{return file+':missing';}}).join('|');
 }
@@ -131,8 +126,10 @@ function invalidateAccountingReadCache(){accountingReadRevision+=1;accountingRea
 router.use((req,res,next)=>{
   if(req.method!=='GET'||!['/api/expenses/bank-statements','/api/expenses/account-ledger'].includes(req.path))return next();
   const key=[accountingReadRevision,accountingRequestFingerprint(req),req.path,JSON.stringify(req.query||{}),req.user&&req.user.username||'',req.user&&req.user.role||'',JSON.stringify(req.user&&req.user.roles||[]),JSON.stringify(req.user&&req.user.permissions||{})].join('|');
-  const cached=accountingReadCache.get(key);if(cached)return res.json(cached);
-  const original=res.json.bind(res);res.json=payload=>{if(payload&&payload.success){accountingReadCache.set(key,payload);if(accountingReadCache.size>40)accountingReadCache.delete(accountingReadCache.keys().next().value);}return original(payload);};next();
+  const now=Date.now(),cached=accountingReadCache.get(key);
+  if(cached&&now-cached.cachedAt<=ACCOUNTING_READ_CACHE_TTL_MS)return res.json(cached.payload);
+  if(cached)accountingReadCache.delete(key);
+  const original=res.json.bind(res);res.json=payload=>{if(payload&&payload.success){accountingReadCache.set(key,{payload,cachedAt:Date.now()});while(accountingReadCache.size>ACCOUNTING_READ_CACHE_MAX)accountingReadCache.delete(accountingReadCache.keys().next().value);}return original(payload);};next();
 });
 try { fs.mkdirSync(STATEMENT_DIR, { recursive:true }); } catch {}
 try { fs.mkdirSync(STATEMENT_DRAFT_DIR, { recursive:true }); } catch {}
@@ -1247,11 +1244,6 @@ function applyIcici0992HotelIncomeBulkUndo(s){
 }
 function loadStore() {
   bankAuthorityTransaction.recover(DATA_DIR);
-  const fingerprint=accountingReadFingerprint();
-  if(normalizedStoreSnapshot&&normalizedStoreFingerprint===fingerprint){
-    try { return v8.deserialize(normalizedStoreSnapshot); }
-    catch(error){ normalizedStoreSnapshot=null;normalizedStoreFingerprint='';console.error('[expenses] Could not clone cached store:',error.message); }
-  }
   let s;
   try { s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8'))); }
   catch(error) { console.error('[expenses] Could not read expenses.json:',error);return blankStore(); }
@@ -1487,7 +1479,7 @@ function loadStore() {
     if(mergeSharedIndus7883BankBook(s))saveStore(s);
     if(ledgerConnections.repairCreatedTransferLinks(s,({transfer,record,row,key,before})=>audit(s,null,'BANK_CREATED_TRANSFER_LINK_RESTORED','transfer',transfer.id,{nature:transfer.nature,account:key,before,after:{recordId:record.id,rowId:row.id,linkedRecordIds:row.linkedRecordIds},note:'Restored by exact finalized bank-row provenance; amounts, approvals and bank evidence unchanged.'})))saveStore(s);
     try{const apiFile=path.join(DATA_DIR,'gokwik_api_evidence.json');if(fs.existsSync(apiFile)){const evidence=JSON.parse(fs.readFileSync(apiFile,'utf8')),orders=JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};require('./gokwik-api-accounting').stage(s,Object.values(evidence.days||{}).flat(),Object.values(orders),{readOnly:true});}}catch(e){console.error('[gokwik-accounting-api] '+e.message);}
-    cacheNormalizedStore(s);return s;
+    return s;
   }
   catch(error) { console.error('[expenses] Store repair failed; serving the original financial records:',error);return s; }
 }
@@ -1518,13 +1510,12 @@ function saveStore(s, options = {}) {
   if(s._bankAuthorityExternal&&s._bankAuthorityExternal.length){
     const entries=[{fileName:'expenses.json',before:fs.existsSync(EXP_PATH)?fs.readFileSync(EXP_PATH,'utf8'):null,after:JSON.stringify(s)}];
     for(const change of s._bankAuthorityExternal){if(change.store!=='creditCards')throw new Error('Invalid linked bank-authority store.');entries.push({fileName:'credit-cards.json',before:change.before,after:change.after});}
-    bankAuthorityTransaction.commit(DATA_DIR,entries);delete s._bankAuthorityExternal;cacheNormalizedStore(s);invalidateAccountingReadCache();return;
+    bankAuthorityTransaction.commit(DATA_DIR,entries);delete s._bankAuthorityExternal;invalidateAccountingReadCache();return;
   }
   const tmp = EXP_PATH + '.tmp-' + process.pid + '-' + Date.now();
   try {
     fs.writeFileSync(tmp, JSON.stringify(s));
     fs.renameSync(tmp, EXP_PATH);
-    cacheNormalizedStore(s);
     invalidateAccountingReadCache();
   } finally {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
@@ -8202,10 +8193,12 @@ function summaryForPL(from, to) {
 
 // Run idempotent store repairs/corrections when the service starts, rather
 // than waiting for the first user to open an Expenses screen.
+{
 const startupExpenseFileExists=fs.existsSync(EXP_PATH),startupExpenseStore=loadStore(),startupDraftAccounts=new Set(Object.values(startupExpenseStore.bankReconciliationDrafts||{}).map(x=>normalizedNature(x.nature)+'|'+x.account));let startupReconciliationRepaired=startupExpenseFileExists&&applyHistoricalPaytmSettlementSummary(startupExpenseStore);if(applyIndus8181TransferDateCorrection(startupExpenseStore))startupReconciliationRepaired=true;if(applyIndus8181Sep15DebitDateCorrection(startupExpenseStore))startupReconciliationRepaired=true;if(applyIndus8181Sep15OmDateCorrection(startupExpenseStore))startupReconciliationRepaired=true;if(applyIndus8181Sep16DebitDateCorrection(startupExpenseStore))startupReconciliationRepaired=true;if(applyIndus8181Sep16SanviDateCorrection(startupExpenseStore))startupReconciliationRepaired=true;if(applyIndus8181Sep16PersonalExpenseCorrection(startupExpenseStore))startupReconciliationRepaired=true;if(applyIndus8181Sep18DebitDateCorrection(startupExpenseStore))startupReconciliationRepaired=true;startupDraftAccounts.forEach(key=>{const separator=key.indexOf('|'),nature=key.slice(0,separator),account=key.slice(separator+1),drafts=Object.values(startupExpenseStore.bankReconciliationDrafts||{}).filter(x=>normalizedNature(x.nature)===nature&&x.account===account);if(drafts.some(draft=>draft.originalStatementPeriod))return;if(drafts.length>1&&mergeActiveBankReconciliationDrafts(startupExpenseStore,account,nature))startupReconciliationRepaired=true;const draft=Object.values(startupExpenseStore.bankReconciliationDrafts||{}).find(x=>normalizedNature(x.nature)===nature&&x.account===account);if(draft&&extendPendingDraftThroughFinalizedCoverage(startupExpenseStore,draft))startupReconciliationRepaired=true;});if(startupReconciliationRepaired)saveStore(startupExpenseStore);
 if(startupExpenseFileExists&&applyCashCounterMissingEntries(startupExpenseStore))saveStore(startupExpenseStore);
 if(startupExpenseFileExists&&applyAxis3448PaytmBankTruthSettlements(startupExpenseStore))saveStore(startupExpenseStore);
 if(Object.values(startupExpenseStore.bankReconciliationDrafts||{}).reduce((count,draft)=>count+(draft.originalStatementPeriod?0:applyReviewedBankDates(startupExpenseStore,draft)),0)>0)saveStore(startupExpenseStore);
+}
 
 const sourceCorrectionPolicy = {
   canEdit:canEditLedgerTransactions,isOwner,canAccessCard:canManageRestrictedCard,canAccessExpense:canManageRestrictedExpense,natures:approvalNatures,
