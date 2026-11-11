@@ -136,6 +136,43 @@ test('an underlying reconciliation expense adjustment cannot be edited independe
 function policyFor(f) {
   return createPolicy(authority, { accountEligible: () => true, reference: value => String(value || '').replace(/[^a-z0-9]/gi, '').toLowerCase(), identity: () => true, movements: () => [f.movement], options: () => ({}) });
 }
+test('one reviewed policy plan needs no aggregate apply pass', () => {
+  const f = fixture({ mode: 'manual' }), plan = f.make(), pointer = { planId: plan.id };
+  f.store.bankAmountAuthorityProposals = { [plan.id]: plan };
+  f.draft.resolutions['bank-0'] = { action: 'link_existing', appId: f.movement.id, bankAmountAuthority: pointer };
+  const view = { rows: [{ id: 'bank-0', status: 'resolved', bank: f.bank, app: f.movement, resolution: f.draft.resolutions['bank-0'] }], reconciliationConflicts: [], ledgerClosing: -500, bankClosing: -499.5 };
+  const noAggregate = { ...authority, applyAll() { throw new Error('single-plan aggregate apply must not run'); } };
+  const policy = createPolicy(noAggregate, { accountEligible: () => true, reference: value => String(value || '').replace(/[^a-z0-9]/gi, '').toLowerCase(), identity: () => true, movements: () => [f.movement], options: () => ({}) });
+  policy.decorate(f.store, f.draft, view);
+  assert.equal(view.bankAmountAuthorityCount, 1);
+  assert.equal(view.reconciliationConflicts.length, 0);
+  assert.equal(view.balanceResolved, true);
+});
+test('multiple reviewed policy plans use one non-committing aggregate preflight', () => {
+  const f = fixture({ mode: 'manual' }), expense = f.store.expenses['EX-TEST'];
+  expense.amount = 700; expense.requestedAmount = 700; expense.paidAmount = 700;
+  expense.payments.push({ id: 'PAY-002', amount: 200, account, date: '2026-10-17', proof: '/second-proof.jpg' });
+  const secondBank = { ...f.bank, reference: 'VERIFIED-TRANSACTION-456', debit: 199.75 }, secondMovement = { id: 'EX-TEST/PAY-002', date: '2026-10-17', debit: 200, credit: 0 };
+  f.draft.transactions.push(secondBank);
+  const plans = [authority.plan(f.store, f.draft, f.bank, f.movement, f.options), authority.plan(f.store, f.draft, secondBank, secondMovement, { mode: 'manual', bankRowId: 'bank-1' })];
+  f.store.bankAmountAuthorityProposals = Object.fromEntries(plans.map(plan => [plan.id, plan]));
+  f.draft.resolutions['bank-0'] = { action: 'link_existing', appId: f.movement.id, bankAmountAuthority: { planId: plans[0].id } };
+  f.draft.resolutions['bank-1'] = { action: 'link_existing', appId: secondMovement.id, bankAmountAuthority: { planId: plans[1].id } };
+  const view = { rows: [
+    { id: 'bank-0', status: 'resolved', bank: f.bank, app: f.movement, resolution: f.draft.resolutions['bank-0'] },
+    { id: 'bank-1', status: 'resolved', bank: secondBank, app: secondMovement, resolution: f.draft.resolutions['bank-1'] }
+  ], reconciliationConflicts: [], ledgerClosing: -700, bankClosing: -699.25 };
+  let aggregateCall;
+  const checkingEngine = { ...authority, applyAll(store, selected, options) { aggregateCall = { store, selected, options }; return authority.applyAll(store, selected, options); } };
+  const before = JSON.stringify(f.store);
+  createPolicy(checkingEngine, { accountEligible: () => true, reference: value => String(value || '').replace(/[^a-z0-9]/gi, '').toLowerCase(), identity: () => true, movements: () => [f.movement, secondMovement], options: () => ({}) }).decorate(f.store, f.draft, view);
+  assert.equal(aggregateCall.store, f.store);
+  assert.equal(aggregateCall.selected.length, 2);
+  assert.equal(aggregateCall.options.preflightOnly, true);
+  assert.equal(JSON.stringify(f.store), before, 'aggregate preflight must not write the accounting store');
+  assert.equal(view.bankAmountAuthorityCount, 2);
+  assert.equal(view.reconciliationConflicts.length, 0);
+});
 function privateFixture() {
   const f = fixture({ mode: 'manual' }), expense = f.store.expenses['EX-TEST'];
   f.draft.nature = 'SAMAST'; expense.nature = 'PERSONAL'; expense.amount = 9876.54; expense.requestedAmount = 9876.54; expense.status = 'partially_paid';

@@ -152,7 +152,7 @@ module.exports = function createUniversal(base) {
     if (!Array.isArray(candidates)) fail('Supply the reviewed correction plans.', 400);
     const ids = new Set(); for (const item of candidates) { if (!item) fail('A reviewed correction plan is required.'); for (const id of new Set([item.movementId, ...list(item.sourceSnapshot && item.sourceSnapshot.sourceIds), ...list(item.linkedIds)])) { const key = text(item.account) + '/' + text(id); if (ids.has(key)) fail('Overlapping movements or allocations cannot be corrected twice in one finalization.'); ids.add(key); } }
     const checked = candidates.map(item => validate(store, item, options));
-    if (!candidates.some(item => item.version === 2)) return base.applyAll(store, candidates, options);
+    if (!candidates.some(item => item.version === 2)) return base.applyAll(options.preflightOnly ? copy(store) : store, candidates, options);
     const working = copy(store), external = copy(options.externalStores || {}), ordinary = base.applyAll(working, candidates.filter(item => item.version !== 2), options), audits = [...ordinary.audits], touched = new Set();
     const pending = checked.filter(item => !item.alreadyApplied && item.plan.version === 2).map(item => item.plan);
     // Every linked target is checked before ANY real object/file is changed.
@@ -172,7 +172,7 @@ module.exports = function createUniversal(base) {
       audits.push(event); working.bankAmountAuthorityApplications = working.bankAmountAuthorityApplications || {}; working.bankAmountAuthorityApplications[item.id] = { version: 2, planFingerprint: fingerprint(item), draftId: item.draftId, movementId: item.movementId, bankRowId: item.bankRowId, before: event.before, after: event.after, effect: item.effect };
     }
     const externalStoreChanges = Object.keys(external).filter(key => fingerprint(external[key]) !== fingerprint((options.externalStores || {})[key])).map(key => ({ store: key, before: options.externalStoreText && options.externalStoreText[key], after: JSON.stringify(external[key]) }));
-    for (const key of new Set([...Object.keys(store), ...Object.keys(working)])) if (fingerprint(store[key]) !== fingerprint(working[key])) store[key] = working[key];
+    if (!options.preflightOnly) for (const key of new Set([...Object.keys(store), ...Object.keys(working)])) if (fingerprint(store[key]) !== fingerprint(working[key])) store[key] = working[key];
     return { applied: ordinary.applied + pending.length, alreadyApplied: checked.filter(item => item.alreadyApplied).length, audits, plans: candidates, externalStoreChanges };
   }
   return { plan, validate, applyAll };

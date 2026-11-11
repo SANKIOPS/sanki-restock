@@ -84,10 +84,13 @@ module.exports = function createPolicy(engine, deps) {
         row.status = 'amount_mismatch';
       }
     }
-    if (plans.length) {
+    // A single plan has already been rebuilt and validated above, so there is
+    // no aggregate overlap to discover. Multiple plans still need the exact
+    // cross-plan checks, but preflight them without cloning the whole store a
+    // second time or committing the sandbox result.
+    if (plans.length > 1) {
       try {
-        const sandbox = JSON.parse(JSON.stringify(store));
-        engine.applyAll(sandbox, plans, deps.options(sandbox, draft));
+        engine.applyAll(store, plans, { ...deps.options(store, draft), preflightOnly: true });
       } catch (error) {
         errors.push({ type: 'bank_amount_authority_conflict', bankRowIds: plans.map(plan => plan.bankRowId), message: error.message + ' Review the selected source amounts; nothing was posted.' });
         candidates.forEach(row => { row.status = originalStatuses.get(row.id) || 'amount_mismatch'; row.bankAmountAuthorityBlocked = error.message; delete row.bankAmountAuthority; });

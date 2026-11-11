@@ -137,6 +137,37 @@ test('a stale second plan cannot partially apply the first source correction', (
   assert.deepEqual(f.store, before);
 });
 
+test('universal preflight performs aggregate checks without committing and normal apply still commits', () => {
+  const f = fixture('ADV-PREFLIGHT'), plan = f.make(), before = clone(f.store);
+  const preflight = engine.applyAll(f.store, [plan], { ...f.options, preflightOnly: true });
+  assert.equal(preflight.applied, 1);
+  assert.deepEqual(f.store, before, 'preflight must not change the real accounting store');
+  const applied = engine.applyAll(f.store, [plan], f.options);
+  assert.equal(applied.applied, 1);
+  assert.equal(cash.project(f.store, account, 'SAMAST', f.store.rawMovements)[0].debit, 499.5);
+
+  const overlapping = fixture('RB-PREFLIGHT', { sourceIds: ['ADV-PREFLIGHT-CHILD'] }), first = overlapping.make();
+  const child = { ...overlapping.movement, id: 'ADV-PREFLIGHT-CHILD', debit: 200, sourceIds: [] }, childBank = { ...overlapping.bank, reference: 'PREFLIGHT-CHILD', debit: 199.5 };
+  overlapping.store.rawMovements.push(child); overlapping.draft.transactions.push(childBank);
+  const second = engine.plan(overlapping.store, overlapping.draft, childBank, child, { ...overlapping.options, bankRowId: 'bank-1' }), overlapBefore = clone(overlapping.store);
+  assert.throws(() => engine.applyAll(overlapping.store, [first, second], { ...overlapping.options, preflightOnly: true }), /overlap|twice|same|already/i);
+  assert.deepEqual(overlapping.store, overlapBefore);
+});
+
+test('ordinary-plan preflight uses a copy while the normal write path remains unchanged', () => {
+  const f = fixture('EX-PREFLIGHT/PAY-001');
+  f.store.expenses['EX-PREFLIGHT'] = { id: 'EX-PREFLIGHT', nature: 'PERSONAL', date: oldDate, amount: 500,
+    paidAmount: 500, requestedAmount: 500, status: 'paid', approvedAt: oldDate + 'T12:00:00Z',
+    payments: [{ id: 'PAY-001', date: oldDate, amount: 500, account }] };
+  const plan = f.make(), before = clone(f.store);
+  const preflight = engine.applyAll(f.store, [plan], { ...f.options, preflightOnly: true });
+  assert.equal(preflight.applied, 1);
+  assert.deepEqual(f.store, before);
+  engine.applyAll(f.store, [plan], f.options);
+  assert.equal(f.store.expenses['EX-PREFLIGHT'].amount, 499.5);
+  assert.equal(f.store.expenses['EX-PREFLIGHT'].payments[0].amount, 499.5);
+});
+
 test('an aggregate and its child cannot both acquire cash corrections in one finalization', () => {
   const f = fixture('RB-AGGREGATE', { sourceIds: ['ADV-A', 'ADV-B'] }), first = f.make();
   const child = { ...f.movement, id: 'ADV-A', debit: 200, sourceIds: [] };
