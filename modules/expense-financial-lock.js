@@ -19,6 +19,20 @@ const date = value => {
   const result = text(value).slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(result) && Number.isFinite(Date.parse(result + 'T00:00:00Z')) ? result : '';
 };
+const accountKey = value => text(value).replace(/^(?:PERSONAL|SAMAST|SANKI)\|/i, '').toLowerCase();
+const finalizedBankPeriod = (store, account, movementDates) => {
+  const wanted = accountKey(account);
+  if (!wanted) return null;
+  const correctionDates = list(movementDates);
+  return Object.entries(store.bankStatements || {}).map(([key, book]) => ({ key, book }))
+    .filter(({ key, book }) => book && typeof book === 'object' && !Array.isArray(book) &&
+      (accountKey(key) === wanted || accountKey(book.account) === wanted) && text(book.reconciledThrough))
+    .filter(({ book }) => {
+      const through = date(book.reconciledThrough);
+      return !through || !correctionDates.length || correctionDates.some(value => !value || value <= through);
+    })
+    .sort((a, b) => text(b.book.reconciledThrough).localeCompare(text(a.book.reconciledThrough)))[0] || null;
+};
 const identifiers = payment => [payment.batchPaymentId, payment.batchId, payment.settledByTransferId, ...list(payment.batchPaymentIds)].map(text).filter(Boolean);
 const refsFor = (expense, payment, reimbursement = false) => {
   const reference = qualified(expense, payment);
@@ -137,7 +151,7 @@ function expenseFinancialLock(store, expense, options = {}) {
     localEvidence.set(ownId, 'This expense was created from bank reconciliation. Its amount and date cannot be changed.');
     movements[0].refs.add(ownId);
   }
-  const blocked = new Set(), reasons = [];
+  const blocked = new Set(), reasons = [], correctionDates = [date(expense.date), ...movements.map(item => item.date)];
   movements.forEach(movement => {
     movement.refs.forEach(id => {
       const source=localEvidence.has(id)?localEvidence:evidence;
@@ -150,6 +164,16 @@ function expenseFinancialLock(store, expense, options = {}) {
     if (closedCash) {
       if (movement.reference) blocked.add(movement.reference);
       reasons.push('This expense has a payment in an Owner-approved cash period through ' + date(closedCash.verifiedThrough) + '. Its amount and date cannot be changed.');
+    }
+    // The financial correction guard validates both the expense date and every
+    // linked movement date against each account's closed book. Mirror that
+    // complete date set here so the editor never offers a save the server must
+    // reject only after submission.
+    const closedBank = finalizedBankPeriod(store, movement.account, correctionDates);
+    if (closedBank) {
+      if (movement.reference) blocked.add(movement.reference);
+      const through = date(closedBank.book.reconciledThrough);
+      reasons.push('This expense has a payment in a finalized bank period' + (through ? ' through ' + through : '') + '. Its amount and date cannot be changed.');
     }
   });
   return { locked: reasons.length > 0, reason: reasons[0] || '', references: [...blocked].sort() };

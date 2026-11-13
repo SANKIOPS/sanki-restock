@@ -10,11 +10,35 @@ const ref = 'EX-00100/PAY-001';
 const finalized = row => ({ bankStatements: { BANK: { imports: [{ reconciliationRows: [row] }] } } });
 function freeze(value) { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; }
 
-test('unmatched paid, approved and unpaid expenses are not locked just by status or bank date range', () => {
+test('expense status alone does not lock financial fields', () => {
   for (const status of ['paid', 'partially_paid', 'approved', 'pending']) {
-    assert.deepEqual(expenseFinancialLock({ bankStatements: { 'Axis Bank 3448': { reconciledThrough: '2026-10-01', imports: [] } } }, expense({ status })), { locked: false, reason: '', references: [] });
+    assert.deepEqual(expenseFinancialLock({}, expense({ status })), { locked: false, reason: '', references: [] });
   }
   assert.deepEqual(expenseFinancialLock({}, expense({ status: 'approved', payments: [], paidAmount: 0 })), { locked: false, reason: '', references: [] });
+});
+
+test('a payment inside its account finalized bank period is locked before editing', () => {
+  for (const bankStatements of [
+    { 'Axis Bank 3448': { reconciledThrough: '2026-10-01', imports: [] } },
+    { 'SANKI|Axis Bank 3448': { reconciledThrough: '2026-09-05', imports: [] } },
+    { arbitrary: { account: 'Axis Bank 3448', reconciledThrough: '2026-09-06', imports: [] } }
+  ]) {
+    const result = expenseFinancialLock({ bankStatements }, expense());
+    assert.equal(result.locked, true);
+    assert.match(result.reason, /finalized bank period/);
+    assert.deepEqual(result.references, [ref]);
+  }
+});
+
+test('finalized bank-period lock follows the monetary account and every guarded correction date', () => {
+  const otherAccount = { bankStatements: { 'ICICI Bank 0992': { reconciledThrough: '2026-10-01', imports: [] } } };
+  assert.equal(expenseFinancialLock(otherAccount, expense()).locked, false);
+  const beforePayment = { bankStatements: { 'Axis Bank 3448': { reconciledThrough: '2026-09-05', imports: [] } } };
+  assert.equal(expenseFinancialLock(beforePayment, expense({ date: '2026-08-01', payments: [payment({ date: '2026-09-06' })] })).locked, true,
+    'an earlier expense date is part of the same correction guard even when payment happened later');
+  assert.equal(expenseFinancialLock(beforePayment, expense({ date: '2026-09-06', payments: [payment({ date: '2026-09-06' })] })).locked, false);
+  const invalidBoundary = expenseFinancialLock({ bankStatements: { 'Axis Bank 3448': { reconciledThrough: 'invalid', imports: [] } } }, expense());
+  assert.equal(invalidBoundary.locked, true, 'invalid retained closing evidence must fail closed like the correction guard');
 });
 
 test('direct finalized linkedRecordIds freeze amount/date', () => {

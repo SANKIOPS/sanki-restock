@@ -32,6 +32,17 @@ test('fresh detail exposes financial lock and enforces PERSONAL visibility witho
   assert.equal(invoke('GET','/api/expenses/:id',{params:{id:'EX-MISSING'}}).status,404);
 });
 
+test('fresh detail exposes a finalized bank-period lock before a financial edit is attempted',()=>{
+  const {id}=seed({locked:false}),s=read();
+  s.bankStatements={'SANKI|Axis Bank 3448':{account:'Axis Bank 3448',reconciledThrough:'2098-03-04',imports:[]}};
+  fs.writeFileSync(expenseFile,JSON.stringify(s));
+  const got=invoke('GET','/api/expenses/:id',{params:{id}});
+  assert.equal(got.status,200);assert.equal(got.body.expense.financialFieldsLocked,true);
+  assert.match(got.body.expense.financialLockReason,/finalized bank period through 2098-03-04/);
+  const metadata=invoke('POST','/api/expenses/:id',{params:{id},body:{particulars:'Corrected description',editReason:'Descriptive correction only'}});
+  assert.equal(metadata.status,200,JSON.stringify(metadata.body));assert.equal(read().expenses[id].particulars,'Corrected description');
+});
+
 test('detail endpoint does not shadow rental or credit-card workspaces in actual Express dispatch',async()=>{
   seed();const express=require('express'),http=require('node:http'),app=express();
   app.use((req,res,next)=>{req.user={username:'synthetic-owner',role:'owner',roles:['owner']};next();});
