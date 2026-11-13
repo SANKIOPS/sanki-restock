@@ -24,6 +24,7 @@ function loadSources(directory, env = process.env) {
   }
   return {
     orders: read('Shopify orders', env.ORDERS_PATH || path.join(directory, 'orders.json'), {}, true, v => record(v.orders)),
+    creditCards: read('Credit-card statements', path.join(directory, 'credit-cards.json'), { cards: {}, statements: {} }, false, v => record(v.cards) && record(v.statements)),
     expenses: read('Expenses and income', path.join(directory, 'expenses.json'), {}, true, v => record(v.expenses)),
     purchases: read('Received purchases', env.PROCUREMENT_PATH || path.join(directory, 'procurement.json'), {}, true, v => record(v.pos)),
     salary: read('Salary payments', path.join(directory, 'salary.json'), {}, true, v => record(v.employees) && collection(v.salaryPayments || [])),

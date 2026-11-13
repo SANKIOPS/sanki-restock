@@ -12,8 +12,10 @@ function build(sources,{entity,from,to,today,accounts=[]}){
   const s=sources.expenses, warnings=[], rows=[], match=r=>nature(r.reportingNature||r.nature)===entity;
   if(!s||typeof s.expenses!=='object')throw Object.assign(Error('Accounting records are unavailable. No totals were assumed.'),{status:409});
   const add=(kind,r,amount)=>rows.push({id:r.id,reference:r.reference||r.id,date:r.date,kind,entity,account:r.account||'',category:r.category||r.ledger||kind,description:r.description||r.particulars||r.source||r.vendor||'',amount:money(amount)});
+  const confirmedRepayments=require('./confirmed-card-repayments').confirmed(sources.creditCards,s);
   const otherMovements=[];for(const e of list(s.expenses).filter(r=>active(r)&&match(r)&&balanceCost.test(r.ledger||r.category||''))){for(const p of list(e.payments).filter(p=>active(p)&&inRange(p,from,to))){otherMovements.push({id:e.id+'/'+p.id,date:p.date,category:e.ledger||e.category,description:e.particulars||e.vendor||'',account:p.account||e.account||'',amount:money(p.amount)});}}
-  const reviewCosts=otherMovements.filter(r=>/credit[ -]?card|card repayment|\bemi\b|loan repayment/i.test(r.category));for(const r of reviewCosts)warnings.push(r.id+': '+r.category+' needs repayment/interest review. Excluded from costs; original bank payment remains unchanged.');
+  for(const r of otherMovements){const evidence=confirmedRepayments.get(r.id);if(evidence){r.treatment='Confirmed credit-card repayment';r.statementId=evidence.statementId;r.cardId=evidence.cardId;}}
+  const reviewCosts=otherMovements.filter(r=>!confirmedRepayments.has(r.id)&&/credit[ -]?card|card repayment|\bemi\b|loan repayment/i.test(r.category));for(const r of reviewCosts)warnings.push(r.id+': '+r.category+' needs repayment/interest review. Excluded from costs; original bank payment remains unchanged.');
   let income=0,expenses=0,cogs=0,result=null,basis,resultLabel;
   if(entity==='SANKI'){
     const report=buildReport({...sources,expenses:{...s,expenses:Object.fromEntries(Object.entries(s.expenses||{}).filter(([,r])=>!balanceCost.test(r.ledger||r.category||'')))}},{from,to,start:START,channel:'All'});
