@@ -23,7 +23,7 @@ const section = (start, end) => {
 
 function harness({ account = sharedAccount, nature = 'PERSONAL', mapped = true, sharedAllowed = true } = {}) {
   const nodes = {}, calls = [], uploads = [], navigation = [];
-  for (const id of ['trail', 'cf_from', 'cf_to', 'lg_account', 'lg_expense_nature', 'lg_from', 'lg_to', 'ledgerRecon', 'ledgerTable', 'bs_nature', 'bs_account', 'bs_table', 'bs_history', 'bs_finalize', 'bs_discard', 'bs_file', 'bs_password', 'bs_msg']) {
+  for (const id of ['trail', 'cf_from', 'cf_to', 'lg_account', 'lg_expense_nature', 'lg_from', 'lg_to', 'ledgerRecon', 'ledgerTable', 'bs_nature', 'bs_account', 'bs_table', 'bs_history', 'bs_finalize', 'bs_discard', 'bs_file', 'bs_password', 'bs_msg', 'bs_upload']) {
     nodes[id] = { value: '', textContent: '', innerHTML: '', style: {}, classList: { toggle() {} }, scrollIntoView() {} };
   }
   nodes.lg_account.value = account;
@@ -46,6 +46,7 @@ function harness({ account = sharedAccount, nature = 'PERSONAL', mapped = true, 
       calls.push({ url, options });
       if (url.startsWith('/api/expenses/bank-statements?')) return { success: true, transactions: [], imports: [], draftOptions: [], closingBalance: 0 };
       if (url.startsWith('/api/expenses/account-ledger?')) return { success: true, account: nodes.lg_account.value, entries: [], balance: 123 };
+      if (url === '/api/expenses/bank-statements/import') { uploads.push({ url, options }); return { success: true, draftId: 'BRD-SHARED-7883' }; }
       throw Error('Unexpected API request: ' + url);
     },
     FormData: class { constructor() { this.values = new Map(); } append(key, value) { this.values.set(key, value); } get(key) { return this.values.get(key); } },
@@ -76,8 +77,7 @@ for (const nature of ['PERSONAL', 'SAMAST']) test(`${nature} 7883 card and detai
   assert.match(ui.nodes.trail.innerHTML, /Upload or reconcile statement/);
   assert.match(ui.nodes.trail.innerHTML, /Reconciled through:/);
   assert.match(ui.nodes.trail.innerHTML, /selectDetailedAccount\('IndusInd Bank 7883'\)/);
-  ui.context.selectDetailedAccount(sharedAccount);
-  await flush();
+  await ui.context.selectDetailedAccount(sharedAccount);
   assert.equal(ui.nodes.ledgerRecon.style.display, 'block');
   assert.match(ui.nodes.ledgerTable.innerHTML, /Reconciled through:/);
   assert.equal(ui.context.selectedNature, nature, 'opening reconciliation must not switch the reporting entity');
@@ -106,11 +106,9 @@ for (const nature of ['PERSONAL', 'SAMAST']) test(`${nature} 7883 card and detai
 
 test('other personal banks retain their PERSONAL statement route when switching away from 7883', async () => {
   const ui = harness();
-  ui.context.selectDetailedAccount(sharedAccount);
-  await flush();
+  await ui.context.selectDetailedAccount(sharedAccount);
   assert.equal(ui.context.bankNature, 'SAMAST');
-  ui.context.selectDetailedAccount(otherAccount);
-  await flush();
+  await ui.context.selectDetailedAccount(otherAccount);
   ui.context.loadMoneyTrail(otherAccount, 'trail');
   await flush();
   assert.equal(ui.context.bankNature, 'PERSONAL');
@@ -125,8 +123,7 @@ test('other personal banks retain their PERSONAL statement route when switching 
 for (const access of [{ mapped: false, sharedAllowed: true }, { mapped: true, sharedAllowed: false }]) test(`shared routing does not grant reconciliation access (${JSON.stringify(access)})`, async () => {
   const ui = harness(access);
   ui.context.loadMoneyTrail(sharedAccount, 'trail');
-  ui.context.selectDetailedAccount(sharedAccount);
-  await flush();
+  await ui.context.selectDetailedAccount(sharedAccount);
   assert.doesNotMatch(ui.nodes.trail.innerHTML, /Upload or reconcile statement/);
   assert.equal(ui.nodes.ledgerRecon.style.display, 'none');
   assert.equal(ui.calls.some(call => call.url.startsWith('/api/expenses/bank-statements?')), false);

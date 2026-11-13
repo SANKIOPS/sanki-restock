@@ -101,34 +101,50 @@ const SAMAST_SALARY_PATH = path.join(DATA_DIR, 'salary-samast.json');
 const INCENTIVES_PATH = process.env.INCENTIVES_PATH || path.join(DATA_DIR, 'incentives.json');
 const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json');
 const VELOCITY_REMITTANCE_PATH = process.env.VELOCITY_REMITTANCE_PATH || path.join(DATA_DIR, 'velocity_remittance.json');
+const GOKWIK_API_EVIDENCE_PATH = path.join(DATA_DIR, 'gokwik_api_evidence.json');
+const VELOCITY_PAYOUT_EVIDENCE_PATH = path.join(DATA_DIR, 'velocity_payout_evidence.json');
+const VELOCITY_ORDER_INDEX_PATH = path.join(DATA_DIR, 'velocity_order_index.json');
+const VELOCITY_TRACKING_EVIDENCE_PATH = path.join(DATA_DIR, 'velocity_tracking_evidence.json');
 const STATEMENT_DIR = path.join(DATA_DIR, 'bank-statements');
 const STATEMENT_DRAFT_DIR = path.join(DATA_DIR, 'bank-statement-drafts');
-const ACCOUNTING_READ_FILES = [EXP_PATH,CREDIT_CARD_PATH,PROC_PATH,SALES_PATH,SALARY_PATH,SAMAST_SALARY_PATH,INCENTIVES_PATH,ORDERS_PATH,VELOCITY_REMITTANCE_PATH];
+const SANKI_ONLY_ACCOUNTING_READ_FILES = [ORDERS_PATH,VELOCITY_REMITTANCE_PATH,GOKWIK_API_EVIDENCE_PATH,VELOCITY_PAYOUT_EVIDENCE_PATH,VELOCITY_ORDER_INDEX_PATH,VELOCITY_TRACKING_EVIDENCE_PATH];
+const ACCOUNTING_READ_FILES = [EXP_PATH,CREDIT_CARD_PATH,PROC_PATH,SALES_PATH,SALARY_PATH,SAMAST_SALARY_PATH,INCENTIVES_PATH,...SANKI_ONLY_ACCOUNTING_READ_FILES];
 const accountingReadCache = new Map();
-const ACCOUNTING_READ_CACHE_MAX = 2;
-const ACCOUNTING_READ_CACHE_TTL_MS = 45 * 1000;
+// The accounting screen normally has several accounts open in quick
+// succession. A two-entry cache thrashed as soon as the user visited a third
+// account (and each account uses both the ledger and reconciliation routes).
+const ACCOUNTING_READ_CACHE_MAX = 64;
+const ACCOUNTING_READ_CACHE_TTL_MS = 5 * 60 * 1000;
 const accountingBankMovementsCache = new Map();
-const ACCOUNTING_BANK_MOVEMENTS_CACHE_MAX = 2;
+const ACCOUNTING_BANK_MOVEMENTS_CACHE_MAX = 32;
+const accountingReadInflight = new Map();
 const ACCOUNTING_BANK_TRANSACTION_PREVIEW_MAX = 200;
 let accountingReadRevision = 0;
 let accountingReadGeneration = 0;
 let accountingReadSnapshot = null;
+function accountingReadFileFingerprint(file){try{const stat=fs.statSync(file,{bigint:true});return file+':'+stat.size+':'+stat.mtimeNs+':'+stat.ctimeNs;}catch{return file+':missing';}}
 function accountingReadFingerprint(files=ACCOUNTING_READ_FILES){
-  return files.map(file=>{try{const stat=fs.statSync(file,{bigint:true});return file+':'+stat.size+':'+stat.mtimeNs+':'+stat.ctimeNs;}catch{return file+':missing';}}).join('|');
+  return files.map(accountingReadFileFingerprint).join('|');
 }
 function relevantAccountingReadFingerprint(nature){
   const normalized=String(nature||'SANKI').trim().toUpperCase();
-  const files=normalized==='SANKI'?ACCOUNTING_READ_FILES:ACCOUNTING_READ_FILES.filter(file=>file!==ORDERS_PATH&&file!==VELOCITY_REMITTANCE_PATH);
+  const files=normalized==='SANKI'?ACCOUNTING_READ_FILES:ACCOUNTING_READ_FILES.filter(file=>!SANKI_ONLY_ACCOUNTING_READ_FILES.includes(file));
   return accountingReadFingerprint(files);
 }
 function accountingReadScope(nature){return String(nature||'SANKI').trim().toUpperCase()==='SANKI'?'SANKI':'NON_SANKI';}
-function accountingRequestFingerprint(req){
-  // PERSONAL and SAMAST ledgers never project Shopify/Velocity sales. A new
-  // web order must not evict their bank-statement cache and force the entire
-  // personal reconciliation to be rebuilt for Owner and Admin.
-  return relevantAccountingReadFingerprint(req.query&&req.query.nature);
+function accountingReadFingerprints(){
+  // Capture each source once; SANKI and non-SANKI fingerprints share most of
+  // the same files, so two independent scans would repeat seven sync stats.
+  const byFile=new Map(ACCOUNTING_READ_FILES.map(file=>[file,accountingReadFileFingerprint(file)])),join=files=>files.map(file=>byFile.get(file)).join('|');
+  return Object.freeze({SANKI:join(ACCOUNTING_READ_FILES),NON_SANKI:join(ACCOUNTING_READ_FILES.filter(file=>!SANKI_ONLY_ACCOUNTING_READ_FILES.includes(file)))});
 }
-function invalidateAccountingReadCache(){accountingReadRevision+=1;accountingReadSnapshot=null;accountingReadCache.clear();accountingBankMovementsCache.clear();}
+function clearAccountingReadProjectionCaches(){accountingReadCache.clear();accountingBankMovementsCache.clear();accountingReadInflight.clear();}
+function invalidateAccountingReadCache(){accountingReadRevision+=1;accountingReadSnapshot=null;clearAccountingReadProjectionCaches();}
+function publishAccountingReadSnapshot(store){
+  accountingReadRevision+=1;clearAccountingReadProjectionCaches();
+  accountingReadSnapshot=Object.freeze({store,revision:accountingReadRevision,generation:++accountingReadGeneration,fingerprints:accountingReadFingerprints()});
+  return accountingReadSnapshot;
+}
 function currentAccountingReadSnapshot(nature){
   const scope=accountingReadScope(nature),fingerprint=relevantAccountingReadFingerprint(nature);
   if(accountingReadSnapshot&&accountingReadSnapshot.revision===accountingReadRevision&&accountingReadSnapshot.fingerprints[scope]===fingerprint)return accountingReadSnapshot;
@@ -136,22 +152,43 @@ function currentAccountingReadSnapshot(nature){
   // and Velocity evidence; those high-churn files must not force PERSONAL or
   // SAMAST to reload expenses.json. A reload captures both scopes together so
   // the same snapshot remains safe when the next request changes entity.
-  accountingReadCache.clear();accountingBankMovementsCache.clear();
-  const store=loadStore(),fingerprints=Object.freeze({SANKI:relevantAccountingReadFingerprint('SANKI'),NON_SANKI:relevantAccountingReadFingerprint('PERSONAL')});
+  clearAccountingReadProjectionCaches();
+  const store=loadStore(),fingerprints=accountingReadFingerprints();
   accountingReadSnapshot=Object.freeze({store,revision:accountingReadRevision,generation:++accountingReadGeneration,fingerprints});
   return accountingReadSnapshot;
 }
+function accountingReadAuthorizationKey(req){
+  const user=req.user||{};
+  return JSON.stringify({username:String(user.username||''),role:String(user.role||''),roles:user.roles||[],permissions:user.permissions||{}});
+}
 // The ledger and reconciliation views are expensive projections over the same
 // accounting sources. Reuse an identical read until any source file changes;
-// every accounting save also clears this cache explicitly below.
-router.use((req,res,next)=>{
+// every accounting save publishes a new generation explicitly below.
+function accountingReadCacheMiddleware(req,res,next){
   if(req.method!=='GET'||!['/api/expenses/bank-statements','/api/expenses/account-ledger'].includes(req.path))return next();
-  const snapshot=currentAccountingReadSnapshot(req.query&&req.query.nature),key=[snapshot.generation,accountingRequestFingerprint(req),req.path,JSON.stringify(req.query||{}),req.user&&req.user.username||'',req.user&&req.user.role||'',JSON.stringify(req.user&&req.user.roles||[]),JSON.stringify(req.user&&req.user.permissions||{})].join('|');
+  const snapshot=currentAccountingReadSnapshot(req.query&&req.query.nature);req.accountingReadSnapshot=snapshot;
+  // The snapshot generation already represents all file fingerprints. Do not
+  // stat every accounting source a second time while constructing this key.
+  const key=[snapshot.generation,req.path,JSON.stringify(req.query||{}),accountingReadAuthorizationKey(req)].join('|');
   const now=Date.now(),cached=accountingReadCache.get(key);
-  if(cached&&now-cached.cachedAt<=ACCOUNTING_READ_CACHE_TTL_MS)return res.json(cached.payload);
+  if(cached&&now-cached.cachedAt<=ACCOUNTING_READ_CACHE_TTL_MS){accountingReadCache.delete(key);accountingReadCache.set(key,cached);return res.status(cached.statusCode||200).json(cached.payload);}
   if(cached)accountingReadCache.delete(key);
-  const original=res.json.bind(res);res.json=payload=>{if(payload&&payload.success){accountingReadCache.set(key,{payload,cachedAt:Date.now()});while(accountingReadCache.size>ACCOUNTING_READ_CACHE_MAX)accountingReadCache.delete(accountingReadCache.keys().next().value);}return original(payload);};next();
-});
+  // Identical requests from the same authorized user share the first route
+  // computation. Authorization context is part of the key, so responses can
+  // never cross user/role/permission boundaries.
+  const pending=accountingReadInflight.get(key);
+  if(pending)return pending.then(result=>{if(!result)return next();return res.status(result.statusCode||200).json(result.payload);},next);
+  let release;const flight=new Promise(resolve=>{release=resolve;});accountingReadInflight.set(key,flight);
+  let settled=false;const settle=result=>{if(settled)return;settled=true;if(accountingReadInflight.get(key)===flight)accountingReadInflight.delete(key);release(result);};
+  const original=res.json.bind(res);res.json=payload=>{
+    const statusCode=res.statusCode||200,current=accountingReadSnapshot;
+    if(payload&&payload.success&&current&&current.generation===snapshot.generation){accountingReadCache.set(key,{payload,statusCode,cachedAt:Date.now()});while(accountingReadCache.size>ACCOUNTING_READ_CACHE_MAX)accountingReadCache.delete(accountingReadCache.keys().next().value);}
+    settle({payload,statusCode});return original(payload);
+  };
+  if(typeof res.once==='function'){res.once('finish',()=>settle(null));res.once('close',()=>settle(null));}
+  return next();
+}
+router.use(accountingReadCacheMiddleware);
 try { fs.mkdirSync(STATEMENT_DIR, { recursive:true }); } catch {}
 try { fs.mkdirSync(STATEMENT_DRAFT_DIR, { recursive:true }); } catch {}
 const statementUpload=multer({storage:multer.diskStorage({destination:(req,file,cb)=>cb(null,STATEMENT_DRAFT_DIR),filename:(req,file,cb)=>cb(null,Date.now()+'-'+crypto.randomBytes(4).toString('hex')+path.extname(file.originalname||'.xlsx').toLowerCase())}),limits:{fileSize:15*1024*1024}});
@@ -1531,13 +1568,16 @@ function saveStore(s, options = {}) {
   if(s._bankAuthorityExternal&&s._bankAuthorityExternal.length){
     const entries=[{fileName:'expenses.json',before:fs.existsSync(EXP_PATH)?fs.readFileSync(EXP_PATH,'utf8'):null,after:JSON.stringify(s)}];
     for(const change of s._bankAuthorityExternal){if(change.store!=='creditCards')throw new Error('Invalid linked bank-authority store.');entries.push({fileName:'credit-cards.json',before:change.before,after:change.after});}
-    bankAuthorityTransaction.commit(DATA_DIR,entries);delete s._bankAuthorityExternal;invalidateAccountingReadCache();return;
+    bankAuthorityTransaction.commit(DATA_DIR,entries);delete s._bankAuthorityExternal;publishAccountingReadSnapshot(s);return;
   }
   const tmp = EXP_PATH + '.tmp-' + process.pid + '-' + Date.now();
   try {
     fs.writeFileSync(tmp, JSON.stringify(s));
     fs.renameSync(tmp, EXP_PATH);
-    invalidateAccountingReadCache();
+    // The object just written is already normalized. Publish it immediately
+    // so the next GET does not re-read every accounting file and repeat all
+    // loadStore repair/projection work merely to rediscover the same state.
+    publishAccountingReadSnapshot(s);
   } finally {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
   }
@@ -5100,7 +5140,7 @@ router.get('/api/expenses/bank-reconciliation-evidence', (req, res) => {
 router.get('/api/expenses/account-ledger', (req, res) => {
   const nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim(),prashantSpecial=isPrashant(req)&&nature==='SANKI'&&(account===DEFAULT_COUNTER_CASH||account==='Services');
   if (!isAdmin(req)&&!prashantSpecial) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
-  const accountingSnapshot=currentAccountingReadSnapshot(nature),s=accountingSnapshot.store;
+  const accountingSnapshot=req.accountingReadSnapshot||currentAccountingReadSnapshot(nature),s=accountingSnapshot.store;
   if (!approvalNatures(req).includes(nature)&&!prashantSpecial) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   if (!account) return res.status(400).json({ success: false, error: 'Select an account.' });
   if (!accountVisibleToReq(req,account)) return res.status(403).json({success:false,error:'This ledger is restricted to the Owner.'});
@@ -5609,7 +5649,9 @@ function appBankMovements(s,account,nature,options={}){const rows=[],n=normalize
 function accountingReadBankMovements(s,account,nature){
   const snapshot=accountingReadSnapshot;
   if(!snapshot||snapshot.store!==s)return appBankMovements(s,account,nature);
-  const normalized=normalizedNature(nature),key=[snapshot.generation,normalized,canonicalAccountName(account),relevantAccountingReadFingerprint(normalized)].join('|');
+  // Snapshot generation already changes whenever any relevant source changes;
+  // avoid another synchronous stat scan for every bank-movement projection.
+  const normalized=normalizedNature(nature),key=[snapshot.generation,normalized,canonicalAccountName(account)].join('|');
   const cached=accountingBankMovementsCache.get(key);
   if(cached){accountingBankMovementsCache.delete(key);accountingBankMovementsCache.set(key,cached);return cached;}
   const movements=appBankMovements(s,account,normalized);
@@ -6520,7 +6562,7 @@ router.post('/api/expenses/bank-statements/import',statementUpload.fields([{name
 // aid only; reconciliation values and saved decisions do not depend on it.
 // Run source repairs through their explicit reviewed workflow instead.
 router.get('/api/expenses/bank-statements',(req,res)=>{
-  const account=String(req.query.account||''),nature=normalizedNature(req.query.nature),s=currentAccountingReadSnapshot(nature).store;
+  const account=String(req.query.account||''),nature=normalizedNature(req.query.nature),s=(req.accountingReadSnapshot||currentAccountingReadSnapshot(nature)).store;
   if(!canAccessBankReconciliation(req,s,nature,account))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation.'});
   const key=bankStatementBookKey(nature,account),book=((s.bankStatements||{})[key])||{transactions:{},imports:[]},allTransactions=Object.values(book.transactions||{}).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id))),transactionCount=allTransactions.length,transactions=allTransactions.slice(0,ACCOUNTING_BANK_TRANSACTION_PREVIEW_MAX),drafts=Object.values(s.bankReconciliationDrafts||{}).filter(x=>x.account===account&&normalizedNature(x.nature)===nature).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||''))),requested=String(req.query.draftId||''),draft=(requested&&drafts.find(x=>x.id===requested))||drafts[0];
   const draftOptions=drafts.map(x=>({draftId:x.id,from:x.summary&&x.summary.from||'',to:x.summary&&x.summary.to||'',originalName:x.originalName||'',createdAt:x.createdAt||'',resolved:Object.keys(x.resolutions||{}).length,rows:(x.transactions||[]).length})),imports=(book.imports||[]).slice().reverse().map(record=>{const summary=Object.assign({},record);delete summary.reconciliationRows;delete summary.carriedReconciliationRows;summary.historyRows=(record.reconciliationRows||[]).length+(record.carriedReconciliationRows||[]).length;summary.historyLoaded=false;return summary;}),precomputedMovements=draft?accountingReadBankMovements(s,account,nature):[];

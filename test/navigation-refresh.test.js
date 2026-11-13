@@ -85,7 +85,7 @@ test('ledger refresh preserves an explicit date range and changing accounts clea
   assert.equal(ctx.el('lg_from').value,'2026-10-01');assert.equal(calls.length,1);assert.match(calls[0].url,/from=2026-10-01&to=2026-10-07/);assert.equal(ctx.window.location.searchParams.get('draft'),'BRD-123');
   ctx.el('lg_account').value='Axis Bank 3448';ctx.loadAccountLedger();await new Promise(setImmediate);
   assert.equal(ctx.window.location.searchParams.has('draft'),false);assert.equal(ctx.window.location.searchParams.get('account'),'Axis Bank 3448');assert.ok(calls.every(call=>!call.options?.method||call.options.method==='GET'));
-  assert.equal(ctx.el('lg_from').value,'2026-08-01','opening a different ledger still applies its ordinary finalized-period default');assert.match(calls.at(-1).url,/from=2026-08-01/);
+  assert.equal(ctx.el('lg_from').value,'2026-10-01','a ledger response cannot silently change the requested range and trigger another full read');assert.match(calls.at(-1).url,/from=2026-10-01/);assert.equal(calls.length,2);
 });
 test('all Velocity sections survive refresh with the matching active navigation button',()=>{
   for(const tab of ['sku','product','category','vendor','momentum','pressure','recommend']){
