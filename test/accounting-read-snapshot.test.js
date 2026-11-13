@@ -78,6 +78,15 @@ test('bank read is pure, bounded and refreshes after an external source change',
     assert.equal(repeated.body.transactionCount, 205);
     assert.equal(storeReads, 1, 'an unchanged accounting GET reuses the existing snapshot');
 
+    const ledger = await invoke('/api/expenses/account-ledger', { nature, account, from: dateFor(0), to: dateFor(204) });
+    assert.equal(ledger.status, 200, JSON.stringify(ledger.body));
+    assert.equal(ledger.body.success, true);
+    assert.equal(storeReads, 1, 'ledger edit eligibility reuses the rendered accounting snapshot instead of rereading expenses.json');
+
+    const repeatedLedger = await invoke('/api/expenses/account-ledger', { nature, account, from: dateFor(0), to: dateFor(204) });
+    assert.equal(repeatedLedger.status, 200, JSON.stringify(repeatedLedger.body));
+    assert.equal(storeReads, 1, 'an identical ledger GET reuses the completed projection and edit evidence');
+
     const changed = JSON.parse(before);
     changed.bankStatements['PERSONAL|' + account].transactions['BANK-0205'] = {
       id: 'BANK-0205', date: dateFor(205), description: 'Externally added finalized bank row',

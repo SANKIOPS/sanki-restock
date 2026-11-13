@@ -45,6 +45,26 @@ function harness(mutate = () => {}, overrides = {}) {
 }
 function list(value) { return Array.isArray(value) ? value : []; }
 
+test('prepared ledger evidence scans blocked expense references once for many visible rows', () => {
+  const store={expenses:{},transfers:[],receipts:[],bankDateOverrides:{},bankReconciliationLinks:{},bankStatements:{},bankReconciliationDrafts:{},bankReconciliationApprovals:{},bankMovementAuthority:{},openingBalanceDates:{},openingBalanceDatesByNature:{},cashReconciliations:[]};
+  for(let index=0;index<40;index+=1){const id='EX-BULK-'+index,paymentId='PAY-'+index;store.expenses[id]={id,nature:'SANKI',status:'paid',approvedAt:day,payments:[{id:paymentId,date:day,amount:index+1,account:bank}]};}
+  let scans=0,reconciliationScans=0,sourceScans=0,locks=0,preparedSet=null,preparedMap=null,preparedSources=null;
+  const editor=createLedgerEditor({
+    canEdit:()=>true,isOwner:()=>false,canAccessExpense:()=>true,approvalNatures:()=>['SANKI'],canPersonal:()=>true,accountVisible:()=>true,personalAccount:()=>false,
+    ledgerAccounts:()=>[bank],accountBelongs:()=>true,paymentPosted:()=>true,bookKey:(entryNature,account)=>entryNature+'|'+account,
+    blockedReferences:()=>{scans+=1;preparedSet=new Set();return preparedSet;},
+    reconciliationEvidence:(s,blocked)=>{reconciliationScans+=1;assert.equal(blocked,preparedSet);return new Map();},
+    sourceProtectionContext:()=>{sourceScans+=1;return{indexed:true};},
+    expenseLock:(s,e,blocked,reconciled)=>{locks+=1;assert.ok(blocked instanceof Set);assert.ok(reconciled instanceof Map);assert.equal(blocked,preparedSet);if(!preparedMap)preparedMap=reconciled;else assert.equal(reconciled,preparedMap);return{locked:false};},
+    sourceProtection:(s,selected,sources)=>{assert.equal(sources&&sources.indexed,true);if(!preparedSources)preparedSources=sources;else assert.equal(sources,preparedSources);return'';},updateExpense:()=>{},audit:()=>{},read:()=>{},commit:()=>{}
+  });
+  const prepared=editor.evidence(store,{});assert.equal(scans,0,'the expensive index stays lazy when no expense row is inspected');
+  for(let index=0;index<40;index+=1){const result=editor.eligibility(store,{user:admin},{id:'EX-BULK-'+index+'/PAY-'+index,kind:'expense',nature:'SANKI',account:bank},{},prepared);assert.equal(result.canEditLedgerTransaction,true,result.ledgerEditBlockedReason);}
+  assert.equal(locks,40);assert.equal(scans,1,'all visible expense rows share one blocked-reference scan');
+  assert.equal(reconciliationScans,1,'all visible expense rows share one finalized-reconciliation index');
+  assert.equal(sourceScans,1,'all visible rows share one source-protection index');
+});
+
 test('canonical references normalize case, separators and zero padding without rewriting opaque references', () => {
   for (const value of ['TR42', 'tr-42', 'TR-00042', 'transfer:TR42', ' TR\u201300042 ']) assert.equal(normalizeReference(value), 'TR-00042');
   for (const value of ['EX121/PAY1', 'ex-00121 / pay-001']) assert.equal(normalizeReference(value), 'EX-00121/PAY-001');

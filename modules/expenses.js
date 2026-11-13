@@ -59,7 +59,7 @@ const { registerGoKwikReports } = require('./gokwik-reports-routes');
 const expenseRefunds = require('./expense-refunds');
 const expenseLoans = require('./expense-loans');
 const expenseRefundRoutes = require('./expense-refunds-routes');
-const { expenseFinancialLock } = require('./expense-financial-lock');
+const { expenseFinancialLock, reconciliationEvidence:expenseReconciliationEvidence } = require('./expense-financial-lock');
 const bankAmountAuthority = require('./bank-amount-authority');
 const bankMovementAuthority = require('./bank-movement-authority');
 const bankAuthorityTransaction = require('./bank-authority-transaction');
@@ -4719,29 +4719,85 @@ router.post('/api/expenses/sale-allocation',(req,res)=>{
   s.reqSeq=num(s.reqSeq)+1;const request={id:'RQ-'+String(s.reqSeq).padStart(4,'0'),kind:'sale_split',name:'Sale '+String(sale.order.name||sale.order.orderNumber||sale.order.id),nature:'SANKI',meta:{saleId:sale.id,gross:sale.gross,cashAmount,nonCashAmount:roundMoney(sale.gross-cashAmount),reason},status:'pending',by:req.user.username,at:new Date().toISOString(),decidedBy:null,decidedAt:null};s.requests=s.requests||[];s.requests.push(request);audit(s,req,'SALE_ALLOCATION_CORRECTION_REQUESTED','request',request.id,{nature:'SANKI',account:DEFAULT_COUNTER_CASH,after:request,note:reason});saveStore(s);res.json({success:true,request,approved:false});
 });
 
-function readLedgerEditSnapshot(){
-  // Unlike loadStore, this preview/correction does not run legacy migrations.
-  // A pending accounting journal must be recovered by its owning workflow.
-  if(fs.existsSync(path.join(DATA_DIR,'.bank-authority-transaction.json')))throw new Error('An accounting transaction needs recovery before this entry can be edited.');
-  const raw=fs.readFileSync(EXP_PATH,'utf8'),store=JSON.parse(raw),external={},externalRaw={};
+function readLedgerEditExternalSnapshot(store){
+  const external={},externalRaw={};
   if(!store||typeof store!=='object'||Array.isArray(store)||store._bankAuthorityExternal)throw new Error('The accounting store has an unfinished linked-store change.');
   for(const file of [SALARY_PATH,SAMAST_SALARY_PATH,CREDIT_CARD_PATH,INCENTIVES_PATH,PROC_PATH]){
     const contents=fs.existsSync(file)?fs.readFileSync(file,'utf8'):null;
     externalRaw[file]=contents;
     if(contents!==null){const parsed=JSON.parse(contents);if(!parsed||typeof parsed!=='object')throw new Error('A linked accounting store cannot be verified.');external[file]=parsed;}
   }
-  return {raw,store,external,externalRaw};
+  return {external,externalRaw};
+}
+function readLedgerEditSnapshot(){
+  // Unlike loadStore, this preview/correction does not run legacy migrations.
+  // A pending accounting journal must be recovered by its owning workflow.
+  if(fs.existsSync(path.join(DATA_DIR,'.bank-authority-transaction.json')))throw new Error('An accounting transaction needs recovery before this entry can be edited.');
+  const raw=fs.readFileSync(EXP_PATH,'utf8'),store=JSON.parse(raw);
+  if(!store||typeof store!=='object'||Array.isArray(store)||store._bankAuthorityExternal)throw new Error('The accounting store has an unfinished linked-store change.');
+  return {raw,store,...readLedgerEditExternalSnapshot(store)};
+}
+function ledgerSourceProtectionContext(s){
+  const expenses=Object.values(s.expenses||{}),context={
+    reimbursementTransfers:new Set(),reimbursementMovements:new Set(),
+    gokwikMovements:new Set(),loanMovements:new Set(),
+    refundExpenses:new Set(),refundMovements:new Set()
+  },batchExpenses=new Map();
+  expenses.forEach(expense=>{
+    const payments=[...(expense.payments||[]),...(expense.reimbursementPayments||[])];
+    payments.forEach(payment=>{if(payment.batchPaymentId){const list=batchExpenses.get(payment.batchPaymentId)||[];list.push(expense.id);batchExpenses.set(payment.batchPaymentId,list);}});
+    const settled=(expense.reimbursementPayments||[]).filter(payment=>payment.settledByTransferId);
+    if(settled.length){
+      settled.forEach(payment=>context.reimbursementTransfers.add(payment.settledByTransferId));
+      context.reimbursementMovements.add(expense.id);
+      payments.forEach(payment=>context.reimbursementMovements.add(expense.id+'/'+payment.id));
+    }
+  });
+  Object.values(s.gokwikPostings||{}).forEach(posting=>{
+    if(posting.transferId)context.gokwikMovements.add(posting.transferId);
+    (posting.expenseIds||[]).forEach(id=>{
+      context.gokwikMovements.add(id);
+      const expense=s.expenses&&s.expenses[id];
+      [...(expense&&expense.payments||[]),...(expense&&expense.reimbursementPayments||[])].forEach(payment=>context.gokwikMovements.add(id+'/'+payment.id));
+    });
+  });
+  (s.receipts||[]).forEach(receipt=>{if(expenseLoans.isLoan(receipt))context.loanMovements.add(receipt.id);});
+  (s.loanRepayments||[]).forEach(payment=>context.loanMovements.add(payment.id));
+  const advances=new Map((s.vendorAdvances||[]).map(advance=>[advance.id,advance]));
+  const refunds=Array.isArray(s.expenseRefunds)?s.expenseRefunds:Object.values(s.expenseRefunds||{});
+  refunds.filter(refund=>refund&&refund.status!=='voided').forEach(refund=>{
+    (refund.sources||[]).forEach(source=>{
+      if(source.expenseId)context.refundExpenses.add(source.expenseId);
+      if(source.advanceId){
+        context.refundMovements.add(source.advanceId);
+        const advance=advances.get(source.advanceId),reference=String(advance&&advance.paymentReference||''),expenseId=reference.split('/')[0];
+        if(expenseId&&s.expenses&&s.expenses[expenseId]&&reference.startsWith(expenseId+'/'))context.refundExpenses.add(expenseId);
+        (batchExpenses.get(advance&&advance.batchPaymentId)||[]).forEach(id=>context.refundExpenses.add(id));
+      }
+      (source.paymentAllocations||[]).forEach(payment=>{if(source.expenseId&&payment.paymentId)context.refundMovements.add(source.expenseId+'/'+payment.paymentId);});
+    });
+    (refund.components||[]).forEach(component=>[component.receiptId,component.externalMovementId,component.vendorAdvanceId].filter(Boolean).forEach(id=>context.refundMovements.add(id)));
+  });
+  (s.vendorAdvances||[]).filter(advance=>advance.expenseRefundId&&!advance.accountingExcluded).forEach(advance=>(advance.applications||[]).filter(application=>!application.accountingExcluded).forEach(application=>context.refundExpenses.add(application.expenseId)));
+  return context;
 }
 const ledgerTransactionEditor=require('./ledger-transaction-edits').create({
   canEdit:canEditLedgerTransactions,isOwner,canAccessExpense:canManageRestrictedExpense,approvalNatures,canPersonal:canManagePersonalAccounting,
   accountVisible:accountVisibleToReq,personalAccount:(account,nature)=>(ENTITY_ACCOUNTS.PERSONAL||[]).includes(account)&&!(ENTITY_ACCOUNTS[nature]||[]).includes(account),
   ledgerAccounts:ledgerAccountsForNature,accountBelongs:accountBelongsInLedgerBook,paymentPosted:paymentIsPosted,
   bookKey:bankStatementBookKey,
-  expenseLock:(s,e)=>expenseFinancialLock(s,e,{blockedReferences:unpayBlockedReferences(s)}),
-  sourceProtection:(s,selected)=>{
+  blockedReferences:unpayBlockedReferences,
+  reconciliationEvidence:expenseReconciliationEvidence,
+  sourceProtectionContext:ledgerSourceProtectionContext,
+  expenseLock:(s,e,blockedReferences,reconciliationEvidence)=>expenseFinancialLock(s,e,{blockedReferences:blockedReferences||unpayBlockedReferences(s),reconciliationEvidence}),
+  sourceProtection:(s,selected,prepared)=>{
     const {id,kind,record,expense}=selected;
-    if(transferReimbursements.protectsMovement(s,id)||kind==='transfer'&&transferReimbursements.protectsTransfer(s,id)||(record.reimbursementAllocations||[]).length)return 'This movement settles a reimbursement. Correct it in its source workflow.';
-    if(gokwikAccounting.protectsMovement(s,id)||expenseLoans.protectsMovement(s,id)||expenseRefunds.protectsMovement(s,id)||expense&&expenseRefunds.hasSource(s,expense.id))return 'This movement is linked to a settlement, loan or refund. Correct its source workflow first.';
+    const reimbursementProtected=prepared?prepared.reimbursementMovements.has(id)||prepared.reimbursementTransfers.has(id):transferReimbursements.protectsMovement(s,id)||kind==='transfer'&&transferReimbursements.protectsTransfer(s,id);
+    if(reimbursementProtected||(record.reimbursementAllocations||[]).length)return 'This movement settles a reimbursement. Correct it in its source workflow.';
+    const expenseId=String(id).split('/')[0],sourceProtected=prepared
+      ? prepared.gokwikMovements.has(id)||prepared.loanMovements.has(id)||prepared.refundExpenses.has(expenseId)||prepared.refundMovements.has(id)
+      : gokwikAccounting.protectsMovement(s,id)||expenseLoans.protectsMovement(s,id)||expenseRefunds.protectsMovement(s,id)||expense&&expenseRefunds.hasSource(s,expense.id);
+    if(sourceProtected)return 'This movement is linked to a settlement, loan or refund. Correct its source workflow first.';
     if(expense&&((expense.reimbursementPayments||[]).length||num(expense.reimbursementAmount)>0||expense.salaryAdvanceId))return 'This expense has a linked reimbursement or salary advance. Correct its source workflow first.';
     if(kind==='transfer'&&(isSalaryAdvanceFundingTransfer(record)||record.exchangeSource||record.exchangeDirection))return 'Salary and exchange transfers must be corrected in their source workflow.';
     if(kind==='receipt'&&s.rentals&&require('./rental-register').receiptUsage(require('./rental-register').state({rentals:JSON.parse(JSON.stringify(s.rentals))}),id)>0)return 'This receipt is linked to rent or advance credit. Correct its source workflow first.';
@@ -4762,6 +4818,20 @@ const ledgerTransactionEditor=require('./ledger-transaction-edits').create({
     bankAuthorityTransaction.commit(DATA_DIR,[{fileName:'expenses.json',before:snapshot.raw,after:JSON.stringify(s)}]);
   }
 });
+const accountingLedgerEditSnapshotCache=new WeakMap();
+function currentAccountingLedgerEditSnapshot(snapshot){
+  // Eligibility is a read-only projection. Reuse the exact normalized store
+  // already used to render this ledger instead of rereading and reparsing the
+  // complete expenses file for every account request. External evidence is
+  // parsed once per fingerprinted accounting snapshot and discarded whenever
+  // any source changes. The journal check remains live so a newly interrupted
+  // atomic write always fails closed, even while the snapshot itself is warm.
+  if(fs.existsSync(path.join(DATA_DIR,'.bank-authority-transaction.json')))throw new Error('An accounting transaction needs recovery before this entry can be edited.');
+  const cached=accountingLedgerEditSnapshotCache.get(snapshot);if(cached)return cached;
+  const sources=readLedgerEditExternalSnapshot(snapshot.store),editSnapshot={store:snapshot.store,external:sources.external};
+  editSnapshot.evidence=ledgerTransactionEditor.evidence(editSnapshot.store,editSnapshot.external);
+  accountingLedgerEditSnapshotCache.set(snapshot,editSnapshot);return editSnapshot;
+}
 ledgerTransactionEditor.register(router);
 
 router.patch('/api/expenses/ledger-entry',(req,res)=>{
@@ -5027,7 +5097,7 @@ router.get('/api/expenses/bank-reconciliation-evidence', (req, res) => {
 router.get('/api/expenses/account-ledger', (req, res) => {
   const nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim(),prashantSpecial=isPrashant(req)&&nature==='SANKI'&&(account===DEFAULT_COUNTER_CASH||account==='Services');
   if (!isAdmin(req)&&!prashantSpecial) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
-  const s = currentAccountingReadSnapshot().store;
+  const accountingSnapshot=currentAccountingReadSnapshot(),s=accountingSnapshot.store;
   if (!approvalNatures(req).includes(nature)&&!prashantSpecial) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   if (!account) return res.status(400).json({ success: false, error: 'Select an account.' });
   if (!accountVisibleToReq(req,account)) return res.status(403).json({success:false,error:'This ledger is restricted to the Owner.'});
@@ -5208,7 +5278,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const providerStatement=nature==='SANKI'&&account===gokwikAccounting.CLEARING?require('./gokwik-statement').buildStatement(ordered,s,{from,to,expenseNature,recordedBalance:finalBalance}):null;
   const paytmProjection=nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT?paytmLedgerStatus.buildProjection(s,paytmReceiptEvidenceRows(s),{to:to||indiaBusinessDate()}):null;
   if(paytmProjection){visible.forEach(row=>{const status=paytmProjection.forRow(row);if(status)row.paytmReconciliation=status;});reconciliation.through=paytmProjection.coverage.overallReconciledThrough;const last=paytmProjection.coverage.lastVerified;reconciliation.last=last&&reconciliation.through?{at:last.at,by:last.by,through:reconciliation.through,paytmReportVerified:true}:null;}
-  let editSnapshot=null,editReadError='';try{editSnapshot=readLedgerEditSnapshot();editSnapshot.evidence=ledgerTransactionEditor.evidence(editSnapshot.store,editSnapshot.external);}catch(error){editReadError=error.message;}
+  let editSnapshot=null,editReadError='';try{editSnapshot=currentAccountingLedgerEditSnapshot(accountingSnapshot);}catch(error){editReadError=error.message;}
   visible.forEach(entry=>{if(!ledgerTransactionEditor.kinds.has(entry.kind))return;Object.assign(entry,entry.editable===false||entry.privacyRedacted||entry.reconciliation?{canEditLedgerTransaction:false,ledgerEditBlockedReason:'This movement is protected by its source workflow or reconciliation.'}:editReadError?{canEditLedgerTransaction:false,ledgerEditBlockedReason:editReadError}:ledgerTransactionEditor.eligibility(editSnapshot.store,req,{id:entry.id,kind:entry.kind,nature,account},editSnapshot.external,editSnapshot.evidence));});
   res.json({ success:true, account, nature, expenseNature, entries:visible, bankMovementAuthorityConflicts:authoritativeEntries.bankMovementAuthorityConflicts||[], ...(providerStatement?{providerStatement}:{}),...(paytmProjection?{paytmCoverage:paytmProjection.coverage}:{}), balance:Math.abs(finalBalance)<.005?0:finalBalance, statementBalance, restrictedAmount, restrictedFunds, reconciled:issues.some(issue=>issue.code==='store_credit_source_changed')?false:cashVerification?true:issues.length===0&&(!paytmProjection||!paytmProjection.coverage.pendingSettlements&&!paytmProjection.coverage.pendingReceipts), reconciliationIssues:cashVerification?issues.filter(issue=>issue.code==='store_credit_source_changed'):issues, recordWarnings:issues, reconciledThrough:reconciliation.through, lastReconciliation:reconciliation.last });
 });
@@ -6132,7 +6202,7 @@ function draftReconciliationBase(s,draft,options={}){
   const periodExcludedBankNet=roundMoney(rows.filter(x=>x.bank&&x.resolution&&x.resolution.action==='exclude').reduce((n,x)=>n+num(x.bank.credit)-num(x.bank.debit),0)),excludedBankNet=companyAdjusted?cumulativeCompanyExcludedBankNet(s,draft):periodExcludedBankNet;
   const pendingPostings=rows.filter(x=>x.bank).map(row=>({rowId:row.id,action:row.resolution&&row.resolution.action||'automatic_bank_charge',amount:pendingReconciliationAmount({row,postedMovements:postedBankRowMovements({store:s,draft,rowId:row.id,bank:row.bank,movements:allApp}),companyAdjusted})})).filter(x=>Math.abs(x.amount)>.005),staged=roundMoney(pendingPostings.reduce((n,x)=>n+x.amount,0));
   const ledgerClosing=roundMoney(proposedOpening+movements+staged),actualBankClosing=num(statement.closingBalance),bankClosing=roundMoney(actualBankClosing-(companyAdjusted?excludedBankNet:0)),balanceDifference=roundMoney(bankClosing-ledgerClosing),balanceResolved=Math.abs(balanceDifference)<.01;
-  const linkedCandidateIds=new Set(priorLinkedIds);Object.values(draft.resolutions||{}).forEach(r=>{if(r.appId)linkedCandidateIds.add(r.appId);(r.appIds||[]).forEach(id=>linkedCandidateIds.add(id));});const shiftDate=(value,days)=>{if(!value)return'';const d=new Date(value+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+days);return d.toISOString().slice(0,10);},candidateFrom=shiftDate(draft.summary.from,-7),candidateTo=shiftDate(draft.summary.to,7),pendingCarry=pendingCarryForwardCandidates(s,book,allApp),pendingCarryIds=new Set(pendingCarry.candidates.map(x=>x.id)),linkCandidates=allApp.filter(x=>(pendingCarryIds.has(x.id)||isCurrentPeriodMovement(x)&&!priorCutoffAppIds.has(x.id)&&(!candidateFrom||x.date>=candidateFrom)&&(!candidateTo||x.date<=candidateTo))&&!linkedCandidateIds.has(x.id)).map(x=>pendingCarry.candidates.find(y=>y.id===x.id)||x);
+  const linkedCandidateIds=new Set(priorLinkedIds);Object.values(draft.resolutions||{}).forEach(r=>{if(r.appId)linkedCandidateIds.add(r.appId);(r.appIds||[]).forEach(id=>linkedCandidateIds.add(id));});const shiftDate=(value,days)=>{if(!value)return'';const d=new Date(value+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+days);return d.toISOString().slice(0,10);},candidateFrom=shiftDate(statement.from,-7),candidateTo=shiftDate(statement.to,7),pendingCarry=pendingCarryForwardCandidates(s,book,allApp),pendingCarryIds=new Set(pendingCarry.candidates.map(x=>x.id)),linkCandidates=allApp.filter(x=>(pendingCarryIds.has(x.id)||isCurrentPeriodMovement(x)&&!priorCutoffAppIds.has(x.id)&&(!candidateFrom||x.date>=candidateFrom)&&(!candidateTo||x.date<=candidateTo))&&!linkedCandidateIds.has(x.id)).map(x=>pendingCarry.candidates.find(y=>y.id===x.id)||x);
   reconciliationConflicts.push(...pendingCarry.conflicts.map(x=>Object.assign({bankRowIds:[]},x)));
   const finalizationApproval=Object.values(s.bankReconciliationApprovals||{}).filter(x=>x.draftId===draft.id).sort((a,b)=>String(b.requestedAt||'').localeCompare(String(a.requestedAt||'')))[0]||null;
   const gokwik={fingerprint:gokwikPlan.fingerprint,pending:gokwikPlan.items.length,settlements:gokwikPlan.items.map(item=>({id:item.batch.id,rowId:item.rowId,utr:item.batch.utr,net:item.batch.net})),errors:gokwikPlan.errors};

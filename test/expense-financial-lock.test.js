@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { expenseFinancialLock } = require('../modules/expense-financial-lock');
+const { expenseFinancialLock, reconciliationEvidence } = require('../modules/expense-financial-lock');
 
 const payment = changes => ({ id: 'PAY-001', amount: 100, account: 'Axis Bank 3448', date: '2026-09-05', ...changes });
 const expense = changes => ({ id: 'EX-00100', nature: 'SANKI', amount: 100, date: '2026-09-04', status: 'paid', paidAmount: 100,
@@ -65,6 +65,15 @@ test('caller-supplied blocked references augment evidence without mutation', () 
   const before = [...refs];
   assert.equal(expenseFinancialLock({}, expense(), { blockedReferences: refs }).locked, true);
   assert.deepEqual([...refs], before);
+});
+
+test('caller-prepared reconciliation evidence is reusable and remains immutable', () => {
+  const store=finalized({linkedRecordIds:[ref]}),prepared=reconciliationEvidence(store),before=[...prepared];
+  assert.equal(expenseFinancialLock(store,expense(),{reconciliationEvidence:prepared}).locked,true);
+  assert.deepEqual([...prepared],before);
+  const direct=expense({id:'EX-DIRECT',payments:[payment({id:'PAY-009',bankReconciliationDraft:'D'})]});
+  assert.equal(expenseFinancialLock({},direct,{reconciliationEvidence:prepared}).locked,true);
+  assert.deepEqual([...prepared],before,'record-specific evidence must not leak into the shared request index');
 });
 
 test('batchPaymentId can be the reconciled ID', () => {

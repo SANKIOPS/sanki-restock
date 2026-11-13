@@ -77,7 +77,13 @@ function expenseFinancialLock(store, expense, options = {}) {
   store = store || {};
   if (!expense || typeof expense !== 'object') return { locked: false, reason: '', references: [] };
   if (expense.gokwikPostingId && (store.gokwikPostings || {})[expense.gokwikPostingId]) return {locked:true,reason:'This expense is part of an Owner-approved GoKwik settlement. Its amount, date and payment evidence are locked.',references:list(expense.payments).map(p=>qualified(expense,p))};
-  const evidence = reconciliationEvidence(store, options.blockedReferences), movements = [];
+  // Account-ledger projections inspect hundreds of expenses against the same
+  // immutable request snapshot. Accept their prepared evidence map so the
+  // finalized statements and active drafts are not rescanned for every row.
+  // Record-specific evidence stays local: a shared prepared map is read-only.
+  const evidence = options.reconciliationEvidence instanceof Map
+    ? options.reconciliationEvidence : reconciliationEvidence(store, options.blockedReferences);
+  const localEvidence = new Map(), movements = [];
   const allExpenses = values(store.expenses), ownId = text(expense.id);
   const addMovement = (payment, reimbursement = false) => {
     if (!monetary(payment)) return;
@@ -99,7 +105,7 @@ function expenseFinancialLock(store, expense, options = {}) {
     const direct = payment.bankReconciliationDraft || payment.creditCardStatementId;
     if (direct && reference) {
       refs.add(reference);
-      evidence.set(reference, 'This expense has a statement-linked payment. Its amount and date cannot be changed.');
+      localEvidence.set(reference, 'This expense has a statement-linked payment. Its amount and date cannot be changed.');
     }
     movements.push({ refs, reference, account: text(payment.account || (reimbursement ? '' : expense.account)), date: date(payment.date || payment.paidAt || expense.paidAt || expense.date) });
   };
@@ -113,7 +119,7 @@ function expenseFinancialLock(store, expense, options = {}) {
     const advance = list(store.vendorAdvances).find(item => text(item && item.id) === text(application.vendorAdvanceId));
     if (!monetary(advance)) return;
     const refs = new Set([advance.id, advance.paymentReference, ...identifiers(advance)].map(text).filter(Boolean));
-    if (advance.bankReconciliationDraft && text(advance.id)) evidence.set(text(advance.id), 'This expense uses a statement-linked vendor advance. Its amount and date cannot be changed.');
+    if (advance.bankReconciliationDraft && text(advance.id)) localEvidence.set(text(advance.id), 'This expense uses a statement-linked vendor advance. Its amount and date cannot be changed.');
     movements.push({ refs, reference: text(advance.paymentReference || advance.id), account: text(advance.account), date: date(advance.date) });
   });
 
@@ -128,13 +134,14 @@ function expenseFinancialLock(store, expense, options = {}) {
   // exists, so a credit-only redemption is never mistaken for a bank payout.
   if (ownId) movements.forEach(movement => movement.refs.add(ownId));
   if (movements.length && expense.reconciliationSource && expense.reconciliationSource.draftId && ownId) {
-    evidence.set(ownId, 'This expense was created from bank reconciliation. Its amount and date cannot be changed.');
+    localEvidence.set(ownId, 'This expense was created from bank reconciliation. Its amount and date cannot be changed.');
     movements[0].refs.add(ownId);
   }
   const blocked = new Set(), reasons = [];
   movements.forEach(movement => {
     movement.refs.forEach(id => {
-      if (evidence.has(id)) { blocked.add(id); reasons.push(evidence.get(id)); }
+      const source=localEvidence.has(id)?localEvidence:evidence;
+      if (source.has(id)) { blocked.add(id); reasons.push(source.get(id)); }
     });
     const closedCash = list(store.cashReconciliations).filter(record => record && record.status === 'approved' &&
       text(record.account).toLowerCase() === movement.account.toLowerCase() && movement.account &&
@@ -148,4 +155,4 @@ function expenseFinancialLock(store, expense, options = {}) {
   return { locked: reasons.length > 0, reason: reasons[0] || '', references: [...blocked].sort() };
 }
 
-module.exports = { expenseFinancialLock };
+module.exports = { expenseFinancialLock, reconciliationEvidence };

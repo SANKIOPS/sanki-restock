@@ -29,7 +29,24 @@ function collectReferences(value, references) {
 function create(deps) {
   // The ledger may contain hundreds of visible rows. Index exact evidence once
   // for that immutable request snapshot, never cache it across requests.
-  function evidence(s,external){const bank=new Set([...Object.keys(s.bankDateOverrides||{}),...Object.keys(s.bankReconciliationLinks||{})]),linked=new Set();for(const value of [s.bankStatements,s.bankReconciliationDrafts,s.bankMovementAuthority])collectReferences(value,bank);Object.values(external||{}).forEach(value=>collectReferences(value,linked));return{bank,external:linked};}
+  function evidence(s,external){
+    const bank=new Set([...Object.keys(s.bankDateOverrides||{}),...Object.keys(s.bankReconciliationLinks||{})]),linked=new Set(),prepared={bank,external:linked};
+    for(const value of [s.bankStatements,s.bankReconciliationDrafts,s.bankMovementAuthority])collectReferences(value,bank);
+    Object.values(external||{}).forEach(value=>collectReferences(value,linked));
+    // The financial-lock index can scan every finalized statement and active
+    // draft. Build it lazily at most once for this request snapshot instead of
+    // repeating that work for every visible expense payment.
+    if(typeof deps.blockedReferences==='function'){
+      let value,ready=false;Object.defineProperty(prepared,'blockedReferences',{enumerable:true,get(){if(!ready){value=deps.blockedReferences(s);ready=true;}return value;}});
+    }
+    if(typeof deps.reconciliationEvidence==='function'){
+      let value,ready=false;Object.defineProperty(prepared,'reconciliationEvidence',{enumerable:true,get(){if(!ready){value=deps.reconciliationEvidence(s,prepared.blockedReferences);ready=true;}return value;}});
+    }
+    if(typeof deps.sourceProtectionContext==='function'){
+      let value,ready=false;Object.defineProperty(prepared,'sourceProtectionContext',{enumerable:true,get(){if(!ready){value=deps.sourceProtectionContext(s);ready=true;}return value;}});
+    }
+    return prepared;
+  }
   function target(s, req, input) {
     if (!deps.canEdit(req)) fail('Manage transactions access is required to edit transfers, payments or receipts.', 403);
     const id = text(input.id), kind = text(input.kind);
@@ -72,9 +89,9 @@ function create(deps) {
     const sourceFields = ['bankReconciliationDraft', 'bankReconciliationEvidence', 'reconciliationDraft', 'creditCardStatementId', 'creditCardId', 'gokwikPostingId', 'paytmTransactionId', 'paytmRoundingTransactionId', 'paytmSettlementId', 'settledThroughPaytm', 'settledByTransferId', 'salaryAdvanceId', 'manualSaleId', 'orderId', 'shopifyOrderId', 'expenseRefundId', 'refundRecoveryExpenseId', 'tenancyId', 'rentalKind', 'batchPaymentId', 'batchId', 'vendorAdvanceId', 'refundCredit', 'creditOnly', 'convertedFromExpense', 'routedThroughIntermediary', 'intermediary', 'openingBalanceTreatment', 'openingBalanceTreatmentNote', 'confirmedBankSplit', 'bankMovementAuthority'];
     if (sourceFields.some(field => !!record[field]) || list(record.batchPaymentIds).length || list(record.linkedExpenseIds).length || expense && (expense.reconciliationSource || expense.creditCardStatementId || expense.gokwikPostingId)) fail('This movement belongs to a linked source workflow. Correct it there; its evidence cannot be edited independently.');
     if (kind === 'transfer' && ['money_exchange', 'credit_card_payment', 'salary_advance_funding'].includes(record.classification) || kind === 'receipt' && (record.creditCardRefund || ['product_sale', 'rental_income', 'rental_security', 'loan_received', 'expense_refund', 'refund_recovery'].includes(record.receiptType))) fail('This movement must be corrected in its dedicated source workflow.');
-    const sourceError = deps.sourceProtection(s, selected); if (sourceError) fail(sourceError);
-    if (expense) { const lock = deps.expenseLock(s, expense); if (lock.locked) { const error=new Error('This expense has a reconciled payment. Its payment amounts and dates are locked for every role, including the Owner. Correct descriptive details through the expense editor.');Object.assign(error,{status:409,financialFieldsLocked:true,financialLockReason:lock.reason});throw error; } }
     const linked=preparedEvidence||evidence(s,external);
+    const sourceError = deps.sourceProtection(s, selected, linked.sourceProtectionContext); if (sourceError) fail(sourceError);
+    if (expense) { const lock = deps.expenseLock(s, expense, linked.blockedReferences, linked.reconciliationEvidence); if (lock.locked) { const error=new Error('This expense has a reconciled payment. Its payment amounts and dates are locked for every role, including the Owner. Correct descriptive details through the expense editor.');Object.assign(error,{status:409,financialFieldsLocked:true,financialLockReason:lock.reason});throw error; } }
     if ([...refs].some(id=>linked.bank.has(id))) fail('This transaction is reconciled or linked to an active bank reconciliation. Reopen or undo the source reconciliation before editing it.');
     if ([...refs].some(id=>linked.external.has(id))) fail('This movement is linked to a credit-card, salary, procurement or incentive record. Use its source workflow.');
     for (const scope of scopes) {
