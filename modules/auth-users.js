@@ -42,7 +42,7 @@ const PRASHANT_USER = 'prashant';
 const PRASHANT_PAGES = [
   '/inventory.html', '/inventory-care.html',
   '/procurement.html', '/fresh-procurement.html', '/size-tracker.html',
-  '/pnl.html', '/rentals.html', '/expenses.html', '/salary.html', '/incentives.html',
+  '/pnl.html', '/compact-reports.html', '/rentals.html', '/expenses.html', '/salary.html', '/incentives.html',
   '/model-calendar.html'
 ];
 // Per-user switches are intentionally separate from roles. Roles decide which

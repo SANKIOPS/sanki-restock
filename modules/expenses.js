@@ -4586,9 +4586,9 @@ router.get('/api/expenses/balances', (req, res) => {
   const accounts = visibleAccountsForReq(req,ledgerAccountsForNature(s, nature)).filter(name=>accountBelongsInLedgerBook(nature,name)).map(name => {
     const opening = num(openingMap[name]);
     const spent = round0(period.paidOut[name] || 0),topups=round0(period.adj[name]||0),transferredIn=round0(period.transferIn[name]||0),transferredOut=round0(period.transferOut[name]||0),received=round0(period.collected[name]||0),excludedBankIn=roundMoney(period.bankTruthIn[name]||0),excludedBankOut=roundMoney(period.bankTruthOut[name]||0);
-    const applyBankTruth=!usesCompanyAdjustedBankTruth(nature,name),calculatedBalance=opening+num(closing.adj[name])+num(closing.collected[name])+num(closing.transferIn[name])-num(closing.transferOut[name])-num(closing.paidOut[name])+(applyBankTruth?num(closing.bankTruthIn[name])-num(closing.bankTruthOut[name]):0),statementBalance=isBankLedgerName(name)?recordedAccountBalance(s,nature,name,to):calculatedBalance,holds=(s.restrictedFunds||[]).filter(x=>x.active!==false&&normalizedNature(x.nature)===nature&&x.account===name&&(!to||String(x.effectiveDate||'')<=to)),restrictedAmount=holds.reduce((sum,x)=>sum+num(x.amount),0),periodRestricted=holds.filter(x=>(!from||String(x.effectiveDate||'')>=from)&&(!to||String(x.effectiveDate||'')<=to)).reduce((sum,x)=>sum+num(x.amount),0),closingBalance=statementBalance-restrictedAmount;
+    const applyBankTruth=!usesCompanyAdjustedBankTruth(nature,name),calculatedBalance=opening+num(closing.adj[name])+num(closing.collected[name])+num(closing.transferIn[name])-num(closing.transferOut[name])-num(closing.paidOut[name])+(applyBankTruth?num(closing.bankTruthIn[name])-num(closing.bankTruthOut[name]):0),statementBalance=isBankLedgerName(name)?recordedAccountBalance(s,nature,name,to):calculatedBalance,holds=(s.restrictedFunds||[]).filter(x=>x.active!==false&&normalizedNature(x.nature)===nature&&x.account===name&&(!to||String(x.effectiveDate||'')<=to)),restrictedAmount=isSharedBankReconciliationAccount(name)?0:holds.reduce((sum,x)=>sum+num(x.amount),0),periodRestricted=holds.filter(x=>(!from||String(x.effectiveDate||'')>=from)&&(!to||String(x.effectiveDate||'')<=to)).reduce((sum,x)=>sum+num(x.amount),0),closingBalance=statementBalance-restrictedAmount;
     const issues = reconciliationIssues(s, nature, name,to),cashVerification=nature==='SANKI'&&name===DEFAULT_COUNTER_CASH?latestApprovedCashReconciliation(s,to):null;
-    const exact=isBankLedgerName(name)||name===gokwikAccounting.CLEARING,money=v=>exact?Math.round(num(v)*100)/100:round0(v);return { name, opening: money(opening), topups, received, transferredIn, transferredOut, spent, excludedBankIn:money(excludedBankIn), excludedBankOut:money(excludedBankOut), periodNet:money(topups+received+transferredIn-transferredOut-spent+(applyBankTruth?excludedBankIn-excludedBankOut:0)-periodRestricted), statementBalance:money(statementBalance), restrictedAmount:money(restrictedAmount), restrictedFunds:holds, balance:money(closingBalance), closingAsOf:to||'today', reconciled:issues.some(issue=>issue.code==='store_credit_source_changed')?false:cashVerification?true:issues.length===0, reconciledThrough:cashVerification&&cashVerification.verifiedThrough||'', reconciledBy:cashVerification&&(cashVerification.approvedBy||cashVerification.requestedBy)||'', reconciliationIssues:cashVerification?issues.filter(issue=>issue.code==='store_credit_source_changed'):issues, recordWarnings:issues };
+    const exact=isBankLedgerName(name)||name===gokwikAccounting.CLEARING,money=v=>exact?Math.round(num(v)*100)/100:round0(v);return { name, physicalBalance:isSharedBankReconciliationAccount(name), opening: money(opening), topups, received, transferredIn, transferredOut, spent, excludedBankIn:money(excludedBankIn), excludedBankOut:money(excludedBankOut), periodNet:money(topups+received+transferredIn-transferredOut-spent+(applyBankTruth?excludedBankIn-excludedBankOut:0)-periodRestricted), statementBalance:money(statementBalance), restrictedAmount:money(restrictedAmount), restrictedFunds:holds, balance:money(closingBalance), closingAsOf:to||'today', reconciled:issues.some(issue=>issue.code==='store_credit_source_changed')?false:cashVerification?true:issues.length===0, reconciledThrough:cashVerification&&cashVerification.verifiedThrough||'', reconciledBy:cashVerification&&(cashVerification.approvedBy||cashVerification.requestedBy)||'', reconciliationIssues:cashVerification?issues.filter(issue=>issue.code==='store_credit_source_changed'):issues, recordWarnings:issues };
   });
   res.json({ success: true, accounts });
 });
@@ -5137,6 +5137,29 @@ router.get('/api/expenses/bank-reconciliation-evidence', (req, res) => {
   const out=require('./bank-reconciliation-evidence').snapshot(s,{nature,account,bookKey:bankStatementBookKey(nature,account),movementId:String(req.query.movementId||''),draftId:String(req.query.draftId||''),rowId:String(req.query.rowId||'')});
   return res.status(out.error?out.status||400:200).json(out.error?{success:false,error:out.error}:out);
 });
+function sharedPhysicalBankView(s,account,to){
+  const book=(s.bankStatements||{})[bankStatementBookKey('SAMAST',account)]||{};
+  const raw=appBankMovements(s,account,'SAMAST',{physical:true,raw:true});
+  const rows=bankMovementAuthority.project(s,account,'SAMAST',raw);
+  const saved=(s.physicalBankOpeningBalances||{})[account];
+  const opening=saved!=null?num(saved):num(((s.openingBalancesByNature||{}).SAMAST||{})[account])+num(((s.openingBalancesByNature||{}).PERSONAL||{})[account]);
+  const dates=['SAMAST','PERSONAL'].map(n=>(((s.openingBalanceDatesByNature||{})[n])||{})[account]).filter(Boolean).sort();
+  const projection=require('./physical-bank-balance').project({book,movements:rows,opening,openingDate:dates[0]||'2026-08-22',to:to||indiaBusinessDate()});
+  projection.bankMovementAuthorityConflicts=rows.bankMovementAuthorityConflicts||[];
+  return projection;
+}
+function sharedPhysicalLedger(req,res,s,account,nature,from,to,expenseNature){
+  const projection=sharedPhysicalBankView(s,account,to),book=(s.bankStatements||{})[bankStatementBookKey('SAMAST',account)]||{};
+  // Keep historical bank evidence visible, without replaying its source records.
+  const history=Object.values(book.transactions||{}).filter(r=>projection.anchor&&r.date<=projection.anchor.cutoffDate&&(!from||r.date>=from)&&(!to||r.date<=to)).map(r=>({...r,kind:'bank_transaction',entity:r.entityTag&&r.entityTag.nature||r.transactionNature||'',reference:r.reference||r.id,editable:false,reconciliation:{bankDate:r.date,reconciliationId:r.lastSeenImport||r.firstSeenImport||''}}));
+  let running=num(projection.openingEntry.balance);
+  const later=projection.rows.map(r=>{running=roundMoney(running+num(r.credit)-num(r.debit));return {...r,balance:running,kind:r.kind||'bank_movement',editable:false};});
+  const canPrivate=canManagePersonalAccounting(req);
+  const visible=history.concat(later).filter(r=>(!from||r.date>=from)&&(!to||r.date<=to)&&(!expenseNature||r.entity===expenseNature)).map(r=>canPrivate||r.entity&&r.entity!=='PERSONAL'?r:{id:r.id,date:r.date,kind:'bank_movement',entity:'',description:'Bank movement · private or unclassified details restricted',credit:r.credit,debit:r.debit,balance:r.balance,reference:'',proof:'',proofs:[],note:'',by:'',bankMovementAuthority:r.bankMovementAuthority,editable:false,privacyRedacted:true});
+  visible.sort((a,b)=>String(b.date).localeCompare(String(a.date))||String(b.id).localeCompare(String(a.id)));visible.push(projection.openingEntry);
+  return res.json({success:true,account,nature,expenseNature,entries:visible,balance:projection.balance,statementBalance:projection.statementBalance,restrictedAmount:0,physicalBalance:true,balanceBasis:projection.basis,balanceWarnings:projection.warnings,bankVerified:projection.verified,reconciledThrough:projection.reconciledThrough,lastReconciliation:book.lastReconciliation||null,reconciliationIssues:projection.warnings.map(message=>({reference:account,message})),recordWarnings:[],reconciled:projection.verified,bankMovementAuthorityConflicts:projection.bankMovementAuthorityConflicts});
+}
+
 router.get('/api/expenses/account-ledger', (req, res) => {
   const nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim(),prashantSpecial=isPrashant(req)&&nature==='SANKI'&&(account===DEFAULT_COUNTER_CASH||account==='Services');
   if (!isAdmin(req)&&!prashantSpecial) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
@@ -5149,6 +5172,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const from = String(req.query.from || ''), to = String(req.query.to || ''), expenseNature = req.query.expenseNature ? normalizedNature(req.query.expenseNature) : '', entries = [];
   const grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&x.account===account&&accountVendorPaymentInScope(x.nature,nature,x.account)&&x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
   if(expenseNature&&!approvalNatures(req).includes(expenseNature))return res.status(403).json({success:false,error:'You cannot view expenses for this entity.'});
+  if(isSharedBankReconciliationAccount(account))return sharedPhysicalLedger(req,res,s,account,nature,from,to,expenseNature);
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
   const openingDate=nature==='SANKI'?String((s.openingBalanceDates||{})[account]||''):String((((s.openingBalanceDatesByNature||{})[nature]||{})[account])||'');
   entries.push({ id: 'OPENING', date: openingDate||(account===DEFAULT_COUNTER_CASH?COUNTER_CASH_RESET_DATE:''), kind: 'opening', description: creditCard?'Opening credit-card outstanding':('Opening balance'+(openingDate?' effective '+openingDate:(account===DEFAULT_COUNTER_CASH?' effective 22 Aug 2026':''))), credit: creditCard?num(creditCard.openingOutstanding):num(openingMap[account]), debit: 0 });
@@ -5610,7 +5634,7 @@ async function parseBankStatementUpload(filePath,originalName,password,options={
 }
 function bankRowKey(account,row,occurrence){return crypto.createHash('sha256').update([account,row.date,row.debit,row.credit,reconciliationReference(row.reference),String(row.description||'').toLowerCase().replace(/\s+/g,' ').trim(),row.balance,occurrence].join('|')).digest('hex').slice(0,24);}
 function wasLedgerMovementCarried(s,account,nature,id){const book=(s.bankStatements||{})[bankStatementBookKey(nature,account)]||{};return(book.imports||[]).some(record=>(record.carryForwardMovements||[]).some(x=>x.id===id||(x.sourceIds||[]).includes(id)));}
-function appBankMovements(s,account,nature,options={}){const rows=[],n=normalizedNature(nature),shared=isSharedBankReconciliationAccount(account),inScope=value=>shared?['SAMAST','PERSONAL'].includes(normalizedNature(value)):normalizedNature(value)===n,vendorInScope=value=>inScope(value)||accountVendorPaymentInScope(value,n,account),grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&x.account===account&&vendorInScope(x.nature)&&x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
+function appBankMovements(s,account,nature,options={}){const rows=[],n=normalizedNature(nature),shared=isSharedBankReconciliationAccount(account),inScope=value=>shared?(options.physical?NATURES.includes(normalizedNature(value)):['SAMAST','PERSONAL'].includes(normalizedNature(value))):normalizedNature(value)===n,vendorInScope=value=>inScope(value)||accountVendorPaymentInScope(value,n,account),grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&x.account===account&&vendorInScope(x.nature)&&x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
   if(n==='SANKI')velocitySettlementBatches(s).forEach(x=>{if(account===DEFAULT_SALES_BANK&&!x.manualTransferId)rows.push({id:x.id,date:x.date,description:'Velocity COD payout · '+x.orderIds.length+' Shopify order(s)',reference:x.reference,credit:x.netAmount,debit:0});if(account===VELOCITY_CLEARING_ACCOUNT){if(!x.manualTransferId)rows.push({id:x.id,date:x.date,description:'Velocity COD payout to Axis Bank 3448',reference:x.reference,credit:0,debit:x.netAmount});if(x.chargeAmount>0)rows.push({id:x.id+'/CHARGES',date:x.date,description:'Velocity COD/remittance charges',reference:x.reference,credit:0,debit:x.chargeAmount,category:'COD COURIER CHARGES'});}});
   if(n==='SANKI'&&(account===VELOCITY_CLEARING_ACCOUNT||account==='Velocity Shipping Wallet'))velocitySettlementBatches(s).filter(x=>x.walletOffset>0).forEach(x=>rows.push({id:x.id+'/WALLET',date:x.date,description:'Velocity wallet recovery · '+x.batchId,reference:x.reference,credit:account==='Velocity Shipping Wallet'?x.walletOffset:0,debit:account===VELOCITY_CLEARING_ACCOUNT?x.walletOffset:0}));
   if(n==='SANKI'&&account===DEFAULT_SALES_BANK)(s.paytmPayoutPostings||[]).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.postedAt,description:'Paytm payout '+x.payoutId,reference:x.utr,credit:num(x.net),debit:0}));
@@ -7914,6 +7938,7 @@ function bankAuthorityBalanceDelta(s,nature,account,asOf){
   return bankMovementAuthority.delta(scoped,account,nature,{to:asOf,sourceRows:rows});
 }
 function recordedAccountBalance(s,nature,account,asOf){
+  if(isSharedBankReconciliationAccount(account))return sharedPhysicalBankView(s,account,asOf).balance;
   const on=d=>(!asOf||!d||String(d).slice(0,10)<=asOf)&&cashEntryIsVisible(account,d),openingMap=nature==='SANKI'?(s.openingBalances||{}):(((s.openingBalancesByNature||{})[nature])||{}),grossPaymentBatches=new Set((s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&x.account===account&&accountVendorPaymentInScope(x.nature,nature,x.account)&&x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>x.batchPaymentId));let total=num(openingMap[account]);
   (s.adjustments||[]).filter(x=>!x.accountingExcluded&&accountVendorChargeInScope(x,nature)&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
   (s.receipts||[]).filter(x=>!x.accountingExcluded&&!x.historicalOpening&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
@@ -7996,6 +8021,7 @@ function telegramAccountingSummary(from,to,store,options){
 router.get('/api/expenses/balance-sheet',(req,res)=>{
   if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});const s=loadStore(),asOf=String(req.query.asOf||indiaBusinessDate()).slice(0,10),selected=req.query.nature?normalizedNature(req.query.nature):'',natures=selected?[selected]:approvalNatures(req);
   if(selected&&!approvalNatures(req).includes(selected))return res.status(403).json({success:false,error:'You cannot view this accounting entity.'});const accounts=[];natures.forEach(n=>ledgerAccountsForNature(s,n).filter(name=>accountVisibleToReq(req,name)).forEach(name=>accounts.push({nature:n,name,balance:recordedAccountBalance(s,n,name,asOf)})));
+  const seenPhysicalAccounts=new Set();for(let i=accounts.length-1;i>=0;i--){if(isSharedBankReconciliationAccount(accounts[i].name)){if(seenPhysicalAccounts.has(accounts[i].name))accounts.splice(i,1);else seenPhysicalAccounts.add(accounts[i].name);}}
   const bankAndCash=accounts.filter(x=>x.balance>0).reduce((n,x)=>n+x.balance,0),overdrafts=Math.abs(accounts.filter(x=>x.balance<0).reduce((n,x)=>n+x.balance,0));let receivables=0,vendorPayables=0,reimbursements=0;
   Object.values(s.receivables||{}).filter(x=>natures.includes(normalizedNature(x.nature))&&String(x.date||'')<=asOf).forEach(x=>{const received=(x.collections||[]).filter(c=>String(c.date||'')<=asOf).reduce((n,c)=>n+num(c.amount),0);receivables+=Math.max(0,num(x.amount)-received);});
   let employeeRefundRecoveries=0,refundCredits=0;
@@ -8400,6 +8426,27 @@ router.use(modelCalendar.createRouter({loadStore,saveStore,audit}));
 
 // Registered after the named GET routes so /list, /config and other
 // workspaces cannot be captured by the expense-ID detail endpoint.
+// Compact reporting is read-only and uses existing entity/account permissions.
+router.get('/api/expenses/compact-report',(req,res)=>{
+  try{
+    const allowed=approvalNatures(req),entity=String(req.query.entity||'SANKI');
+    if((!isAdmin(req)&&!isPrashant(req))||!allowed.includes(entity)||(entity==='PERSONAL'&&!canManagePersonalAccounting(req)))return res.status(403).json({success:false,error:'You cannot view this entity report.'});
+    const today=indiaBusinessDate(),from=String(req.query.from||today.slice(0,7)+'-01'),to=String(req.query.to||today);
+    if(!expenseLoans.validDate(from)||!expenseLoans.validDate(to)||from<'2026-08-22'||from>to||to>today)return res.status(400).json({success:false,error:'Choose dates between 22 August 2026 and today.'});
+    const sources=require('./pnl-routes').loadSources(DATA_DIR),s=sources.expenses;
+    if(!s||!s.expenses)throw Object.assign(Error('Accounting data could not be read safely.'),{status:409});
+    const salaryPath=path.join(DATA_DIR,'salary-samast.json');
+    try{sources.samastSalary=JSON.parse(fs.readFileSync(salaryPath,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;sources.samastSalary={};}
+    const names=Array.from(new Set(ownTransferAccountsForReq(req).filter(row=>row.nature===entity).map(row=>row.account).concat(entity==='SAMAST'?[SHARED_BANK_RECONCILIATION_ACCOUNT]:[]))).filter(name=>accountVisibleToReq(req,name)&&(isBankLedgerName(name)||/cash/i.test(name)));
+    const accounts=names.map(name=>{try{const physical=isSharedBankReconciliationAccount(name)?sharedPhysicalBankView(s,name,to):null;return{name,balance:physical?physical.balance:recordedAccountBalance(s,entity,name,to),shared:!!physical,reconciledThrough:physical?physical.reconciledThrough:((s.bankStatements||{})[bankStatementBookKey(entity,name)]||{}).reconciledThrough||'',warnings:physical?physical.warnings:[]};}catch(error){return{name,balance:null,shared:isSharedBankReconciliationAccount(name),warnings:[error.message]};}});
+    // Existing visibility policy also applies to every report source row.
+    const visible=r=>!r.ownerOnly||isOwner(req),accountAllowed=r=>!r.account||accountVisibleToReq(req,r.account);
+    sources.expenses={...s,expenses:Object.fromEntries(Object.entries(s.expenses||{}).filter(([,r])=>visible(r)&&accountAllowed(r))),receipts:(s.receipts||[]).filter(r=>visible(r)&&accountAllowed(r)),loanRepayments:(s.loanRepayments||[]).filter(accountAllowed),transfers:(s.transfers||[]).filter(r=>accountVisibleToReq(req,r.fromAccount)&&accountVisibleToReq(req,r.toAccount)&& (canManagePersonalAccounting(req)||![r.fromNature,r.toNature].includes('PERSONAL')))};
+    const report=require('./compact-accounting-report').build(sources,{entity,from,to,today,accounts});const days=Math.round((Date.parse(to)-Date.parse(from))/86400000)+1,previousTo=new Date(Date.parse(from)-86400000).toISOString().slice(0,10),previousFrom=new Date(Date.parse(from)-days*86400000).toISOString().slice(0,10);if(previousTo>='2026-08-22'){const prior=require('./compact-accounting-report').build(sources,{entity,from:previousFrom<'2026-08-22'?'2026-08-22':previousFrom,to:previousTo,today});report.previous={from:prior.from,to:prior.to,partial:previousFrom<'2026-08-22',totals:prior.totals};}report.allowedEntities=allowed.filter(n=>n!=='PERSONAL'||canManagePersonalAccounting(req));
+    res.set('Cache-Control','no-store').json(report);
+  }catch(error){res.status(error.status||409).json({success:false,error:error.status?error.message:'Report sources could not be read safely. No records were changed.'});}
+});
+
 router.get('/api/expenses/:id',(req,res,next)=>{
   const id=String(req.params.id||'');
   // Rental routes are mounted later in this legacy module. Only real expense
@@ -8473,3 +8520,5 @@ module.exports.reconciliationDecisionConflicts = reconciliationDecisionConflicts
 
 // The order portal shares the same validated payout status as accounting.
 module.exports.paytmOrderSettlementEvidence=s=>paytmReportView(s).payouts;
+
+module.exports.sharedPhysicalBankView=sharedPhysicalBankView;
