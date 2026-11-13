@@ -10,6 +10,7 @@ const directory = fs.mkdtempSync(path.join(__dirname, '.tmp-accounting-read-snap
 process.env.DATA_PATH = path.join(directory, 'data.json');
 process.env.PROCUREMENT_PATH = path.join(directory, 'procurement.json');
 process.env.ORDERS_PATH = path.join(directory, 'orders.json');
+process.env.VELOCITY_REMITTANCE_PATH = path.join(directory, 'velocity-remittance.json');
 process.env.SALES_PATH = path.join(directory, 'sales.json');
 process.env.TEMP = directory;
 process.env.TMP = directory;
@@ -56,7 +57,7 @@ test.before(async () => {
 
 test.after(() => fs.rmSync(directory, { recursive: true, force: true }));
 
-test('bank read is pure, bounded and refreshes after an external source change', async () => {
+test('bank read is pure, bounded and refreshes only for its relevant accounting scope', async () => {
   const before = fs.readFileSync(file, 'utf8');
   const originalReadFileSync = fs.readFileSync;
   let storeReads = 0;
@@ -87,6 +88,17 @@ test('bank read is pure, bounded and refreshes after an external source change',
     assert.equal(repeatedLedger.status, 200, JSON.stringify(repeatedLedger.body));
     assert.equal(storeReads, 1, 'an identical ledger GET reuses the completed projection and edit evidence');
 
+    fs.writeFileSync(process.env.ORDERS_PATH, JSON.stringify({ orders: { SYNTHETIC: { id:'SYNTHETIC', createdAt:dateFor(204), total:1 } } }));
+    fs.writeFileSync(process.env.VELOCITY_REMITTANCE_PATH, JSON.stringify({ entries: [{ date:dateFor(204), amount:1, reference:'SYNTHETIC-VELOCITY' }] }));
+    const personalAfterSalesChange = await invoke('/api/expenses/bank-statements', { nature, account });
+    assert.equal(personalAfterSalesChange.status, 200, JSON.stringify(personalAfterSalesChange.body));
+    assert.equal(personalAfterSalesChange.body.transactionCount, 205);
+    assert.equal(storeReads, 1, 'Shopify and Velocity changes do not reload a PERSONAL snapshot');
+
+    const sankiAfterSalesChange = await invoke('/api/expenses/bank-statements', { nature:'SANKI', account:'Axis Bank 3448' });
+    assert.equal(sankiAfterSalesChange.status, 200, JSON.stringify(sankiAfterSalesChange.body));
+    assert.equal(storeReads, 2, 'the same Shopify and Velocity changes reload the SANKI scope');
+
     const changed = JSON.parse(before);
     changed.bankStatements['PERSONAL|' + account].transactions['BANK-0205'] = {
       id: 'BANK-0205', date: dateFor(205), description: 'Externally added finalized bank row',
@@ -98,7 +110,7 @@ test('bank read is pure, bounded and refreshes after an external source change',
     assert.equal(refreshed.body.transactionCount, 206);
     assert.equal(refreshed.body.transactions.length, 200);
     assert.equal(refreshed.body.transactions[0].id, 'BANK-0205');
-    assert.equal(storeReads, 2, 'an external source fingerprint change builds one fresh snapshot');
+    assert.equal(storeReads, 3, 'an expenses.json change reloads the PERSONAL scope');
   } finally {
     fs.readFileSync = originalReadFileSync;
   }
