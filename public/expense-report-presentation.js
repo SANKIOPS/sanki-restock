@@ -11,8 +11,15 @@
   return !!string(bankDescription)&&normalize(text)===normalize(bankDescription)&&(/\d{8,}/.test(text)||/\b(?:UTR|RRN|IFSC)\b/i.test(text));
  }
  function clean(value,bankDescription){return isBankNarration(value,bankDescription)?'':string(value);}
- function present(expense){const e=expense||{},bank=e.reconciliationSource?.bankDescription||'',choices=[e.productParticulars,e.productDescription,e.particulars,e.telegramNarration,e.narration],particulars=choices.map(v=>clean(v,bank)).find(Boolean)||'';
-  return {vendor:clean(e.vendor,bank)||'Vendor not specified',particulars:particulars||'Particulars need review',particularsNeedReview:!particulars,type:clean(e.productType,bank)||clean(e.expenseType,bank)||clean(e.type,bank)||'Not specified',category:clean(e.ledger||e.category,bank)||'Unclassified'};
+ function partyName(value){const text=string(value);if(!isBankNarration(text))return text;const prefix=text.match(/^(.*?)\bUPI\s*\//i),segment=text.match(/\bUPI\s*\/([^/]+)/i),candidate=string(prefix?.[1])||string(segment?.[1]);return candidate&&!/[\/@]|\d{8,}/.test(candidate)&&!isBankNarration(candidate)&&/[\p{L}]/u.test(candidate)&&! /^(?:UPI|MMT|IMPS|NEFT|RTGS)$/i.test(candidate)?candidate:'';}
+ function presentReceipt(receipt){const e=receipt||{},bank=e.bankReconciliationEvidence?.description||e.reconciliationSource?.bankDescription||'';
+ const payer=[e.payerName,e.payer,e.receivedFrom,e.customerName,e.tenantName,e.source].map(partyName).find(Boolean)||'Not provided';
+ const note=/^(?:Historical .*classified from verified bank statement|Captured from Owner Telegram receipt screenshot|Created (?:directly )?from bank reconciliation|Recorded while reconciling)/i.test(string(e.note))?'':e.note;
+ const particulars=[e.particulars,e.description,e.narration,e.telegramNarration,note].map(v=>clean(v,bank)).find(Boolean)||'Not provided';
+ return {payer,particulars,particularsMissing:particulars==='Not provided',type:'income',category:clean(e.category||e.receiptType,bank)||'Unclassified'};
  }
- return {isBankNarration,clean,present};
+ function present(expense){const e=expense||{},bank=e.reconciliationSource?.bankDescription||'',choices=[e.productParticulars,e.productDescription,e.particulars,e.description,e.telegramNarration,e.narration],particulars=choices.map(v=>clean(v,bank)).find(Boolean)||'';
+  return {vendor:partyName(e.vendor)||'Not provided',particulars:particulars||'Not provided',particularsMissing:!particulars,type:clean(e.productType,bank)||clean(e.expenseType,bank)||clean(e.type,bank)||'Not specified',category:clean(e.ledger||e.category,bank)||'Unclassified'};
+ }
+ return {isBankNarration,clean,partyName,present,presentReceipt};
 });

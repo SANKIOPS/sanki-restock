@@ -1,6 +1,13 @@
 'use strict';
 // Add app identity to existing report rows; never replace amounts or bank dates.
 function enrich(store,row){
+ if(row.kind==='income'){
+  const records=Array.isArray(store.receipts)?store.receipts:Object.values(store.receipts||{}),refs=[row.reference,row.id,String(row.id||'').replace(/^(?:RECEIPT|MANUAL-RECEIPT)\//,'')];
+  const receipt=records.find(r=>refs.includes(r.id)&&!r.accountingExcluded&&!r.voided&&!r.voidedAt&&String(r.reportingNature||r.nature||'SANKI').toUpperCase()===row.entity);
+  if(receipt)return {...row,appReceipt:{id:receipt.id,date:receipt.date,...require('../public/expense-report-presentation').presentReceipt(receipt),amount:receipt.amount}};
+  return row;
+ }
+
  if(!['expense','personal_use','unclassified'].includes(row.kind))return row;
  const refs=[row.reference,row.id].filter(Boolean);
  for(const ref of refs){const id=String(ref).split('/')[0],e=store.expenses?.[id];if(!e||e.accountingExcluded||String(e.reportingNature||e.nature||'SANKI').toUpperCase()!==row.entity)continue;
