@@ -100,6 +100,7 @@ const API_ROLE_RULES = [
   { prefix: '/api/admin',                 roles: ['admin', 'owner'] },
   { prefix: '/api/owner/',                roles: ['owner'] },
   { prefix: '/api/model-calendar', roles: ['admin', 'accounting', 'owner', 'model_calendar'] },
+  { prefix: '/api/content-production', roles: ['owner', 'admin', 'content_team'] },
   { prefix: '/api/seo-control',     roles: ['owner'] },
   { prefix: '/api/marketing/meta',  roles: ['owner'] },
   { prefix: '/api/catalogue-images', roles: ['owner'] },

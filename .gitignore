@@ -39,3 +39,8 @@ pnl-line-corrections.json
 pnl-line-corrections.json.*.tmp
 .bank-authority-transaction.json
 .bank-authority-transaction-*
+
+# Persistent content planner data.
+content-production.json
+content-production.json.lock
+content-production.json.tmp-*

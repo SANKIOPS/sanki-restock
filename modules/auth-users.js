@@ -93,6 +93,7 @@ const SECRET = (function () {
 
 // ── Roles → which pages each role may open, and where they land ──
 const ROLES = [
+  { id: 'content_team', label: 'Content team (shoot, edit and post)' },
   { id: 'admin',       label: 'Admin (full access)' },
   { id: 'owner',       label: 'Owner (private Money Picture + accounting)' },
   { id: 'inventory',   label: 'Inventory' },
@@ -116,6 +117,7 @@ const ROLE_IDS = ROLES.map(r => r.id);
 // role may see via /api/modules. (The old per-role landing pages are all
 // still reachable — they're just not the front door anymore.)
 const ROLE_HOME = {
+  content_team: '/content-production.html',
   admin:       '/dashboard.html',
   owner:       '/owner.html',
   inventory:   '/dashboard.html',
@@ -135,6 +137,7 @@ const ROLE_HOME = {
 // DEFAULT (seed) map — the admin can override it per role (persisted in the
 // user store under `rolePages`); admin always stays '*'.
 const DEFAULT_ROLE_PAGES = {
+  content_team: ['/content-production.html'],
   admin:       '*',
   owner:       '*',
   inventory:   ['/showroom-replenishment.html', '/inventory-stats.html', '/rack-locations.html', '/procurement.html'],
@@ -474,6 +477,12 @@ function userSummary(username) {
   return { username: user.username, role: primaryRole(roles), roles, permissions: normalizeUserPermissions(user) };
 }
 
+// Content assignments need names only, never credentials or financial permissions.
+function listContentPeople() {
+  return loadUsers().users.filter(u => normalizeRoles(u).some(r => ['owner','admin','content_team'].includes(r)))
+    .map(u => ({ username: u.username }));
+}
+
 router.get('/api/admin/users', requireAdmin, (req, res) => {
   const users = loadUsers().users.map(u => {
     const roles = normalizeRoles(u);
@@ -613,6 +622,6 @@ router.post('/api/admin/users/delete', requireAdmin, (req, res) => {
 module.exports = {
   router, seedAdminIfEmpty, verifySession, landingFor, ROLES,
   roleCanAccessPath, userCanAccessPath,
-  allowedPagesForUser, rolesOf, registerModules, userSummary,
+  allowedPagesForUser, rolesOf, registerModules, userSummary, listContentPeople,
   PRASHANT_PAGES, isPrashant, USER_PERMISSION_CATALOG, hasUserPermission
 };
