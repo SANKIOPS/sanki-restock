@@ -19,6 +19,7 @@ const ledgerConnections = require('./expense-ledger-connections');
 const transferReimbursements = require('./transfer-reimbursement-links');
 const velocityCodAccounting = require('./velocity-cod-accounting');
 const saleStoreCreditCorrections = require('./sale-store-credit-corrections');
+const hotelReporting = require('./sewak-park-reporting');
 // ═══════════════════════════════════════════════════════════════
 // Expenses — the money-OUT side of in-app accounting, built around SANKI's
 // real "runner" process and made leakage-proof by PROOF at every gate.
@@ -342,6 +343,41 @@ function canonicalAccountName(value) {
 
 const RECEIPT_TYPES=['asset_sale','other_income','hotel_income','refund','owner_contribution','bank_interest','rental_income','rental_security','personal_income','home_received','other_personal_received',expenseLoans.TYPE];
 const RECEIPT_CATEGORIES=['Bank Interest Received','Other Income','Sewak Park Hotel Income','Refund Received','Owner Contribution','Asset Sale','Rental Income','Rental Security Deposit','Personal Income','Home Received','Other Personal Received',expenseLoans.CATEGORY];
+const HOTEL_REPORTING_UNIT=hotelReporting.UNIT;
+const HOTEL_EXPENSE_TREATMENTS=new Set(['operating_expense','personal_use']);
+function hotelTreatmentFields(value){
+  const treatment=String(value||'').trim();
+  if(!treatment)return{};
+  if(treatment==='operating_expense')return{reportingUnit:HOTEL_REPORTING_UNIT,reportingTreatment:'operating_expense',sourceReportingUnit:''};
+  if(treatment==='personal_use')return{reportingUnit:'',reportingTreatment:'personal_use',sourceReportingUnit:HOTEL_REPORTING_UNIT};
+  return null;
+}
+function hotelExpenseMetadataRequest(body,nature){
+  const b=body||{},present=['reportingUnit','sourceReportingUnit','reportingTreatment'].some(key=>Object.prototype.hasOwnProperty.call(b,key));
+  if(!present)return{present:false,fields:{}};
+  const requestedUnit=String(b.reportingUnit||'').trim(),requestedSource=String(b.sourceReportingUnit||'').trim(),unit=hotelReporting.normalizeReportingUnit(requestedUnit),sourceUnit=hotelReporting.normalizeReportingUnit(requestedSource),treatment=String(b.reportingTreatment||'').trim();
+  if((requestedUnit&&!unit)||(requestedSource&&!sourceUnit))return{error:'Choose a valid Sewak Park Hotel reporting purpose.'};
+  if(String(nature||'').toUpperCase()!=='PERSONAL'&&(unit||sourceUnit||treatment))return{error:'Sewak Park Hotel reporting applies only inside PERSONAL accounting.'};
+  if(treatment&&!HOTEL_EXPENSE_TREATMENTS.has(treatment))return{error:'Choose Hotel operating expense or Personal use of hotel money.'};
+  if(treatment==='operating_expense'&&(unit!==HOTEL_REPORTING_UNIT||sourceUnit))return{error:'A Hotel operating expense must belong to the Sewak Park Hotel reporting unit.'};
+  if(treatment==='personal_use'&&(sourceUnit!==HOTEL_REPORTING_UNIT||unit))return{error:'Personal use must identify Sewak Park Hotel as the source of money, not as an operating expense.'};
+  if(!treatment&&(unit||sourceUnit))return{error:'Choose how this 0992 movement should be reported.'};
+  return{present:true,fields:{reportingUnit:unit,sourceReportingUnit:sourceUnit,reportingTreatment:treatment}};
+}
+function applyHotelExpenseMetadata(target,request){
+  if(!request||!request.present)return;
+  for(const key of ['reportingUnit','sourceReportingUnit','reportingTreatment']){
+    const value=request.fields[key];if(value)target[key]=value;else delete target[key];
+  }
+}
+function hotelReceiptFields(receiptType){
+  return String(receiptType||'')==='hotel_income'?{reportingUnit:HOTEL_REPORTING_UNIT,reportingTreatment:'operating_income',hotelName:'Sewak Park Hotel',hotelLocation:'Sewak Park',incomeSource:'hotel_business'}:{};
+}
+function tagHotelTransferAccounts(transfer){
+  if(hotelReporting.isHotelAccount(transfer.fromAccount))transfer.fromReportingUnit=HOTEL_REPORTING_UNIT;
+  if(hotelReporting.isHotelAccount(transfer.toAccount))transfer.toReportingUnit=HOTEL_REPORTING_UNIT;
+  return transfer;
+}
 function receiptCategory(receiptType,value){
   if(receiptType===expenseLoans.TYPE)return expenseLoans.CATEGORY;
   const supplied=String(value||'').trim(),defaults={bank_interest:'Bank Interest Received',other_income:'Other Income',hotel_income:'Sewak Park Hotel Income',refund:'Refund Received',owner_contribution:'Owner Contribution',asset_sale:'Asset Sale',rental_income:'Rental Income',rental_security:'Rental Security Deposit'};
@@ -2937,6 +2973,9 @@ router.post('/api/expenses', (req, res) => {
 
   const nature = normalizedNature(b.nature);
   if (!submissionNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You do not have access to this accounting entity.' });
+  const hotelMetadata=hotelExpenseMetadataRequest(b,nature);
+  if(hotelMetadata.error)return res.status(400).json({success:false,error:hotelMetadata.error});
+  if(hotelMetadata.present&&!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'PERSONAL accounting access is required to classify Sewak Park Hotel activity.'});
   // Claimants never classify accounting type: every submission starts as
   // Variable. An approver may reclassify it while reviewing the pending row.
   const type = isAdmin(req) && TYPES.includes(b.type) ? b.type : 'variable';
@@ -3014,6 +3053,7 @@ router.post('/api/expenses', (req, res) => {
     approvedAt: null, approvedBy: null,
     paidAt: null, paidBy: null
   };
+  applyHotelExpenseMetadata(s.expenses[id],hotelMetadata);
   if (modelContract) modelCalendar.attachExpense(s, modelContract, s.expenses[id]);
   audit(s,req,'CREATED','expense',id,{nature,after:s.expenses[id]});
   saveStore(s);
@@ -3022,7 +3062,7 @@ router.post('/api/expenses', (req, res) => {
 });
 
 // ── Edit ─────────────────────────────────────────────────────────
-const EXPENSE_METADATA_FIELDS = new Set(['vendor','particulars','ledger','type','editReason']);
+const EXPENSE_METADATA_FIELDS = new Set(['vendor','particulars','ledger','type','reportingUnit','sourceReportingUnit','reportingTreatment','editReason']);
 function canEditExpenseMetadata(req,e) {
   if(e.rentalFeeId)return false;
   if(e.nonExpenseReimbursement||e.salaryAdvanceId)return false;
@@ -3109,6 +3149,9 @@ function commitExpenseFinancialCorrection(snapshot,s,id){
 function editExpenseMetadata(s,req,e,b,editReason) {
   if(e.rentalFeeId&&(['vendor','particulars','ledger','type'].some(key=>b[key]!=null&&String(b[key]).trim()!==String(e[key]||''))))return{status:409,error:'This expense belongs to a tenant fee review. Undo that pending review and record the correct fee details; the tenant link cannot be changed independently.'};
   const before=JSON.parse(JSON.stringify(e)),next=Object.assign({},e);
+  const hotelMetadata=hotelExpenseMetadataRequest(b,e.nature);
+  if(hotelMetadata.error)return{status:400,error:hotelMetadata.error};
+  if(hotelMetadata.present&&!canManagePersonalAccounting(req))return{status:403,error:'PERSONAL accounting access is required to classify Sewak Park Hotel activity.'};
   if(b.vendor!=null){
     const vendor=String(b.vendor).trim();if(!vendor)return{status:400,error:'Vendor name is required.'};
     next.vendor=vendor;
@@ -3125,12 +3168,14 @@ function editExpenseMetadata(s,req,e,b,editReason) {
     }
     next.ledger=ledger;
   }
+  applyHotelExpenseMetadata(next,hotelMetadata);
   if(next.vendor!==e.vendor&&canApprove(req))next.vendor=registerVendorForNature(s,e.nature,next.vendor,{});
-  const changes=['vendor','particulars','ledger','type'].filter(key=>next[key]!==e[key]).map(key=>({field:key,before:e[key]==null?'':e[key],after:next[key]==null?'':next[key]}));
+  const changes=['vendor','particulars','ledger','type','reportingUnit','sourceReportingUnit','reportingTreatment'].filter(key=>next[key]!==e[key]).map(key=>({field:key,before:e[key]==null?'':e[key],after:next[key]==null?'':next[key]}));
   if(!changes.length)return{changed:false};
   // Descriptive corrections must never rebuild personal payments, reset
   // reimbursement status, or touch reconciled statement snapshots.
   for(const key of ['vendor','particulars','ledger','type'])e[key]=next[key];
+  for(const key of ['reportingUnit','sourceReportingUnit','reportingTreatment']){if(next[key])e[key]=next[key];else delete e[key];}
   e.auditHistory=Array.isArray(e.auditHistory)?e.auditHistory:[];
   e.auditHistory.push({id:'EDIT-'+String(e.auditHistory.length+1).padStart(3,'0'),reason:editReason||'Pending expense correction',changes,editedBy:req.user&&req.user.username||'system',editedAt:new Date().toISOString()});
   if(e.telegramNeedsReview)e.telegramNeedsReview=false;
@@ -3160,6 +3205,9 @@ router.post('/api/expenses/:id', (req, res, next) => {
     return res.status(403).json({ success: false, error: 'You can only edit your own pending expenses.' });
   }
   const b = req.body || {};
+  const requestedHotelMetadata=hotelExpenseMetadataRequest(b,b.nature||e.nature);
+  if(requestedHotelMetadata.error)return res.status(400).json({success:false,error:requestedHotelMetadata.error});
+  if(requestedHotelMetadata.present&&!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'PERSONAL accounting access is required to classify Sewak Park Hotel activity.'});
   if(['amount','requestedAmount'].some(key=>b[key]!=null&&!validExpenseCorrectionMoney(b[key])))return res.status(400).json({success:false,error:'Enter positive amounts with no more than two decimal places.'});
   const finalized = e.status !== 'pending';
   const financialLock=expenseFinancialLock(s,e,{blockedReferences:unpayBlockedReferences(s)});
@@ -3259,6 +3307,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
     if (!vendor) return res.status(400).json({ success: false, error: 'Vendor name is required.' });
     e.vendor = vendor;
   }
+  applyHotelExpenseMetadata(e,requestedHotelMetadata);
   const wasPaidAlready = !!e.paidAlready;
   if (b.paidAlready != null && canApprove(req)) {
     const nextPaidAlready = b.paidAlready === true || b.paidAlready === 'true';
@@ -4951,6 +5000,7 @@ router.post('/api/expenses/transfers', (req, res) => {
   const transfer = { id: 'TR-' + String(s.transferSeq).padStart(5, '0'), nature:fromNature, fromNature, toNature, classification, fromAccount, toAccount, amount,
     date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10), proof, proofs, note, intermediary:routedThroughIntermediary?intermediary:'',routedThroughIntermediary,
     createdBy: (req.user && req.user.username) || 'admin', createdAt: new Date().toISOString(),...(ownAccountSelection?{ownAccountSelection}:{}),...(claimantTransferSelection?{claimantTransferSelection}:{}) };
+  tagHotelTransferAccounts(transfer);
   s.transfers = Array.isArray(s.transfers) ? s.transfers : []; s.transfers.push(transfer);audit(s,req,'TRANSFER_RECORDED','transfer',transfer.id,{nature:fromNature,account:fromAccount,after:transfer});saveStore(s);
   res.json({ success: true, transfer });
 });
@@ -4988,6 +5038,7 @@ router.post('/api/expenses/receipts', (req,res) => {
   if(ownerCashDeclaration&&!note) return res.status(400).json({success:false,error:'Explain why no proof is available for this cash receipt.'});
   if(!RECEIPT_TYPES.includes(receiptType)) return res.status(400).json({success:false,error:'Choose a valid receipt type.'});
   if(!RECEIPT_CATEGORIES.includes(category)) return res.status(400).json({success:false,error:'Choose a valid income category.'});
+  if(receiptType==='hotel_income'&&(nature!=='PERSONAL'||!hotelReporting.isHotelAccount(account)))return res.status(400).json({success:false,error:'Sewak Park Hotel income must be received into PERSONAL account ICICI Bank 0992.'});
   if(category===expenseLoans.CATEGORY&&receiptType!==expenseLoans.TYPE)return res.status(400).json({success:false,error:'Choose Loan received to record a repayable liability.'});
   let loanFields=null;
   if(historicalOpening&&receiptType!==expenseLoans.TYPE)return res.status(400).json({success:false,error:'A historical opening liability must use Loan received.'});
@@ -4996,7 +5047,7 @@ router.post('/api/expenses/receipts', (req,res) => {
     catch(error){return res.status(error.status||400).json({success:false,error:error.message});}
   }
   s.receiptSeq=(s.receiptSeq||0)+1;s.receipts=Array.isArray(s.receipts)?s.receipts:[];
-  const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature,account,amount,receiptType,category,source,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),note,proof,proofs,proofException:ownerCashDeclaration?'Owner cash declaration — no external proof available':'',createdBy:(req.user&&req.user.username)||'admin',createdAt:new Date().toISOString()};
+  const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature,account,amount,receiptType,category,source,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),note,proof,proofs,proofException:ownerCashDeclaration?'Owner cash declaration — no external proof available':'',createdBy:(req.user&&req.user.username)||'admin',createdAt:new Date().toISOString(),...hotelReceiptFields(receiptType)};
   if(loanFields)Object.assign(receipt,loanFields);
   if(loanFields&&!historicalOpening){try{assertLoanOpenPeriod(s,nature,account,receipt.date);}catch(error){return res.status(error.status||400).json({success:false,error:error.message});}}
   s.receipts.push(receipt);audit(s,req,'RECEIPT_RECORDED','receipt',receipt.id,{nature,account,after:receipt});saveStore(s);res.json({success:true,receipt});
@@ -7006,7 +7057,7 @@ router.get('/api/expenses/salary-advance-transfer-candidates',(req,res)=>{
 const PERSONAL_HISTORICAL_ACCOUNT_LAST4=new Set(['0993','0992','7883','7823']);
 const PERSONAL_HISTORICAL_CREDITS={
   rental_income:{receiptType:'rental_income',category:'Rental Income',label:'Rental income'},
-  sewak_park_hotel_income:{receiptType:'hotel_income',category:'Sewak Park Hotel Income',label:'Sewak Park Hotel income',hotelName:'Sewak Park Hotel',hotelLocation:'Sewak Park'},
+  sewak_park_hotel_income:{receiptType:'hotel_income',category:'Sewak Park Hotel Income',label:'Sewak Park Hotel income',hotelName:'Sewak Park Hotel',hotelLocation:'Sewak Park',reportingUnit:HOTEL_REPORTING_UNIT,reportingTreatment:'operating_income'},
   personal_income:{receiptType:'personal_income',category:'Personal Income',label:'Personal income'},
   home_received:{receiptType:'home_received',category:'Home Received',label:'Home received'},
   other_personal_received:{receiptType:'other_personal_received',category:'Other Personal Received',label:'Other personal received'}
@@ -7022,10 +7073,14 @@ router.post('/api/expenses/bank-statements/personal-historical-bulk',(req,res)=>
   if(rows.some(row=>!row||row.status!=='missing_in_app'||!row.bank||row.reversalReviewRequired||(draft.resolutions||{})[row.id]))return res.status(409).json({success:false,error:'Every selected row must still be an unmatched, unreviewed bank transaction and not a reversal.'});
   if(direction==='debit'){
     const category=String(b.category||'').trim(),selectedVendor=String(b.vendor||'').trim().slice(0,120);
+    const selectedHotelTreatment=String(b.hotelTreatment||'').trim(),hotelFields=selectedHotelTreatment?hotelTreatmentFields(selectedHotelTreatment):{};
+    if(hotelReporting.isHotelAccount(draft.account)&&!selectedHotelTreatment)return res.status(400).json({success:false,error:'Choose whether these ICICI Bank 0992 payments were Sewak Park Hotel operating expenses or personal use of hotel money.'});
+    if(selectedHotelTreatment&&!hotelFields)return res.status(400).json({success:false,error:'Choose Sewak Park Hotel operating expense or Personal expense using hotel funds.'});
+    if(selectedHotelTreatment&&!hotelReporting.isHotelAccount(draft.account))return res.status(400).json({success:false,error:'Hotel-money expense treatment is available only for ICICI Bank 0992.'});
     if(!pickableLedgers(s,'PERSONAL').some(item=>item.name===category))return res.status(400).json({success:false,error:'Choose a valid PERSONAL expense category.'});
     if(rows.some(row=>!(num(row.bank.debit)>0)||num(row.bank.credit)>0))return res.status(400).json({success:false,error:'Select debit rows only when recording historical expenses.'});
     const expenses=[];draft.resolutions=draft.resolutions||{};draft.transactionOwnership=draft.transactionOwnership||{};s.expenses=s.expenses||{};
-    rows.forEach(row=>{const bank=row.bank,amount=num(bank.debit),description=String(bank.description||'Historical personal expense').trim(),vendor=selectedVendor||description.slice(0,120)||'Historical personal expense';s.seq=(s.seq||0)+1;const id='EX-'+String(s.seq).padStart(5,'0'),paymentId='PAY-001',remark='Historical PERSONAL expense classified from verified bank statement';const expense={id,date:bank.date,particulars:description,amount,isInstallment:false,requestedAmount:amount,nature:'PERSONAL',type:'variable',ledger:category,vendor,claimant:user,account:draft.account,channel:'Shared',bill:'none',fundedBy:'company',paymentType:'UPI',qrPhoto:'',billPhoto:'',purchasePaymentProof:'',exceptionEvidence:'Uploaded bank statement',exceptionReason:'Historical row; category-only recovery workflow',billNote:'Historical expense created from verified bank statement; original bill not required',paidAlready:false,personalPaidAmount:0,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:'',status:'paid',paidAmount:amount,payments:[{id:paymentId,amount,date:bank.date,account:draft.account,paymentType:'UPI',proof:'',note:'Verified against uploaded bank statement · '+(bank.reference||draft.id),paidBy:user,paidAt:now,personalFunds:false,bankReconciliationDraft:draft.id,bankReconciliationRow:row.id}],createdAt:now,createdBy:user,approvedAt:now,approvedBy:user,paidAt:now,paidBy:user,reconciliationSource:{draftId:draft.id,rowId:row.id,bankReference:String(bank.reference||''),bankDescription:description,remark,historicalBulk:true}};s.expenses[id]=expense;draft.transactionOwnership[row.id]={nature:'PERSONAL',reason:remark,by:user,at:now,source:'historical_personal_workflow'};draft.resolutions[row.id]={action:'create_expense',reason:remark,remark,category,vendor,appId:id+'/'+paymentId,expenseId:id,postingNature:'PERSONAL',by:user,at:now,historicalBulk:true};expenses.push(expense);audit(s,req,'HISTORICAL_PERSONAL_EXPENSE_BULK_CREATED','expense',id,{nature:'PERSONAL',account:draft.account,paymentId,after:expense,note:remark,draftId:draft.id,bankRowId:row.id});});
+    rows.forEach(row=>{const bank=row.bank,amount=num(bank.debit),description=String(bank.description||'Historical personal expense').trim(),vendor=selectedVendor||description.slice(0,120)||'Historical personal expense';s.seq=(s.seq||0)+1;const id='EX-'+String(s.seq).padStart(5,'0'),paymentId='PAY-001',remark='Historical PERSONAL expense classified from verified bank statement';const expense={id,date:bank.date,particulars:description,amount,isInstallment:false,requestedAmount:amount,nature:'PERSONAL',type:'variable',ledger:category,vendor,claimant:user,account:draft.account,channel:'Shared',bill:'none',fundedBy:'company',paymentType:'UPI',qrPhoto:'',billPhoto:'',purchasePaymentProof:'',exceptionEvidence:'Uploaded bank statement',exceptionReason:'Historical row; category-only recovery workflow',billNote:'Historical expense created from verified bank statement; original bill not required',paidAlready:false,personalPaidAmount:0,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:'',status:'paid',paidAmount:amount,payments:[{id:paymentId,amount,date:bank.date,account:draft.account,paymentType:'UPI',proof:'',note:'Verified against uploaded bank statement · '+(bank.reference||draft.id),paidBy:user,paidAt:now,personalFunds:false,bankReconciliationDraft:draft.id,bankReconciliationRow:row.id}],createdAt:now,createdBy:user,approvedAt:now,approvedBy:user,paidAt:now,paidBy:user,reconciliationSource:{draftId:draft.id,rowId:row.id,bankReference:String(bank.reference||''),bankDescription:description,remark,historicalBulk:true},...hotelFields};s.expenses[id]=expense;draft.transactionOwnership[row.id]={nature:'PERSONAL',reason:remark,by:user,at:now,source:'historical_personal_workflow'};draft.resolutions[row.id]={action:'create_expense',reason:remark,remark,category,vendor,appId:id+'/'+paymentId,expenseId:id,postingNature:'PERSONAL',by:user,at:now,historicalBulk:true,...hotelFields};expenses.push(expense);audit(s,req,'HISTORICAL_PERSONAL_EXPENSE_BULK_CREATED','expense',id,{nature:'PERSONAL',account:draft.account,paymentId,after:expense,note:remark,draftId:draft.id,bankRowId:row.id});});
     if(selectedVendor){s.personalReconciliationRules=Array.isArray(s.personalReconciliationRules)?s.personalReconciliationRules:[];const tokens=Array.from(new Set(rows.flatMap(row=>reconciliationIdentityTokens((row.bank.description||'')+' '+(row.bank.reference||'')))));tokens.forEach(token=>{let rule=s.personalReconciliationRules.find(x=>x.active!==false&&x.token===token&&String(x.vendor||'').toLowerCase()===selectedVendor.toLowerCase()&&x.category===category);if(rule){rule.confirmations=num(rule.confirmations)+rows.length;rule.lastConfirmedAt=now;rule.lastConfirmedBy=user;}else{s.personalReconciliationRules.push({id:'PHR-'+crypto.randomBytes(6).toString('hex'),token,tokens:[token],vendor:selectedVendor,category,confirmations:rows.length,active:true,createdAt:now,createdBy:user,lastConfirmedAt:now,lastConfirmedBy:user});}});}
     saveStore(s);return res.json(Object.assign({success:true,created:expenses.length,expenses},draftReconciliation(s,draft)));
   }
@@ -7035,10 +7090,11 @@ router.post('/api/expenses/bank-statements/personal-historical-bulk',(req,res)=>
     if(creditKind==='internal_transfer'){
       const fromAccount=allowedTransferAccount('PERSONAL',b.fromAccount),toAccount=allowedTransferAccount('PERSONAL',draft.account);
       if(!fromAccount||!toAccount||fromAccount===toAccount)return res.status(400).json({success:false,error:'Choose a different existing PERSONAL source account.'});
-      draft.transactionOwnership=draft.transactionOwnership||{};rows.forEach(row=>{const bank=row.bank,amount=num(bank.credit);s.transferSeq=(s.transferSeq||0)+1;const transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:'PERSONAL',fromNature:'PERSONAL',toNature:'PERSONAL',classification:'internal_transfer',fromAccount,toAccount,amount,date:bank.date,proof:'',note:'Historical transfer classified from bank statement · '+String(bank.description||bank.reference||''),createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:row.id,reference:String(bank.reference||''),description:String(bank.description||'')},historicalBulk:true};s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);draft.transactionOwnership[row.id]={nature:'PERSONAL',reason:transfer.note,by:user,at:now,source:'historical_personal_workflow'};draft.resolutions[row.id]={action:'create_transfer',reason:transfer.note,remark:transfer.note,appId:transfer.id,transferId:transfer.id,postingNature:'PERSONAL',by:user,at:now,historicalBulk:true};transfers.push(transfer);audit(s,req,'HISTORICAL_PERSONAL_TRANSFER_BULK_CREATED','transfer',transfer.id,{nature:'PERSONAL',account:fromAccount,after:transfer,note:transfer.note,draftId:draft.id,bankRowId:row.id});});
+      draft.transactionOwnership=draft.transactionOwnership||{};rows.forEach(row=>{const bank=row.bank,amount=num(bank.credit);s.transferSeq=(s.transferSeq||0)+1;const transfer=tagHotelTransferAccounts({id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:'PERSONAL',fromNature:'PERSONAL',toNature:'PERSONAL',classification:'internal_transfer',fromAccount,toAccount,amount,date:bank.date,proof:'',note:'Historical transfer classified from bank statement · '+String(bank.description||bank.reference||''),createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:row.id,reference:String(bank.reference||''),description:String(bank.description||'')},historicalBulk:true});s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);draft.transactionOwnership[row.id]={nature:'PERSONAL',reason:transfer.note,by:user,at:now,source:'historical_personal_workflow'};draft.resolutions[row.id]={action:'create_transfer',reason:transfer.note,remark:transfer.note,appId:transfer.id,transferId:transfer.id,postingNature:'PERSONAL',by:user,at:now,historicalBulk:true,...(transfer.fromReportingUnit?{fromReportingUnit:transfer.fromReportingUnit}:{}),...(transfer.toReportingUnit?{toReportingUnit:transfer.toReportingUnit}:{})};transfers.push(transfer);audit(s,req,'HISTORICAL_PERSONAL_TRANSFER_BULK_CREATED','transfer',transfer.id,{nature:'PERSONAL',account:fromAccount,after:transfer,note:transfer.note,draftId:draft.id,bankRowId:row.id});});
     }else{
       const definition=PERSONAL_HISTORICAL_CREDITS[creditKind];if(!definition)return res.status(400).json({success:false,error:'Choose Sewak Park Hotel income, Rental income, Personal income, Transfer from other account, Home received, or Other personal received.'});s.receipts=Array.isArray(s.receipts)?s.receipts:[];
-      draft.transactionOwnership=draft.transactionOwnership||{};rows.forEach(row=>{const bank=row.bank,amount=num(bank.credit),source=String(bank.description||definition.label).trim().slice(0,160)||definition.label;s.receiptSeq=(s.receiptSeq||0)+1;const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:'PERSONAL',account:draft.account,amount,receiptType:definition.receiptType,category:definition.category,source,date:bank.date,note:'Historical '+definition.label.toLowerCase()+' classified from verified bank statement',proof:'',proofs:[],proofException:'Verified directly against uploaded bank statement',createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:row.id,reference:String(bank.reference||''),description:String(bank.description||'')},historicalBulk:true,...(definition.hotelName?{hotelName:definition.hotelName,hotelLocation:definition.hotelLocation,incomeSource:'hotel_business'}:{})};s.receipts.push(receipt);draft.transactionOwnership[row.id]={nature:'PERSONAL',reason:receipt.note,by:user,at:now,source:'historical_personal_workflow'};draft.resolutions[row.id]={action:'create_receipt',reason:receipt.note,remark:receipt.note,appId:receipt.id,receiptId:receipt.id,postingNature:'PERSONAL',by:user,at:now,historicalBulk:true,creditKind};receipts.push(receipt);audit(s,req,'HISTORICAL_PERSONAL_RECEIPT_BULK_CREATED','receipt',receipt.id,{nature:'PERSONAL',account:draft.account,after:receipt,note:receipt.note,draftId:draft.id,bankRowId:row.id});});
+      if(creditKind==='sewak_park_hotel_income'&&!hotelReporting.isHotelAccount(draft.account))return res.status(400).json({success:false,error:'Sewak Park Hotel income can be recorded only in ICICI Bank 0992.'});
+      draft.transactionOwnership=draft.transactionOwnership||{};rows.forEach(row=>{const bank=row.bank,amount=num(bank.credit),source=String(bank.description||definition.label).trim().slice(0,160)||definition.label;s.receiptSeq=(s.receiptSeq||0)+1;const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:'PERSONAL',account:draft.account,amount,receiptType:definition.receiptType,category:definition.category,source,date:bank.date,note:'Historical '+definition.label.toLowerCase()+' classified from verified bank statement',proof:'',proofs:[],proofException:'Verified directly against uploaded bank statement',createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:row.id,reference:String(bank.reference||''),description:String(bank.description||'')},historicalBulk:true,...hotelReceiptFields(definition.receiptType)};s.receipts.push(receipt);draft.transactionOwnership[row.id]={nature:'PERSONAL',reason:receipt.note,by:user,at:now,source:'historical_personal_workflow'};draft.resolutions[row.id]={action:'create_receipt',reason:receipt.note,remark:receipt.note,appId:receipt.id,receiptId:receipt.id,postingNature:'PERSONAL',by:user,at:now,historicalBulk:true,creditKind,...(receipt.reportingUnit?{reportingUnit:receipt.reportingUnit,reportingTreatment:receipt.reportingTreatment}:{})};receipts.push(receipt);audit(s,req,'HISTORICAL_PERSONAL_RECEIPT_BULK_CREATED','receipt',receipt.id,{nature:'PERSONAL',account:draft.account,after:receipt,note:receipt.note,draftId:draft.id,bankRowId:row.id});});
     }
     saveStore(s);return res.json(Object.assign({success:true,created:receipts.length+transfers.length,receipts,transfers},draftReconciliation(s,draft)));
   }
@@ -7156,10 +7212,10 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
     if(transferConflicts.length)return res.status(409).json({success:false,error:transferCreationConflictMessage(transferConflicts),transferConflicts});
     if(row.status!=='missing_in_app')return res.status(400).json({success:false,error:'Choose an incoming bank transaction that is missing in the app.'});
     if((draft.resolutions||{})[b.rowId])return res.status(409).json({success:false,error:'This incoming bank transaction has already been recorded.'});
-    s.transferSeq=(s.transferSeq||0)+1;transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:fromNature,fromNature,toNature,classification,fromAccount,toAccount,amount,date:bank.date,proof:'',note,createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:b.rowId,reference:String(bank.reference||''),description:String(bank.description||'')}};
+    s.transferSeq=(s.transferSeq||0)+1;transfer=tagHotelTransferAccounts({id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:fromNature,fromNature,toNature,classification,fromAccount,toAccount,amount,date:bank.date,proof:'',note,createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:b.rowId,reference:String(bank.reference||''),description:String(bank.description||'')}});
     if(salaryAdvance){transfer.salaryAdvanceId=salaryAdvance.id;transfer.employeeId=salaryAdvance.empId||'';transfer.employeeName=salaryAdvance.employeeName||((salaryStore.employees||{})[salaryAdvance.empId]||{}).name||'';transfer.advanceDate=salaryAdvance.date;salaryAdvance.fundingTransferId=transfer.id;salaryAdvance.fundingToAccount=toAccount;salaryAdvance.fundingLinkedAt=now;salaryAdvance.fundingLinkedBy=user;salaryStore.advanceAudit=salaryStore.advanceAudit||[];salaryStore.advanceAudit.push({at:now,by:user,action:'FUNDING_TRANSFER_LINKED',advanceId:salaryAdvance.id,details:{transferId:transfer.id,fromAccount,toAccount,amount,bankDate:bank.date,draftId:draft.id,rowId:b.rowId}});}
     if(ownAccountSelection)transfer.ownAccountSelection=ownAccountSelection;if(ownAccountTransfer)transfer.ownAccountTransfer=ownAccountTransfer;if(claimantTransferSelection)transfer.claimantTransferSelection=claimantTransferSelection;
-    s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_transfer',reason:note,remark:note,appId:transfer.id,transferId:transfer.id,postingNature:toNature,by:user,at:now,...(ownAccountSelection?{ownAccountSelection}:{}),...(ownAccountTransfer?{ownAccountTransfer}:{}),...(claimantTransferSelection?{claimantTransferSelection}:{})};
+    s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_transfer',reason:note,remark:note,appId:transfer.id,transferId:transfer.id,postingNature:toNature,by:user,at:now,...(transfer.fromReportingUnit?{fromReportingUnit:transfer.fromReportingUnit}:{}),...(transfer.toReportingUnit?{toReportingUnit:transfer.toReportingUnit}:{}),...(ownAccountSelection?{ownAccountSelection}:{}),...(ownAccountTransfer?{ownAccountTransfer}:{}),...(claimantTransferSelection?{claimantTransferSelection}:{})};
     audit(s,req,'CREATED_FROM_BANK_RECONCILIATION','transfer',transfer.id,{nature:fromNature,account:fromAccount,after:transfer,note,draftId:draft.id,bankRowId:b.rowId});
     if(salaryStore)saveSalaryStore(salaryStore);
   }else if(sourceKind==='external'){
@@ -7174,6 +7230,7 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
     if(!source)return res.status(400).json({success:false,error:'Enter the external person or company that sent the money.'});
     if(!RECEIPT_TYPES.includes(receiptType))return res.status(400).json({success:false,error:'Choose a valid receipt type.'});
     if(!RECEIPT_CATEGORIES.includes(category))return res.status(400).json({success:false,error:'Choose a valid income category.'});
+    if(receiptType==='hotel_income'&&(toNature!=='PERSONAL'||!hotelReporting.isHotelAccount(toAccount)))return res.status(400).json({success:false,error:'Sewak Park Hotel income must be recorded into PERSONAL account ICICI Bank 0992.'});
     if(category===expenseLoans.CATEGORY&&receiptType!==expenseLoans.TYPE)return res.status(400).json({success:false,error:'Choose Loan received to record a repayable liability.'});
     let loanFields=null;
     if(receiptType===expenseLoans.TYPE){
@@ -7181,11 +7238,11 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
       try{const prepared=expenseLoans.prepareReceipt(s,b,{nature:toNature,account:toAccount,amount,source,date:bank.date,note,bankReference:bank.reference,bankReconciliationEvidence:{draftId:draft.id,rowId:b.rowId,reference:String(bank.reference||''),description:String(bank.description||'')}},appBankMovements(s,toAccount,toNature));if(prepared.existing)return res.status(409).json({success:false,error:'This loan receipt already exists. Link its ledger entry instead.'});loanFields=prepared.candidate;}
       catch(error){return res.status(error.status||400).json({success:false,error:error.message});}
     }
-    s.receiptSeq=(s.receiptSeq||0)+1;s.receipts=Array.isArray(s.receipts)?s.receipts:[];receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:toNature,account:toAccount,amount,receiptType,category,source,date:bank.date,note,proof:'',proofException:'Verified directly against uploaded bank statement',createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:b.rowId,reference:String(bank.reference||''),description:String(bank.description||'')}};
+    s.receiptSeq=(s.receiptSeq||0)+1;s.receipts=Array.isArray(s.receipts)?s.receipts:[];receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:toNature,account:toAccount,amount,receiptType,category,source,date:bank.date,note,proof:'',proofException:'Verified directly against uploaded bank statement',createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:b.rowId,reference:String(bank.reference||''),description:String(bank.description||'')},...hotelReceiptFields(receiptType)};
     if(loanFields){try{assertLoanOpenPeriod(s,toNature,toAccount,loanFields.date);}catch(error){return res.status(error.status||400).json({success:false,error:error.message});}Object.assign(receipt,loanFields);}
     if(receiptAccount)receipt.receiptAccount=receiptAccount;
     if(reportEntity){receipt.reportingNature=reportEntity.nature;receipt.reportingEvidenceVersion=1;}
-    s.receipts.push(receipt);draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_receipt',reason:note,remark:note,appId:receipt.id,receiptId:receipt.id,postingNature:toNature,by:user,at:now,...(receiptAccount?{receiptAccount}:{}),...(reportEntity?{reportingNature:reportEntity.nature,reportingEvidenceVersion:1}:{})};
+    s.receipts.push(receipt);draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_receipt',reason:note,remark:note,appId:receipt.id,receiptId:receipt.id,postingNature:toNature,by:user,at:now,...(receipt.reportingUnit?{reportingUnit:receipt.reportingUnit,reportingTreatment:receipt.reportingTreatment}:{}),...(receiptAccount?{receiptAccount}:{}),...(reportEntity?{reportingNature:reportEntity.nature,reportingEvidenceVersion:1}:{})};
     audit(s,req,'CREATED_FROM_BANK_RECONCILIATION','receipt',receipt.id,{nature:toNature,account:toAccount,after:receipt,note,draftId:draft.id,bankRowId:b.rowId});
   }else return res.status(400).json({success:false,error:'Choose internal transfer or external receipt.'});
   saveStore(s);res.json(Object.assign({transfer,receipt},draftReconciliation(s,draft)));
@@ -7465,6 +7522,10 @@ router.post('/api/expenses/bank-statements/create-expense',(req,res)=>{
   if(hasRequestedNature&&(typeof b.nature!=='string'||!NATURES.includes(requestedNature)))return res.status(400).json({success:false,error:'Choose a valid expense entity.'});
   if(!postingNature)return res.status(409).json({success:false,error:'Choose the expense entity before creating this shared-bank expense.'});
   if(!approvalNatures(req).includes(postingNature)||postingNature==='PERSONAL'&&!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'You cannot create expenses for the selected accounting entity.'});
+  const selectedHotelTreatment=String(b.hotelTreatment||'').trim(),hotelFields=selectedHotelTreatment?hotelTreatmentFields(selectedHotelTreatment):{};
+  if(postingNature==='PERSONAL'&&hotelReporting.isHotelAccount(draft.account)&&!selectedHotelTreatment)return res.status(400).json({success:false,error:'Choose whether this ICICI Bank 0992 payment was a Sewak Park Hotel operating expense or personal use of hotel money.'});
+  if(selectedHotelTreatment&&!hotelFields)return res.status(400).json({success:false,error:'Choose Sewak Park Hotel operating expense or Personal expense using hotel funds.'});
+  if(selectedHotelTreatment&&(postingNature!=='PERSONAL'||!hotelReporting.isHotelAccount(draft.account)))return res.status(400).json({success:false,error:'Hotel-money expense treatment is available only for PERSONAL account ICICI Bank 0992.'});
   // This is the same scoped permission as paying a SANKI vendor bill from
   // shared 7883. It does not make 7883 a SANKI-owned account or authorize
   // generic SANKI ownership tags, transfers, receipts or balance adjustments.
@@ -7485,8 +7546,8 @@ router.post('/api/expenses/bank-statements/create-expense',(req,res)=>{
     draft.decisionAudit=Array.isArray(draft.decisionAudit)?draft.decisionAudit:[];draft.decisionAudit.push({action:'retag_transaction_ownership',rowId:b.rowId,before:previous,after:Object.assign({},tag),reason:remark,by:user,at:now});
     audit(s,req,'BANK_RECONCILIATION_TRANSACTION_RETAGGED','bank_reconciliation',draft.id,{nature:postingNature,account:draft.account,before:previous,after:tag,sourceCorrections:[],note:remark,bankRowId:b.rowId,bankMovementPreserved:true});
   }
-  const paymentType=PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:'UPI';s.expenses[id]={id,date:bank.date,particulars,amount,isInstallment:false,requestedAmount:amount,nature:postingNature,type:defaultType(ledger),ledger,vendor,claimant:user,account:draft.account,channel:'Shared',bill:['printed','handwritten'].includes(b.bill)?b.bill:'printed',fundedBy:'company',paymentType,qrPhoto:'',billPhoto,purchasePaymentProof:'',exceptionEvidence:'',exceptionReason:'',billNote:'Created directly from bank reconciliation',paidAlready:false,personalPaidAmount:0,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:'',status:'paid',paidAmount:amount,payments:[{id:paymentId,amount,date:bank.date,account:draft.account,paymentType,proof:'',note:'Verified against bank statement · '+(bank.reference||bank.description||draft.id),paidBy:user,paidAt:now,personalFunds:false,bankReconciliationDraft:draft.id,bankReconciliationRow:b.rowId}],createdAt:now,createdBy:user,approvedAt:now,approvedBy:user,paidAt:now,paidBy:user,reconciliationSource:{draftId:draft.id,rowId:b.rowId,bankReference:String(bank.reference||''),bankDescription:String(bank.description||''),remark}};
-  draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_expense',reason:remark,remark,category:ledger,appId:id+'/'+paymentId,expenseId:id,postingNature,by:user,at:now};
+  const paymentType=PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:'UPI';s.expenses[id]={id,date:bank.date,particulars,amount,isInstallment:false,requestedAmount:amount,nature:postingNature,type:defaultType(ledger),ledger,vendor,claimant:user,account:draft.account,channel:'Shared',bill:['printed','handwritten'].includes(b.bill)?b.bill:'printed',fundedBy:'company',paymentType,qrPhoto:'',billPhoto,purchasePaymentProof:'',exceptionEvidence:'',exceptionReason:'',billNote:'Created directly from bank reconciliation',paidAlready:false,personalPaidAmount:0,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:'',status:'paid',paidAmount:amount,payments:[{id:paymentId,amount,date:bank.date,account:draft.account,paymentType,proof:'',note:'Verified against bank statement · '+(bank.reference||bank.description||draft.id),paidBy:user,paidAt:now,personalFunds:false,bankReconciliationDraft:draft.id,bankReconciliationRow:b.rowId}],createdAt:now,createdBy:user,approvedAt:now,approvedBy:user,paidAt:now,paidBy:user,reconciliationSource:{draftId:draft.id,rowId:b.rowId,bankReference:String(bank.reference||''),bankDescription:String(bank.description||''),remark},...hotelFields};
+  draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_expense',reason:remark,remark,category:ledger,appId:id+'/'+paymentId,expenseId:id,postingNature,by:user,at:now,...hotelFields};
   audit(s,req,'CREATED_FROM_BANK_RECONCILIATION','expense',id,{nature:postingNature,account:draft.account,paymentId,before:null,after:s.expenses[id],note:remark,draftId:draft.id,bankRowId:b.rowId,bankReference:bank.reference||''});saveStore(s);
   res.json(Object.assign({expense:s.expenses[id]},draftReconciliation(s,draft)));
 });
@@ -8429,7 +8490,9 @@ router.use(modelCalendar.createRouter({loadStore,saveStore,audit}));
 // Compact reporting is read-only and uses existing entity/account permissions.
 router.get('/api/expenses/compact-report',(req,res)=>{
   try{
-    const allowed=approvalNatures(req),entity=String(req.query.entity||'SANKI');
+    const allowed=approvalNatures(req),entity=String(req.query.entity||'SANKI'),requestedUnit=String(req.query.unit||'').trim(),unit=hotelReporting.normalizeReportingUnit(requestedUnit);
+    if(requestedUnit&&!unit)return res.status(400).json({success:false,error:'Choose a valid reporting unit.'});
+    if(unit&&entity!=='PERSONAL')return res.status(400).json({success:false,error:'Sewak Park Hotel reporting is available only inside PERSONAL accounting.'});
     if((!isAdmin(req)&&!isPrashant(req))||!allowed.includes(entity)||(entity==='PERSONAL'&&!canManagePersonalAccounting(req)))return res.status(403).json({success:false,error:'You cannot view this entity report.'});
     const today=indiaBusinessDate(),from=String(req.query.from||today.slice(0,7)+'-01'),to=String(req.query.to||today);
     if(!expenseLoans.validDate(from)||!expenseLoans.validDate(to)||from<'2026-08-22'||from>to||to>today)return res.status(400).json({success:false,error:'Choose dates between 22 August 2026 and today.'});
@@ -8437,12 +8500,12 @@ router.get('/api/expenses/compact-report',(req,res)=>{
     if(!s||!s.expenses)throw Object.assign(Error('Accounting data could not be read safely.'),{status:409});
     const salaryPath=path.join(DATA_DIR,'salary-samast.json');
     try{sources.samastSalary=JSON.parse(fs.readFileSync(salaryPath,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;sources.samastSalary={};}
-    const names=Array.from(new Set(ownTransferAccountsForReq(req).filter(row=>row.nature===entity).map(row=>row.account).concat(entity==='SAMAST'?[SHARED_BANK_RECONCILIATION_ACCOUNT]:[]))).filter(name=>accountVisibleToReq(req,name)&&(isBankLedgerName(name)||/cash/i.test(name)));
+    const names=Array.from(new Set(ownTransferAccountsForReq(req).filter(row=>row.nature===entity).map(row=>row.account).concat(entity==='SAMAST'?[SHARED_BANK_RECONCILIATION_ACCOUNT]:[]))).filter(name=>accountVisibleToReq(req,name)&&(isBankLedgerName(name)||/cash/i.test(name))).filter(name=>!unit||hotelReporting.isHotelAccount(name));
     const accounts=names.map(name=>{try{const physical=isSharedBankReconciliationAccount(name)?sharedPhysicalBankView(s,name,to):null;return{name,balance:physical?physical.balance:recordedAccountBalance(s,entity,name,to),shared:!!physical,reconciledThrough:physical?physical.reconciledThrough:((s.bankStatements||{})[bankStatementBookKey(entity,name)]||{}).reconciledThrough||'',warnings:physical?physical.warnings:[]};}catch(error){return{name,balance:null,shared:isSharedBankReconciliationAccount(name),warnings:[error.message]};}});
     // Existing visibility policy also applies to every report source row.
     const visible=r=>!r.ownerOnly||isOwner(req),accountAllowed=r=>!r.account||accountVisibleToReq(req,r.account);
     sources.expenses={...s,expenses:Object.fromEntries(Object.entries(s.expenses||{}).filter(([,r])=>visible(r)&&accountAllowed(r))),receipts:(s.receipts||[]).filter(r=>visible(r)&&accountAllowed(r)),loanRepayments:(s.loanRepayments||[]).filter(accountAllowed),transfers:(s.transfers||[]).filter(r=>accountVisibleToReq(req,r.fromAccount)&&accountVisibleToReq(req,r.toAccount)&& (canManagePersonalAccounting(req)||![r.fromNature,r.toNature].includes('PERSONAL')))};
-    const report=require('./compact-accounting-report').build(sources,{entity,from,to,today,accounts});const days=Math.round((Date.parse(to)-Date.parse(from))/86400000)+1,previousTo=new Date(Date.parse(from)-86400000).toISOString().slice(0,10),previousFrom=new Date(Date.parse(from)-days*86400000).toISOString().slice(0,10);if(previousTo>='2026-08-22'){const prior=require('./compact-accounting-report').build(sources,{entity,from:previousFrom<'2026-08-22'?'2026-08-22':previousFrom,to:previousTo,today});report.previous={from:prior.from,to:prior.to,partial:previousFrom<'2026-08-22',totals:prior.totals};}report.allowedEntities=allowed.filter(n=>n!=='PERSONAL'||canManagePersonalAccounting(req));
+    const report=require('./compact-accounting-report').build(sources,{entity,unit,from,to,today,accounts});const days=Math.round((Date.parse(to)-Date.parse(from))/86400000)+1,previousTo=new Date(Date.parse(from)-86400000).toISOString().slice(0,10),previousFrom=new Date(Date.parse(from)-days*86400000).toISOString().slice(0,10);if(previousTo>='2026-08-22'){const prior=require('./compact-accounting-report').build(sources,{entity,unit,from:previousFrom<'2026-08-22'?'2026-08-22':previousFrom,to:previousTo,today});report.previous={from:prior.from,to:prior.to,partial:previousFrom<'2026-08-22',totals:prior.totals};}report.allowedEntities=allowed.filter(n=>n!=='PERSONAL'||canManagePersonalAccounting(req));
     res.set('Cache-Control','no-store').json(report);
   }catch(error){res.status(error.status||409).json({success:false,error:error.status?error.message:'Report sources could not be read safely. No records were changed.'});}
 });

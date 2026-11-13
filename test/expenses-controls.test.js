@@ -2521,6 +2521,42 @@ test('a missing outgoing bank row can create and link a normal paid expense',()=
   const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.ok((after.auditLog||[]).some(x=>x.action==='CREATED_FROM_BANK_RECONCILIATION'&&x.subjectId===made.body.expense.id));fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
+test('ICICI 0992 reconciliation requires and persists the Sewak Park reporting purpose',t=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),hadFile=fs.existsSync(expenseFile);
+  if(!hadFile){const seeded=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Test bootstrap vendor',amount:1,billPhoto:'/api/expenses/photo/bootstrap.jpg',paymentType:'Cash'}});assert.equal(seeded.status,200,JSON.stringify(seeded.body));}
+  const config=invoke('GET','/api/expenses/config',{role:'owner'}).body,baseline=fs.readFileSync(expenseFile,'utf8'),stored=JSON.parse(baseline),account='ICICI Bank 0992',now=new Date().toISOString(),category=config.ledgersByNature.PERSONAL[0].name;
+  t.after(()=>hadFile?fs.writeFileSync(expenseFile,baseline):fs.rmSync(expenseFile,{force:true}));
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};
+  const debitDraft=(id,date,reference,amount)=>({id,account,nature:'PERSONAL',transactions:[{date,description:'0992 payment '+reference,reference,debit:amount,credit:0,balance:1000-amount}],summary:{from:date,to:date,openingBalance:1000,closingBalance:1000-amount,totalDebits:amount,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'});
+  stored.bankReconciliationDrafts['BRD-HOTEL-OPERATING']=debitDraft('BRD-HOTEL-OPERATING','2098-08-01','HOTEL-OPERATING-0992',210);
+  stored.bankReconciliationDrafts['BRD-HOTEL-PERSONAL-USE']=debitDraft('BRD-HOTEL-PERSONAL-USE','2098-08-02','HOTEL-PERSONAL-0992',220);
+  stored.bankReconciliationDrafts['BRD-HOTEL-INCOME']={id:'BRD-HOTEL-INCOME',account,nature:'PERSONAL',transactions:[{date:'2098-08-03',description:'Sewak Park guest receipt',reference:'HOTEL-INCOME-0992',debit:0,credit:700,balance:700}],summary:{from:'2098-08-03',to:'2098-08-03',openingBalance:0,closingBalance:700,totalDebits:0,totalCredits:700,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};
+  stored.bankReconciliationDrafts['BRD-NON-HOTEL-INCOME']={id:'BRD-NON-HOTEL-INCOME',account:'ICICI Bank 0993',nature:'PERSONAL',transactions:[{date:'2098-08-04',description:'Unrelated personal receipt',reference:'NOT-HOTEL-INCOME',debit:0,credit:800,balance:800}],summary:{from:'2098-08-04',to:'2098-08-04',openingBalance:0,closingBalance:800,totalDebits:0,totalCredits:800,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));
+
+  const expenseBody=(draftId,hotelTreatment)=>({draftId,rowId:'bank-0',nature:'PERSONAL',ledger:category,vendor:'Sewak Park test vendor',particulars:'Verified 0992 payment',bill:'printed',billPhoto:'/api/expenses/photo/sewak-test.jpg',remark:'Verified against 0992 statement',...(hotelTreatment?{hotelTreatment}:{})});
+  const missing=invoke('POST','/api/expenses/bank-statements/create-expense',{role:'owner',body:expenseBody('BRD-HOTEL-OPERATING')});
+  assert.equal(missing.status,400);assert.match(missing.body.error,/Sewak Park Hotel operating expense or personal use/i);
+
+  const operating=invoke('POST','/api/expenses/bank-statements/create-expense',{role:'owner',body:expenseBody('BRD-HOTEL-OPERATING','operating_expense')});
+  assert.equal(operating.status,200,JSON.stringify(operating.body));
+  assert.deepEqual([operating.body.expense.reportingUnit,operating.body.expense.sourceReportingUnit,operating.body.expense.reportingTreatment],['SEWAK_PARK_HOTEL','','operating_expense']);
+  assert.deepEqual([operating.body.rows.find(row=>row.id==='bank-0').resolution.reportingUnit,operating.body.rows.find(row=>row.id==='bank-0').resolution.reportingTreatment],['SEWAK_PARK_HOTEL','operating_expense']);
+
+  const personalUse=invoke('POST','/api/expenses/bank-statements/create-expense',{role:'owner',body:expenseBody('BRD-HOTEL-PERSONAL-USE','personal_use')});
+  assert.equal(personalUse.status,200,JSON.stringify(personalUse.body));
+  assert.deepEqual([personalUse.body.expense.reportingUnit,personalUse.body.expense.sourceReportingUnit,personalUse.body.expense.reportingTreatment],['','SEWAK_PARK_HOTEL','personal_use']);
+  assert.deepEqual([personalUse.body.rows.find(row=>row.id==='bank-0').resolution.sourceReportingUnit,personalUse.body.rows.find(row=>row.id==='bank-0').resolution.reportingTreatment],['SEWAK_PARK_HOTEL','personal_use']);
+
+  const wrongAccount=invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:'BRD-NON-HOTEL-INCOME',rowIds:['bank-0'],direction:'credit',creditKind:'sewak_park_hotel_income'}});
+  assert.equal(wrongAccount.status,400);assert.match(wrongAccount.body.error,/only in ICICI Bank 0992/i);
+
+  const income=invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'owner',body:{draftId:'BRD-HOTEL-INCOME',rowId:'bank-0',sourceKind:'external',source:'Sewak Park guest',receiptType:'hotel_income',category:'Sewak Park Hotel Income',note:'Verified hotel income'}});
+  assert.equal(income.status,200,JSON.stringify(income.body));
+  assert.deepEqual([income.body.receipt.reportingUnit,income.body.receipt.reportingTreatment,income.body.receipt.hotelName,income.body.receipt.hotelLocation,income.body.receipt.incomeSource],['SEWAK_PARK_HOTEL','operating_income','Sewak Park Hotel','Sewak Park','hotel_business']);
+  assert.deepEqual([income.body.rows.find(row=>row.id==='bank-0').resolution.reportingUnit,income.body.rows.find(row=>row.id==='bank-0').resolution.reportingTreatment],['SEWAK_PARK_HOTEL','operating_income']);
+});
+
 test('unrelated same-date bank and ledger entries are never presented as an amount mismatch',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993';
   stored.expenses['EX-GENNI-STRICT']={id:'EX-GENNI-STRICT',date:'2026-09-01',nature:'PERSONAL',status:'paid',vendor:'Genni Di',particulars:'Genni Di',ledger:'FOOD EXPENSE',amount:10000,paidAmount:10000,payments:[{id:'PAY-001',date:'2026-09-01',amount:10000,account}]};
