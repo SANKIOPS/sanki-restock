@@ -11,15 +11,22 @@
   return !!string(bankDescription)&&normalize(text)===normalize(bankDescription)&&(/\d{8,}/.test(text)||/\b(?:UTR|RRN|IFSC)\b/i.test(text));
  }
  function clean(value,bankDescription){return isBankNarration(value,bankDescription)?'':string(value);}
+ function appParticulars(value,bankDescription=''){
+  const text=string(value);if(!isBankNarration(text,bankDescription))return text;
+  const marker=/\b(?:UPI|IMPS|NEFT|RTGS|MMT|ACH|NACH|ECS|IFT|TRF)\s*[/|]/i,app=text.match(marker),bank=string(bankDescription).match(marker);
+  if(!app||!bank||normalize(text.slice(app.index)).replace(/\s/g,'')!==normalize(string(bankDescription).slice(bank.index)).replace(/\s/g,''))return '';
+  const trim=v=>v.trim().replace(/^[\s:;|·—–-]+|[\s:;|·—–-]+$/g,''),prefix=trim(text.slice(0,app.index)),bankPrefix=trim(string(bankDescription).slice(0,bank.index));
+  return prefix&&normalize(prefix)!==normalize(bankPrefix)&&/[\p{L}]/u.test(prefix)&&!isBankNarration(prefix)?prefix:'';
+ }
  function partyName(value){const text=string(value);if(!isBankNarration(text))return text;const prefix=text.match(/^(.*?)\bUPI\s*\//i),segment=text.match(/\bUPI\s*\/([^/]+)/i),candidate=string(prefix?.[1])||string(segment?.[1]);return candidate&&!/[\/@]|\d{8,}/.test(candidate)&&!isBankNarration(candidate)&&/[\p{L}]/u.test(candidate)&&! /^(?:UPI|MMT|IMPS|NEFT|RTGS)$/i.test(candidate)?candidate:'';}
  function presentReceipt(receipt){const e=receipt||{},bank=e.bankReconciliationEvidence?.description||e.reconciliationSource?.bankDescription||'';
  const payer=[e.payerName,e.payer,e.receivedFrom,e.customerName,e.tenantName,e.source].map(partyName).find(Boolean)||'Not provided';
  const note=/^(?:Historical .*classified from verified bank statement|Captured from Owner Telegram receipt screenshot|Created (?:directly )?from bank reconciliation|Recorded while reconciling)/i.test(string(e.note))?'':e.note;
- const particulars=[e.particulars,e.description,e.narration,e.telegramNarration,note].map(v=>clean(v,bank)).find(Boolean)||'Not provided';
+ const particulars=[e.particulars,e.description,e.narration,e.telegramNarration,note].map(v=>appParticulars(v,bank)).find(Boolean)||'Not provided';
  return {payer,particulars,particularsMissing:particulars==='Not provided',type:'income',category:clean(e.category||e.receiptType,bank)||'Unclassified'};
  }
- function present(expense){const e=expense||{},bank=e.reconciliationSource?.bankDescription||'',choices=[e.productParticulars,e.productDescription,e.particulars,e.description,e.telegramNarration,e.narration],particulars=choices.map(v=>clean(v,bank)).find(Boolean)||'';
-  return {vendor:partyName(e.vendor)||'Not provided',particulars:particulars||'Not provided',particularsMissing:!particulars,type:clean(e.productType,bank)||clean(e.expenseType,bank)||clean(e.type,bank)||'Not specified',category:clean(e.ledger||e.category,bank)||'Unclassified'};
+ function present(expense){const e=expense||{},bank=e.reconciliationSource?.bankDescription||'',choices=[e.productParticulars,e.productDescription,e.particulars,e.description,e.telegramNarration,e.narration],particulars=choices.map(v=>appParticulars(v,bank)).find(Boolean)||'';
+  return {vendor:partyName(e.vendor)||'Not provided',particulars:particulars||'Not provided',particularsMissing:!particulars,descriptionSource:e.descriptionSource||(particulars?'Saved app particulars':''),type:clean(e.productType,bank)||clean(e.expenseType,bank)||clean(e.type,bank)||'Not specified',category:clean(e.ledger||e.category,bank)||'Unclassified'};
  }
- return {isBankNarration,clean,partyName,present,presentReceipt};
+ return {isBankNarration,clean,appParticulars,partyName,present,presentReceipt};
 });
