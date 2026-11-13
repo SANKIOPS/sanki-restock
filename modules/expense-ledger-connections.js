@@ -14,6 +14,26 @@ function records(store) {
   return Object.entries(store.bankStatements || {}).flatMap(([key, book]) => (book.imports || []).flatMap(record =>
     [...(record.reconciliationRows || []), ...(record.carriedReconciliationRows || [])].map(row => ({ key, book, record, row }))));
 }
+function transferEvidenceIndex(store) {
+  const all = records(store), byDraftRow = new Map(), linkedById = new Map(), provenanceCounts = new Map();
+  for (const evidence of all) {
+    const draftId = String(evidence.record && evidence.record.draftId || ''), rowId = String(evidence.row && evidence.row.id || '');
+    if (draftId && rowId) {
+      const identity = draftId + '\u0000' + rowId, values = byDraftRow.get(identity) || [];
+      values.push(evidence); byDraftRow.set(identity, values);
+    }
+    for (const id of linkedIds(evidence.row)) {
+      const values = linkedById.get(id) || [];
+      values.push(evidence); linkedById.set(id, values);
+    }
+  }
+  for (const transfer of store.transfers || []) {
+    if (transfer.accountingExcluded || !transfer.reconciliationDraft || !transfer.bankRowId) continue;
+    const identity = String(transfer.reconciliationDraft) + '\u0000' + String(transfer.bankRowId);
+    provenanceCounts.set(identity, (provenanceCounts.get(identity) || 0) + 1);
+  }
+  return { byDraftRow, linkedById, provenanceCounts };
+}
 function finalizedLinks(store) {
   const result = new Map();
   for (const evidence of records(store)) {
@@ -47,10 +67,11 @@ function ownerPersonalTransfer(transfer) {
   const account=contribution?transfer.fromAccount:withdrawal?transfer.toAccount:'';
   return ['IndusInd Bank 7883','ICICI Bank 0992','ICICI Bank 0993'].includes(account);
 }
-function transferEvidence(store, transfer) {
+function transferEvidence(store, transfer, prepared) {
   if (!transfer.bankStatementEvidence || (transfer.classification!=='internal_transfer'&&!ownerPersonalTransfer(transfer)) || !transfer.reconciliationDraft || !transfer.bankRowId || transfer.accountingExcluded) return null;
-  if ((store.transfers || []).some(other => other !== transfer && !other.accountingExcluded && other.reconciliationDraft === transfer.reconciliationDraft && other.bankRowId === transfer.bankRowId)) return null;
-  const candidates = records(store).filter(({ key, record, row }) => {
+  const index = prepared || null, identity = String(transfer.reconciliationDraft) + '\u0000' + String(transfer.bankRowId);
+  if (index ? (index.provenanceCounts.get(identity) || 0) > 1 : (store.transfers || []).some(other => other !== transfer && !other.accountingExcluded && other.reconciliationDraft === transfer.reconciliationDraft && other.bankRowId === transfer.bankRowId)) return null;
+  const candidates = (index ? index.byDraftRow.get(identity) || [] : records(store)).filter(({ key, record, row }) => {
     const bank = row.bank;
     if (!record.finalizedAt || record.draftId !== transfer.reconciliationDraft || row.id !== transfer.bankRowId || !bank || bank.reversal || row.resolutionAction === 'bank_reversal_pair') return false;
     if(row.corrected||(/excluded|timing difference|failed payment/i).test(String(row.decision||'')))return false;
@@ -70,7 +91,8 @@ function transferEvidence(store, transfer) {
   });
   if (candidates.length !== 1) return null;
   const evidence = candidates[0];
-  if (records(store).some(x => x.row !== evidence.row && linkedIds(x.row).includes(transfer.id) && x.key === evidence.key && x.row.bank?.transactionId !== evidence.row.bank.transactionId)) return null;
+  const linked = index ? index.linkedById.get(transfer.id) || [] : records(store).filter(x => linkedIds(x.row).includes(transfer.id));
+  if (linked.some(x => x.row !== evidence.row && x.key === evidence.key && x.row.bank?.transactionId !== evidence.row.bank.transactionId)) return null;
   return evidence;
 }
 function confirmedCharge(store, transfer) {
@@ -78,14 +100,24 @@ function confirmedCharge(store, transfer) {
   return charge&&!charge.accountingExcluded&&charge.transferChargeFor===transfer.id&&charge.account===transfer.fromAccount&&charge.date===transfer.date&&charge.reconciliationDraft===transfer.reconciliationDraft&&charge.bankRowId===transfer.bankRowId&&money(charge.amount)===-money(split.charge)&&money(split.principal)===money(transfer.amount)&&money(split.gross)===money(split.principal)+money(split.charge)?charge:null;
 }
 function repairCreatedTransferLinks(store, audit) {
-  let changed = false;
+  let changed = false; const prepared = transferEvidenceIndex(store);
   for (const transfer of store.transfers || []) {
-    const evidence = transferEvidence(store, transfer);
+    const evidence = transferEvidence(store, transfer, prepared);
     if (!evidence || linkedIds(evidence.row).includes(transfer.id)) continue;
     const { row, record, key } = evidence, before = { linkedRecordIds: row.linkedRecordIds || [], ledger: row.ledger || null };
     const charge=confirmedCharge(store,transfer);
     row.linkedRecordIds = [transfer.id,...(charge?[charge.id]:[])];
     row.ledger = { id: transfer.id, date: transfer.date, description: ownerPersonalTransfer(transfer)?'Bank-confirmed '+transfer.classification.replaceAll('_',' '):'Bank-confirmed internal transfer', reference: transfer.bankReference || transfer.id, debit: money(row.bank.debit)>0?Number(transfer.amount):0, credit: money(row.bank.credit)>0?Number(transfer.amount):0 };
+    // Keep the prepared index in sync with repairs made earlier in this pass.
+    // The previous implementation rescanned the mutated store for every
+    // transfer, so a corrupt duplicate transfer ID on another bank row was
+    // rejected after the first repair. Preserve that safety property while
+    // retaining the single initial reconciliation scan.
+    for (const id of row.linkedRecordIds) {
+      const linked = prepared.linkedById.get(id) || [];
+      linked.push(evidence);
+      prepared.linkedById.set(id, linked);
+    }
     if(charge){row.chargeAmount=-Number(charge.amount);row.chargeAdjustmentId=charge.id;}
     row.linkRepair = { rule: 'exact-created-transfer-provenance-v1', at: new Date().toISOString(), transferId: transfer.id, draftId: record.draftId, bankRowId: row.id };
     row.correctionHistory = row.correctionHistory || [];

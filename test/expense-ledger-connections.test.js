@@ -38,6 +38,15 @@ test('created transfer links are repaired by exact provenance once, with audit a
   assert.equal(s.bankDateOverrides[s.transfer.id].reconciliationDraft,s.record.id);
   assert.equal(helper.repairCreatedTransferLinks(s),false);assert.equal(s.row.correctionHistory.length,1);
 });
+test('link recovery rejects a duplicate transfer ID on a different bank row in the same repair pass',()=>{
+  const s=fixture(),secondTransfer={...s.transfer,reconciliationDraft:'BRD-SECOND',bankRowId:'bank-second'};
+  const secondRow={...s.row,id:'bank-second',bank:{...s.row.bank,transactionId:'BTX-SECOND'},linkedRecordIds:[],ledger:null};
+  const secondRecord={...s.record,id:'BST-SECOND',draftId:'BRD-SECOND',reconciliationRows:[secondRow]};
+  s.transfers.push(secondTransfer);s.bankStatements[bank].imports.push(secondRecord);
+  assert.equal(helper.repairCreatedTransferLinks(s),true);
+  assert.deepEqual(s.row.linkedRecordIds,[s.transfer.id]);
+  assert.deepEqual(secondRow.linkedRecordIds,[]);
+});
 for(const [name,mutate] of Object.entries({
   'amount-only lookalike':s=>delete s.transfer.reconciliationDraft,
   'different source account':s=>s.transfer.fromAccount='IndusInd Bank 8181',
