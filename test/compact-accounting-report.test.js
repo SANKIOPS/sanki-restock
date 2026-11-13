@@ -20,3 +20,8 @@ test('pending payments and loan principal are excluded; interest alone is expens
  const r=build(src,options);assert.equal(r.totals.expenses,100);
 });
 test('date boundaries and entity names are validated',()=>{for(const change of [{entity:'unknown'},{from:'2026-08-21'},{to:'2026-11-14'},{from:'2026-11-13',to:'2026-11-12'}])assert.throws(()=>build(sources(),{...options,...change}),/valid dates/);});
+
+test('legacy card/EMI categories are disclosed for review, never counted as new costs or silently treated as profit',()=>{
+ const src=sources();for(const [id,ledger,amount]of [['CARD','Credit Card',5000],['EMI','Car EMI',2000]])src.expenses.expenses[id]={id,nature:'PERSONAL',status:'paid',date:'2026-10-01',amount,ledger,payments:[{id:'PAY1',date:'2026-10-01',amount,account:'IndusInd Bank 7883'}]};
+ const r=build(src,options);assert.equal(r.totals.expenses,0);assert.equal(r.totals.result,null);assert.equal(r.otherMovements.length,2);assert.equal(r.warnings.length,2);assert.equal(src.expenses.expenses.CARD.ledger,'Credit Card');
+});

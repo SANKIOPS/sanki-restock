@@ -6,15 +6,17 @@ const START='2026-08-22', list=v=>Array.isArray(v)?v:Object.values(v||{}), natur
 const active=r=>r&&!r.accountingExcluded&&!r.voided&&!r.voidedAt&&!r.reversedAt&&r.status!=='voided';
 const inRange=(r,from,to)=>r.date>=from&&r.date<=to;
 const incomeTypes=new Set(['rental_income','hotel_income','sewak_park_hotel_income','other_income','bank_interest','bank_interest_received','asset_sale','product_sale','rental_dealer_commission','rental_documentation_fee','other']);
-const balanceCost=/security|deposit|loan principal|salary advance|gst payment|gst paid|capital|asset purchase/i;
+const balanceCost=/security|deposit|loan principal|salary advance|gst payment|gst paid|capital|asset purchase|credit[ -]?card|card repayment|\bemi\b|loan repayment|owner withdrawal|owner contribution|internal transfer/i;
 function build(sources,{entity,from,to,today,accounts=[]}){
   if(!['SANKI','SAMAST','PERSONAL'].includes(entity)||!validDate(from)||!validDate(to)||from<START||from>to||to>today)throw Object.assign(Error('Select an entity and valid dates from 22 August 2026 through today.'),{status:400});
   const s=sources.expenses, warnings=[], rows=[], match=r=>nature(r.reportingNature||r.nature)===entity;
   if(!s||typeof s.expenses!=='object')throw Object.assign(Error('Accounting records are unavailable. No totals were assumed.'),{status:409});
   const add=(kind,r,amount)=>rows.push({id:r.id,reference:r.reference||r.id,date:r.date,kind,entity,account:r.account||'',category:r.category||r.ledger||kind,description:r.description||r.particulars||r.source||r.vendor||'',amount:money(amount)});
+  const otherMovements=[];for(const e of list(s.expenses).filter(r=>active(r)&&match(r)&&balanceCost.test(r.ledger||r.category||''))){for(const p of list(e.payments).filter(p=>active(p)&&inRange(p,from,to))){otherMovements.push({id:e.id+'/'+p.id,date:p.date,category:e.ledger||e.category,description:e.particulars||e.vendor||'',account:p.account||e.account||'',amount:money(p.amount)});}}
+  const reviewCosts=otherMovements.filter(r=>/credit[ -]?card|card repayment|\bemi\b|loan repayment/i.test(r.category));for(const r of reviewCosts)warnings.push(r.id+': '+r.category+' needs repayment/interest review. Excluded from costs; original bank payment remains unchanged.');
   let income=0,expenses=0,cogs=0,result=null,basis,resultLabel;
   if(entity==='SANKI'){
-    const report=buildReport(sources,{from,to,start:START,channel:'All'});
+    const report=buildReport({...sources,expenses:{...s,expenses:Object.fromEntries(Object.entries(s.expenses||{}).filter(([,r])=>!balanceCost.test(r.ledger||r.category||'')))}},{from,to,start:START,channel:'All'});
     income=report.totals.netSales==null?null:money(report.totals.netSales+report.totals.otherIncome);
     expenses=report.totals.expenses;cogs=report.totals.cogs;result=report.totals.netProfit;
     warnings.push(...report.warnings.map(w=>w.reference+': '+w.message));
@@ -60,6 +62,7 @@ function build(sources,{entity,from,to,today,accounts=[]}){
   const usage={};
   for(const e of list(s.expenses).filter(r=>active(r)&&match(r))){for(const p of list(e.payments).filter(p=>active(p)&&!p.provisional&&inRange(p,from,to))){const account=p.account||e.account;if(!account)continue;usage[account]=money((usage[account]||0)+Number(p.amount||0));}}
   for(const feed of sources.feeds||[])if(feed.required&&feed.status!=='ready')warnings.push(feed.name+' is '+feed.status+'. Report may be incomplete.');
-  return {success:true,entity,from,to,basis,resultLabel,totals:{income:income==null?null:money(income),expenses:money(expenses),costOfSales:money(cogs),result:result==null?null:money(result)},accounts,transactions:rows.sort((a,b)=>b.date.localeCompare(a.date)),transfers,paidFrom:Object.entries(usage).map(([account,amount])=>({account,amount})),obligations:{loans:loanRows,security,securityKnown:entity!=='SAMAST'||!!s.rentals,loanTotal:money(loanRows.reduce((n,r)=>n+r.outstanding,0)),securityTotal:money(security.reduce((n,r)=>n+r.amount,0))},warnings:[...new Set(warnings)],note:'Account balances cover all money held in those accounts, including borrowed money and deposits. Shared bank money is not allocated to an entity by this report. Personal spending by paying account does not prove that rental income funded it. Transfers are shown once and are not additional expenses. No automatic debts are created.'};
+  if(reviewCosts.length)result=null;
+  return {success:true,entity,from,to,basis,resultLabel,otherMovements,totals:{income:income==null?null:money(income),expenses:money(expenses),costOfSales:money(cogs),result:result==null?null:money(result)},accounts,transactions:rows.sort((a,b)=>b.date.localeCompare(a.date)),transfers,paidFrom:Object.entries(usage).map(([account,amount])=>({account,amount})),obligations:{loans:loanRows,security,securityKnown:entity!=='SAMAST'||!!s.rentals,loanTotal:money(loanRows.reduce((n,r)=>n+r.outstanding,0)),securityTotal:money(security.reduce((n,r)=>n+r.amount,0))},warnings:[...new Set(warnings)],note:'Account balances cover all money held in those accounts, including borrowed money and deposits. Shared bank money is not allocated to an entity by this report. Personal spending by paying account does not prove that rental income funded it. Transfers are shown once and are not additional expenses. No automatic debts are created.'};
 }
 module.exports={build,START};
