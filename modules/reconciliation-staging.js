@@ -21,10 +21,73 @@ function booksForAccount(store, account) {
   return Object.entries(store.bankStatements || {}).filter(([key]) => bankAccount(key) === account).map(([, book]) => book);
 }
 
+const append = (map, key, value) => {
+  if (!map.has(key)) map.set(key, []);
+  map.get(key).push(value);
+};
+
+/**
+ * Build the immutable lookup tables used while projecting one reconciliation
+ * view. A statement can contain hundreds of rows; rebuilding these tables for
+ * every row made a normal GET repeatedly walk the complete accounting store.
+ */
+function createPostedBankRowContext({ store = {}, draft = {}, movements = [] } = {}) {
+  const books = booksForAccount(store, draft.account), physicalBySignature = new Map();
+  const bookIds = new Map(books.map((book, index) => [book, index]));
+  const finalizedRowsByTransaction = new Map(), expensesByAdjustment = new Map();
+  const recordsByDate = new Map(), movementEntriesByRecord = new Map();
+
+  for (const book of books) {
+    const transactionsBySignature = new Map();
+    for (const transaction of Object.values(book.transactions || {})) append(transactionsBySignature, signature(transaction), transaction);
+    for (const [bankSignature, transactions] of transactionsBySignature) {
+      if (transactions.length !== 1 || !transactions[0].id) continue;
+      append(physicalBySignature, bankSignature, { book, transaction: transactions[0] });
+    }
+    for (const imported of book.imports || []) {
+      if (!imported.finalizedAt) continue;
+      for (const row of [].concat(imported.reconciliationRows || [], imported.carriedReconciliationRows || [])) {
+        if (!row.bank || !text(row.bank.transactionId)) continue;
+        append(finalizedRowsByTransaction, bookIds.get(book) + '|' + text(row.bank.transactionId), { imported, row });
+      }
+    }
+  }
+
+  for (const expense of store.reconciliationExpenses || []) append(expensesByAdjustment, text(expense.adjustmentId), expense);
+  for (const [collection, postingKind] of [['transfers', 'transfer'], ['adjustments', 'adjustment'], ['paytmSettlements', 'settlement'], ['vendorAdvances', 'advance'], ['bankTruthMovements', 'bank_truth']]) {
+    for (const record of store[collection] || []) {
+      if (!record || record.accountingExcluded) continue;
+      const relevant = postingKind === 'transfer'
+        ? [record.fromAccount, record.toAccount].includes(draft.account)
+        : text(record.account || record.bankAccount) === text(draft.account);
+      if (relevant) append(recordsByDate, date(record.date), { record, postingKind });
+    }
+  }
+  movements.forEach((movement, index) => {
+    if (!movement) return;
+    for (const id of ids(movement)) append(movementEntriesByRecord, id, { movement, index });
+  });
+
+  return {
+    store,
+    draft,
+    movements,
+    books,
+    bookIds,
+    physicalBySignature,
+    finalizedRowsByTransaction,
+    expensesByAdjustment,
+    recordsByDate,
+    movementEntriesByRecord,
+    postedCache: new Map()
+  };
+}
+
 // A physical identity requires one stored bank transaction, not just equal
 // amount/date. Its complete narration and balance distinguish repeated rows.
-function physicalRows(store, draft, bank) {
+function physicalRows(store, draft, bank, context) {
   if (!bank || !date(bank.date) || !(cents(bank.debit) || cents(bank.credit))) return [];
+  if (context) return context.physicalBySignature.get(signature(bank)) || [];
   const result = [];
   for (const book of booksForAccount(store, draft.account)) {
     const matches = Object.values(book.transactions || {}).filter(row => signature(row) === signature(bank));
@@ -36,49 +99,58 @@ function physicalRows(store, draft, bank) {
   return result;
 }
 
-function recordMatchesBankRow(record, store, draft, rowId, bank, physical) {
+function recordMatchesBankRow(record, store, draft, rowId, bank, physical, context) {
   if (sameOrigin(record, draft, rowId)) return true;
   const origin = text(record.reconciliationDraft || record.bankReconciliationDraft || record.bankReconciliationEvidence && record.bankReconciliationEvidence.draftId);
   const originRow = text(record.bankRowId || record.bankReconciliationEvidence && record.bankReconciliationEvidence.rowId);
   for (const { book, transaction } of physical) {
     if (text(record.bankTransactionId) === text(transaction.id)) return true;
     if (origin && originRow && origin === text(transaction.reconciliationDraftId) && originRow === 'bank-' + transaction.reconciliationDraftRowIndex) return true;
-    for (const imported of book.imports || []) {
-      if (!imported.finalizedAt) continue;
-      for (const row of [].concat(imported.reconciliationRows || [], imported.carriedReconciliationRows || [])) {
+    const finalizedRows = context
+      ? context.finalizedRowsByTransaction.get(context.bookIds.get(book) + '|' + text(transaction.id)) || []
+      : (book.imports || []).filter(imported => imported.finalizedAt).flatMap(imported => [].concat(imported.reconciliationRows || [], imported.carriedReconciliationRows || []).map(row => ({ imported, row })));
+    for (const { imported, row } of finalizedRows) {
         if (!row.bank || text(row.bank.transactionId) !== text(transaction.id) || signature(row.bank) !== signature(transaction)) continue;
         if (rowIds(row).includes(text(record.id))) return true;
         if (origin && originRow && origin === text(imported.draftId) && originRow === text(row.id)) return true;
-      }
     }
     // Older split-charge adjustments retained their exact bank transaction
     // on the spending companion, but omitted bankRowId on the adjustment.
-    if ((store.reconciliationExpenses || []).some(expense => text(expense.adjustmentId) === text(record.id) && text(expense.bankTransactionId) === text(transaction.id) && expense.account === draft.account)) return true;
+    const spending = context ? context.expensesByAdjustment.get(text(record.id)) || [] : store.reconciliationExpenses || [];
+    if (spending.some(expense => text(expense.adjustmentId) === text(record.id) && text(expense.bankTransactionId) === text(transaction.id) && expense.account === draft.account)) return true;
   }
   return false;
 }
 
 /** Return only actual projected ledger movements already posted for this row. */
-function postedBankRowMovements({ store = {}, draft = {}, rowId, bank, movements = [] } = {}) {
-  const physical = physicalRows(store, draft, bank), records = [];
-  for (const [collection, postingKind] of [['transfers', 'transfer'], ['adjustments', 'adjustment'], ['paytmSettlements', 'settlement'], ['vendorAdvances', 'advance'], ['bankTruthMovements', 'bank_truth']]) {
-    for (const record of store[collection] || []) {
-      if (record.accountingExcluded || !recordMatchesBankRow(record, store, draft, rowId, bank, physical)) continue;
-      if (date(record.date) !== date(bank && bank.date)) continue;
-      if (postingKind === 'transfer' ? ![record.fromAccount, record.toAccount].includes(draft.account) : text(record.account || record.bankAccount) !== text(draft.account)) continue;
-      records.push({ record, postingKind });
-    }
+function postedBankRowMovements({ store = {}, draft = {}, rowId, bank, movements = [], context } = {}) {
+  const active = context || createPostedBankRowContext({ store, draft, movements });
+  store = active.store; draft = active.draft; movements = active.movements;
+  const cacheKey = text(rowId) + '|' + signature(bank);
+  if (active.postedCache.has(cacheKey)) return active.postedCache.get(cacheKey);
+  const physical = physicalRows(store, draft, bank, active);
+  const records = (active.recordsByDate.get(date(bank && bank.date)) || []).filter(({ record }) => recordMatchesBankRow(record, store, draft, rowId, bank, physical, active));
+  const recordOrder = new Map();
+  records.forEach((item, index) => {
+    const id = text(item.record.id);
+    if (id && !recordOrder.has(id)) recordOrder.set(id, index);
+  });
+  const candidateMovements = new Map();
+  for (const { record } of records) {
+    for (const entry of active.movementEntriesByRecord.get(text(record.id)) || []) candidateMovements.set(entry.index, entry.movement);
   }
   const result = [], seen = new Set();
-  for (const movement of movements) {
+  for (const movement of [...candidateMovements.entries()].sort((a, b) => a[0] - b[0]).map(entry => entry[1])) {
     if (!movement || movement.pendingPosting || seen.has(text(movement.id))) continue;
-    const match = records.find(item => ids(movement).includes(text(item.record.id)));
+    const matchedIds = ids(movement).filter(id => recordOrder.has(id)).sort((a, b) => recordOrder.get(a) - recordOrder.get(b));
+    const match = matchedIds.length ? records[recordOrder.get(matchedIds[0])] : null;
     if (!match || date(movement.date) !== date(bank && bank.date)) continue;
     seen.add(text(movement.id));
-    const record = match.record, spending = (store.reconciliationExpenses || []).filter(expense => text(expense.adjustmentId) === text(record.id));
+    const record = match.record, spending = active.expensesByAdjustment.get(text(record.id)) || [];
     const bankChargeComponent = match.postingKind === 'adjustment' && (!!record.automaticAxisTransferCharge || !!record.transferChargeFor || !!record.splitBankCharge || spending.length > 0 && spending.every(expense => expense.category === 'BANK CHARGES') && spending.reduce((sum, expense) => sum + cents(expense.amount), 0) === Math.abs(cents(record.amount)));
     result.push({ ...movement, postingKind: match.postingKind, bankChargeComponent, record });
   }
+  active.postedCache.set(cacheKey, result);
   return result;
 }
 
@@ -228,4 +300,4 @@ function findTransferCreationConflicts({ store = {}, draft = {}, rowId, bank, fr
   return conflicts;
 }
 
-module.exports = { postedBankRowMovements, pendingReconciliationAmount, postedReconciliationConflicts, findTransferCreationConflicts };
+module.exports = { createPostedBankRowContext, postedBankRowMovements, pendingReconciliationAmount, postedReconciliationConflicts, findTransferCreationConflicts };

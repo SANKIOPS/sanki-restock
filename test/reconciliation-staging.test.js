@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { postedBankRowMovements, pendingReconciliationAmount, postedReconciliationConflicts, findTransferCreationConflicts } = require('../modules/reconciliation-staging');
+const { createPostedBankRowContext, postedBankRowMovements, pendingReconciliationAmount, postedReconciliationConflicts, findTransferCreationConflicts } = require('../modules/reconciliation-staging');
 
 const account = 'Axis Bank 3448', destination = 'IndusInd Bank 7883', day = '2026-10-18';
 const bank = { date: day, debit: 10449.9, credit: 0, reference: '629100000001', description: 'IMPS transfer', balance: 165673.07 };
@@ -240,4 +240,20 @@ test('the helper leaves managed PERSONAL duplicate policy unchanged and never mu
   assert.deepEqual(candidate(s, { fromNature: 'PERSONAL', toNature: 'PERSONAL' }), []);
   candidate(s); posted(s); pendingReconciliationAmount({ row: row(), postedMovements: posted(s) });
   assert.equal(JSON.stringify(s), before);
+});
+
+test('one reconciliation view reuses indexed posting evidence for every row and calculation', () => {
+  const source = finalized(), reads = { bankStatements: 0, transfers: 0, adjustments: 0, reconciliationExpenses: 0 }, s = {};
+  for (const key of Object.keys(reads)) Object.defineProperty(s, key, { enumerable: true, get() { reads[key] += 1; return source[key]; } });
+  const list = movements.map(movement => ({ ...movement }));
+  const context = createPostedBankRowContext({ store: s, draft: { ...draft, id: 'BRD-OVERLAPPING' }, movements: list });
+  const indexedReads = { ...reads };
+  const first = postedBankRowMovements({ rowId: 'bank-0', bank, context });
+  const cacheSize = context.postedCache.size;
+  const second = postedBankRowMovements({ rowId: 'bank-0', bank: { ...bank }, context });
+  assert.deepEqual(second, first);
+  assert.equal(context.postedCache.size, cacheSize, 'the same physical row is projected once per view');
+  assert.equal(context.physicalBySignature.size, 1);
+  assert.equal(context.recordsByDate.get(day).length, 2);
+  assert.deepEqual(reads, indexedReads, 'row calculations never rescan the accounting store');
 });
