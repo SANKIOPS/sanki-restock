@@ -4578,3 +4578,13 @@ test('every Axis account automatically matches fixed transfer charges and posts 
     const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(source,/automaticAxisTransferCharge:true/);assert.match(source,/category:'BANK CHARGES'/);assert.match(source,/pendingReconciliationAmount\(/);assert.match(source,/amount:-pendingCharge/);
   }finally{fs.writeFileSync(expenseFile,baseline);}
 });
+
+test('report expense bank evidence requires expense visibility and the paying bank permission; shared 7883 uses its SAMAST book',()=>{
+ const file=path.join(tempDir,'expenses.json'),id='EX-REPORT-LINK',account='IndusInd Bank 7883',expense={id,nature:'PERSONAL',date:'2026-10-01',status:'paid',amount:500,claimant:'private-owner',particulars:'App repair',payments:[{id:'PAY-001',date:'2026-10-01',account,amount:500}]};
+ fs.writeFileSync(file,JSON.stringify({expenses:{[id]:expense},bankStatements:{[account]:{imports:[{id:'BST-REPORT',reconciliationRows:[{id:'bank-0',linkedRecordIds:[id+'/PAY-001'],bank:{date:'2026-10-01',debit:500,reference:'REPORT-UTR',description:'Bank evidence only'}}]}]}}}));
+ const before=fs.readFileSync(file,'utf8');
+ assert.equal(invoke('GET','/api/expenses/:id/payment-evidence',{role:'claimant',params:{id}}).status,403);
+ const owner=invoke('GET','/api/expenses/:id/payment-evidence',{role:'owner',params:{id}});assert.equal(owner.status,200,JSON.stringify(owner.body));assert.equal(owner.body.payments[0].available,true,JSON.stringify(owner.body));assert.equal(owner.body.payments[0].evidence.records[0].rows[0].bank.reference,'REPORT-UTR');
+ assert.equal(invoke('GET','/api/expenses/:id/payment-evidence',{role:'owner',params:{id:'EX-NO-SUCH-REPORT'}}).status,404);
+ assert.equal(fs.readFileSync(file,'utf8'),before,'viewing evidence cannot mutate financial records');
+});

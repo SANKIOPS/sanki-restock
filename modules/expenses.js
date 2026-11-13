@@ -8510,6 +8510,14 @@ router.get('/api/expenses/compact-report',(req,res)=>{
   }catch(error){res.status(error.status||409).json({success:false,error:error.status?error.message:'Report sources could not be read safely. No records were changed.'});}
 });
 
+router.get('/api/expenses/:id/payment-evidence',(req,res)=>{
+  const s=readLedgerEditSnapshot().store,e=s.expenses?.[String(req.params.id||'')];
+  if(!e)return res.status(404).json({success:false,error:'Expense not found.'});
+  if(!canViewExpense(req,e))return res.status(403).json({success:false,error:'You do not have access to this expense.'});
+  const payments=require('./report-expense-entries').evidence(s,e,{canAccess:(nature,account)=>canAccessBankReconciliation(req,s,nature,account),bookKey:bankStatementBookKey,natureForAccount:(nature,account)=>isSharedBankReconciliationAccount(account)?'SAMAST':nature});
+  res.json({success:true,expenseId:e.id,payments});
+});
+
 router.get('/api/expenses/:id',(req,res,next)=>{
   const id=String(req.params.id||'');
   // Rental routes are mounted later in this legacy module. Only real expense
