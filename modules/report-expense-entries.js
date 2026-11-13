@@ -4,7 +4,7 @@ function enrich(store,row){
  if(!['expense','personal_use','unclassified'].includes(row.kind))return row;
  const refs=[row.reference,row.id].filter(Boolean);
  for(const ref of refs){const id=String(ref).split('/')[0],e=store.expenses?.[id];if(!e||e.accountingExcluded||String(e.reportingNature||e.nature||'SANKI').toUpperCase()!==row.entity)continue;
- return {...row,appExpense:{id:e.id,date:e.date,particulars:e.particulars||'',vendor:e.vendor||'',category:e.ledger||e.category||'',status:e.status||'',amount:e.amount}};
+ return {...row,appExpense:{id:e.id,date:e.date,particulars:e.particulars||'',vendor:e.vendor||'',category:e.ledger||e.category||'',status:e.status||'',amount:e.amount,searchNarration:[e.narration,e.note,e.reconciliationSource?.bankDescription].filter(Boolean).join(' ')}};
  }return row;
 }
 function evidence(store,expense,{canAccess,bookKey,natureForAccount=(nature)=>nature}){
