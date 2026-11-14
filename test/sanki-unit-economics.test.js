@@ -12,7 +12,7 @@ test('simple trading rows reconcile through EBITDA and net profit, including ret
  const src=report(),before=JSON.stringify(src),r=build(src),v=r.values;
  assert.equal(v.discountsReturns,150);assert.equal(v.netSales,1000);assert.equal(v.cogs,400);assert.equal(v.grossProfit,600);
  assert.equal(v.orderCosts,20);assert.equal(v.marketing,50);assert.equal(v.operatingExpenses,150);
- assert.equal(v.ebitda,400);assert.equal(v.otherDeductions,75);assert.equal(v.netProfit,335);
+ assert.equal(v.otherIncome,20);assert.equal(v.ebitda,400);assert.equal(v.otherDeductions,75);assert.equal(v.netProfit,335);
  assert.equal(v.ebitda+v.interestIncome-v.otherDeductions,v.netProfit);
  for(const key of Object.keys(r.entries[0].values)){const sum=Math.round(r.entries.reduce((n,e)=>n+(e.values[key]||0),0)*100)/100;if(v[key]!=null)assert.equal(sum,v[key],key+' drill-down agrees');}
  assert.deepEqual(r.stats,{orders:1,units:2,averageOrder:1000,profitPerItem:167.5});assert.equal(JSON.stringify(src),before);
@@ -31,4 +31,9 @@ test('expense refunds reduce their original bucket, missing quantities remain un
  assert.equal(build(src).values.orderCosts,15);
  src.transactions[0].details=[];assert.equal(build(src).stats.units,null);assert.equal(build(src).stats.profitPerItem,null);
  src.totals.salesCount=0;assert.equal(build(src).stats.averageOrder,null);
+});
+
+test('explicit bank-interest receipt type wins over a custom display category',()=>{
+ const src=report();const interest=src.transactions.find(r=>r.id==='BANK-INTEREST');interest.reference='REC-INTEREST';interest.category='Custom bank credit';
+ const r=build(src,{books:{receipts:[{id:'REC-INTEREST',receiptType:'bank_interest'}]}});assert.equal(r.values.interestIncome,10);assert.equal(r.values.ebitda,400);
 });

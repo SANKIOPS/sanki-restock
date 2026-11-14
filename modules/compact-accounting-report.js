@@ -110,7 +110,7 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
   let income=0,expenses=0,cogs=0,result=null,basis,resultLabel,unitEconomics;
   if(entity==='SANKI'){
     const report=buildReport({...sources,expenses:{...s,expenses:Object.fromEntries(Object.entries(s.expenses||{}).filter(([,r])=>!balanceCost.test(r.ledger||r.category||'')))}},{from,to,start:START,channel:'All'});
-    unitEconomics=require('./sanki-unit-economics').build(report,{blocked:reviewCosts.length>0});
+    unitEconomics=require('./sanki-unit-economics').build(report,{blocked:reviewCosts.length>0,books:s});
     unitEconomics.entries=require('./report-expense-entries').enrichMany(s,unitEconomics.entries);
     income=report.totals.netSales==null?null:money(report.totals.netSales+report.totals.otherIncome);
     expenses=report.totals.expenses;cogs=report.totals.cogs;result=report.totals.netProfit;
