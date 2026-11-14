@@ -67,16 +67,20 @@
     }
     function setBusy(value) {
       state.loading = value;
+      var controls = new Set();
       ['classificationReviewPanel', 'classificationEditDialog', 'classificationBulkDialog'].forEach(function (id) {
         el(id).querySelectorAll('button,input,select,textarea').forEach(function (node) {
-          if (value) {
-            node.__classificationBusyDisabled = Boolean(node.disabled);
-            node.disabled = true;
-          } else {
-            node.disabled = Boolean(node.__classificationBusyDisabled);
-            delete node.__classificationBusyDisabled;
-          }
+          controls.add(node);
         });
+      });
+      controls.forEach(function (node) {
+        if (value) {
+          if (!Object.prototype.hasOwnProperty.call(node, '__classificationBusyDisabled')) node.__classificationBusyDisabled = Boolean(node.disabled);
+          node.disabled = true;
+        } else if (Object.prototype.hasOwnProperty.call(node, '__classificationBusyDisabled')) {
+          node.disabled = Boolean(node.__classificationBusyDisabled);
+          delete node.__classificationBusyDisabled;
+        }
       });
       if (onBusy) onBusy(value);
     }
@@ -140,7 +144,6 @@
       var totals = state.categories.reduce(function (memo, row) { memo.count += Number(row.count || 0); memo.total += amount(row.total); return memo; }, { count: 0, total: 0 });
       el('classificationSummary').innerHTML = '<span class="classification-stat"><b>' + state.categories.length + '</b> categories</span><span class="classification-stat"><b>' + totals.count + '</b> expenses</span><span class="classification-stat"><b>' + esc(formatMoney(totals.total)) + '</b> recorded amount</span><span class="classification-stat">Highest amount appears first inside each category</span>';
     }
-    function protectedCell(label, value) { return '<div><span>' + esc(label) + '</span><b>' + esc(value || '—') + '</b></div>'; }
     function renderExpenses() {
       var detail = state.details;
       if (!detail) return '<div class="classification-empty"><strong>Loading expenses</strong><span>Fetching only this category…</span><div class="classification-skeleton"></div><div class="classification-skeleton"></div></div>';
@@ -149,13 +152,49 @@
       if (!expenses.length) return '<div class="classification-empty"><strong>No matching expenses</strong><span>Change the search or date filters and try again.</span></div>';
       var selectedVisible = expenses.length && expenses.every(function (row) { return state.selectedRows.has(rowKey(row)); });
       var rows = expenses.map(function (row) {
-        var id = rowKey(row), proofText = Number(row.proofCount || 0) + ' proof' + (Number(row.proofCount || 0) === 1 ? '' : 's');
-        return '<tr data-expense-id="' + esc(id) + '"><td data-label="Select"><input type="checkbox" data-select-classification="' + esc(id) + '" aria-label="Select ' + esc(row.reference || id) + '"' + (state.selectedRows.has(id) ? ' checked' : '') + '></td><td data-label="Date / reference"><b>' + esc(row.date || '—') + '</b><span class="classification-lock">Locked</span><div class="classification-reference">' + esc(row.reference || id) + '</div></td><td data-label="Vendor / narration"><b>' + esc(row.vendor || 'Unspecified vendor') + '</b><br><span class="muted">' + esc(row.narration || 'No narration') + '</span></td><td data-label="Classification"><b>' + esc(row.entity || '—') + '</b> ' + (!editable(row, 'entity') ? '<span class="classification-lock">Entity locked</span>' : '') + '<br><span>' + esc(row.category || 'Unclassified') + '</span></td><td data-label="Payment / evidence"><span class="classification-lock">Locked</span> ' + esc(row.account || 'Account not recorded') + '<br><span class="muted">' + esc(row.paymentMethod || 'Method not recorded') + ' · ' + esc(proofText) + ' · ' + esc(row.reconciled ? 'reconciled' : 'not reconciled') + '</span></td><td data-label="Amount" class="num"><b>' + esc(formatMoney(row.amount)) + '</b><br><span class="classification-lock">Locked</span></td><td data-label="Action" class="classification-row-actions"><button type="button" data-edit-classification="' + esc(id) + '">Correct labels</button></td></tr>';
+        var id = rowKey(row), isEditing = Boolean(state.editing && rowKey(state.editing) === id);
+        var proofText = Number(row.proofCount || 0) + ' proof' + (Number(row.proofCount || 0) === 1 ? '' : 's');
+        var rowHtml = '<tr data-expense-id="' + esc(id) + '"' + (isEditing ? ' class="classification-editing-row"' : '') + '><td data-label="Select"><input type="checkbox" data-select-classification="' + esc(id) + '" aria-label="Select ' + esc(row.reference || id) + '"' + (state.selectedRows.has(id) ? ' checked' : '') + '></td><td data-label="Date / reference"><b>' + esc(row.date || '—') + '</b><span class="classification-lock">Locked</span><div class="classification-reference">' + esc(row.reference || id) + '</div></td><td data-label="Vendor / narration"><b>' + esc(row.vendor || 'Unspecified vendor') + '</b><br><span class="muted">' + esc(row.narration || 'No narration') + '</span></td><td data-label="Classification"><b>' + esc(row.entity || '—') + '</b> ' + (!editable(row, 'entity') ? '<span class="classification-lock">Entity locked</span>' : '') + '<br><span>' + esc(row.category || 'Unclassified') + '</span></td><td data-label="Payment / evidence"><span class="classification-lock">Locked</span> ' + esc(row.account || 'Account not recorded') + '<br><span class="muted">' + esc(row.paymentMethod || 'Method not recorded') + ' · ' + esc(proofText) + ' · ' + esc(row.reconciled ? 'reconciled' : 'not reconciled') + '</span></td><td data-label="Amount" class="num"><b>' + esc(formatMoney(row.amount)) + '</b><br><span class="classification-lock">Locked</span></td><td data-label="Action" class="classification-row-actions"><button type="button" data-edit-classification="' + esc(id) + '" aria-expanded="' + (isEditing ? 'true' : 'false') + '" aria-controls="classificationEditDialog">' + (isEditing ? 'Close editor' : 'Correct labels') + '</button></td></tr>';
+        if (isEditing) rowHtml += '<tr class="classification-inline-editor-row"><td colspan="7"><div data-classification-editor-host></div></td></tr>';
+        return rowHtml;
       }).join('');
       var page = detail.pagination || { page: 1, pages: 1, total: expenses.length };
       return '<div class="table-wrap"><table class="classification-expense-table"><thead><tr><th class="check-cell"><input type="checkbox" data-select-visible aria-label="Select all visible expenses"' + (selectedVisible ? ' checked' : '') + '></th><th>Date / reference</th><th>Vendor / narration</th><th>Classification</th><th>Payment / evidence</th><th class="num">Amount</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="classification-pagination"><span>Page ' + Number(page.page || 1) + ' of ' + Number(page.pages || 1) + ' · ' + Number(page.total || expenses.length) + ' expenses</span><button type="button" data-classification-page="' + (Number(page.page || 1) - 1) + '"' + (Number(page.page || 1) <= 1 ? ' disabled' : '') + '>Previous</button><button type="button" data-classification-page="' + (Number(page.page || 1) + 1) + '"' + (Number(page.page || 1) >= Number(page.pages || 1) ? ' disabled' : '') + '>Next</button></div>';
     }
+    function parkInlineEditor() {
+      var editor = el('classificationEditDialog'), stash = el('classificationInlineEditorStash');
+      if (!editor) return;
+      editor.hidden = true;
+      if (stash && stash.appendChild && editor.parentNode !== stash) stash.appendChild(editor);
+    }
+    function mountInlineEditor() {
+      if (!state.editing) return;
+      var table = el('classificationTable'), editor = el('classificationEditDialog');
+      if (!table || !table.querySelector || !editor) return;
+      var host = table.querySelector('[data-classification-editor-host]');
+      if (!host || !host.appendChild) return;
+      host.appendChild(editor); editor.hidden = false;
+    }
+    function findExpenseRow(id) {
+      var table = el('classificationTable');
+      if (!table || !table.querySelectorAll) return null;
+      return Array.from(table.querySelectorAll('[data-expense-id]')).find(function (node) { return node.getAttribute('data-expense-id') === String(id); }) || null;
+    }
+    function captureViewportAnchor(id) {
+      var node = findExpenseRow(id);
+      return { id: String(id || ''), top: node && node.getBoundingClientRect ? node.getBoundingClientRect().top : null, scrollY: Number(win.scrollY || 0) };
+    }
+    function restoreViewportAnchor(anchor) {
+      if (!anchor || typeof win.scrollTo !== 'function') return;
+      var restore = function () {
+        var node = findExpenseRow(anchor.id);
+        if (node && node.getBoundingClientRect && anchor.top != null) win.scrollTo(0, Number(win.scrollY || 0) + node.getBoundingClientRect().top - anchor.top);
+        else win.scrollTo(0, anchor.scrollY);
+      };
+      if (typeof win.requestAnimationFrame === 'function') win.requestAnimationFrame(restore); else restore();
+    }
     function renderCategories() {
+      parkInlineEditor();
       renderSummary();
       if (!state.categories.length) {
         el('classificationTable').innerHTML = '<tr><td colspan="6" class="classification-empty"><strong>No classified expenses found</strong><span>Try another entity, date range or search.</span></td></tr>';
@@ -168,6 +207,7 @@
         lastEntity = entity;
         return heading + '<tr><td>' + esc(entity) + '</td><td><span class="classification-category-name">' + esc(category) + '</span>' + (row.valid === false ? '<span class="classification-needs-review">Needs review</span>' : '') + '</td><td>' + esc(row.group || 'Ungrouped') + '<span class="classification-group">' + esc(row.type || '—') + '</span></td><td class="num">' + Number(row.count || 0) + '</td><td class="num"><b>' + esc(formatMoney(row.total)) + '</b></td><td><button type="button" class="classification-expand" data-open-classification="' + index + '" aria-expanded="' + (open ? 'true' : 'false') + '" aria-controls="classification-detail-' + index + '">' + (open ? 'Close expenses' : 'Review expenses') + ' →</button></td></tr>' + (open ? '<tr class="classification-detail-row"><td colspan="6"><div id="classification-detail-' + index + '" class="classification-detail">' + renderExpenses() + '</div></td></tr>' : '');
       }).join('');
+      mountInlineEditor();
     }
     function syncSelection() {
       var rows = Array.from(state.selectedRows.values()), total = rows.reduce(function (sum, row) { return sum + amount(row.amount); }, 0);
@@ -177,12 +217,13 @@
     }
     function loadSummaries(successText) {
       if (state.loading) return Promise.resolve(false);
+      if (guardDirty('applying filters or refreshing the review')) return Promise.resolve(false);
       var selected = selectedEntityList();
       if (!selected.length) { setMessage('classificationMessage', 'Select at least one entity.', true); return Promise.resolve(false); }
       var appliedFilters = currentFilters();
       state.appliedFilters = Object.assign({}, appliedFilters, { entities: appliedFilters.entities.slice() });
       var generation = ++state.generation;
-      state.open = null; state.details = null; state.selectedRows.clear(); syncSelection(); skeletonRows(); setBusy(true); setMessage('classificationMessage', 'Loading category totals…');
+      state.open = null; state.details = null; state.editing = null; parkInlineEditor(); state.selectedRows.clear(); syncSelection(); skeletonRows(); setBusy(true); setMessage('classificationMessage', 'Loading category totals…');
       return request('/api/expenses/classification-review' + queryString(appliedFilters)).then(function (data) {
         if (generation !== state.generation) return false;
         acceptPayload(data); renderCategories(); setMessage('classificationMessage', successText || 'Categories are alphabetical by entity. Open one to review the highest recorded amounts first.'); return true;
@@ -192,8 +233,9 @@
       }).finally(function () { if (generation === state.generation) setBusy(false); });
     }
     function loadCategory(summary, page) {
+      if (guardDirty('opening another category or page')) return Promise.resolve(false);
       var generation = ++state.generation;
-      state.details = null; renderCategories(); setBusy(true);
+      state.details = null; state.editing = null; parkInlineEditor(); renderCategories(); setBusy(true);
       var baseFilters = state.appliedFilters || currentFilters();
       var detailFilters = Object.assign({}, baseFilters, { entities: [summary.entity], allEntities: false, category: summary.name, page: page || 1, limit: 50 });
       return request('/api/expenses/classification-review' + queryString(detailFilters)).then(function (data) {
@@ -205,7 +247,9 @@
       }).catch(function (error) { if (state.open && state.open.key === keyOf(summary.entity, summary.name)) { state.details = { error: error.message, expenses: [] }; renderCategories(); } return false; }).finally(function () { if (generation === state.generation) setBusy(false); });
     }
     function activate(view, updateUrl) {
-      view = view === 'review' ? 'review' : 'setup'; state.active = view;
+      view = view === 'review' ? 'review' : 'setup';
+      if (guardDirty(view === 'setup' ? 'opening Category setup' : 'refreshing Review classification')) return Promise.resolve(false);
+      state.active = view;
       el('categorySetupTab').setAttribute('aria-selected', String(view === 'setup'));
       el('classificationReviewTab').setAttribute('aria-selected', String(view === 'review'));
       el('categorySetupPanel').hidden = view !== 'setup'; el('classificationReviewPanel').hidden = view !== 'review';
@@ -214,17 +258,36 @@
       // workspace is hidden. Always refetch when Review is opened so an old
       // in-memory category list can never be used for a correction.
       if (view === 'review') return loadSummaries();
+      state.editing = null; parkInlineEditor();
       return Promise.resolve(true);
     }
     function rowById(id) {
       id = String(id);
       return (state.details && state.details.expenses || []).find(function (row) { return rowKey(row) === id; }) || state.selectedRows.get(id);
     }
+    function editorIsDirty() {
+      if (!state.editing) return false;
+      var row = state.editing;
+      return (editable(row, 'entity') && String(el('classificationEditEntity').value || '') !== String(row.entity || '')) ||
+        (editable(row, 'category') && String(el('classificationEditCategory').value || '') !== String(row.category || '')) ||
+        (editable(row, 'vendor') && clean(el('classificationEditVendor').value) !== clean(row.vendor)) ||
+        (editable(row, 'narration') && String(el('classificationEditNarration').value || '').trim() !== String(row.narration || '').trim()) ||
+        clean(el('classificationEditReason').value).length > 0;
+    }
+    function guardDirty(destination) {
+      if (!editorIsDirty()) return false;
+      setMessage('classificationEditMessage', 'You have unsaved label changes. Save or Cancel before ' + String(destination || 'continuing') + '.', true);
+      el('classificationSaveEdit').focus();
+      return true;
+    }
     function openEditor(id) {
       if (state.loading) return;
       var row = rowById(id); if (!row) return setMessage('classificationMessage', 'This expense is no longer in the loaded page. Refresh and try again.', true);
+      if (state.editing && rowKey(state.editing) === rowKey(row)) { closeEditor(); return; }
+      if (guardDirty('opening another expense')) return;
+      var anchor = captureViewportAnchor(id);
       state.editing = row;
-      el('classificationEditTitle').textContent = 'Correct classification'; el('classificationEditSubtitle').textContent = (row.reference || row.id) + ' · ' + formatMoney(row.amount);
+      el('classificationEditTitle').textContent = 'Correct labels'; el('classificationEditSubtitle').textContent = (row.reference || row.id) + ' · ' + formatMoney(row.amount);
       el('classificationEditEntity').innerHTML = state.allowedEntities.map(function (entity) { return '<option value="' + esc(entity) + '"' + (entity === row.entity ? ' selected' : '') + '>' + esc(entity === 'PERSONAL' ? 'Gagan Sir Personal' : entity) + '</option>'; }).join('');
       el('classificationEditEntity').value = row.entity; el('classificationEditEntity').disabled = !editable(row, 'entity');
       el('classificationEntityHint').textContent = editable(row, 'entity') ? 'Entity can be corrected for this unprotected source.' : 'Locked: ' + fieldLock(row, 'entity');
@@ -232,16 +295,72 @@
       el('classificationEditVendor').value = row.vendor || ''; el('classificationEditNarration').value = row.narration || ''; el('classificationEditReason').value = '';
       el('classificationEditVendor').disabled = !editable(row, 'vendor'); el('classificationEditNarration').disabled = !editable(row, 'narration');
       var lockedLabels = [['entity', 'Entity'], ['category', 'Category'], ['vendor', 'Vendor'], ['narration', 'Narration']].filter(function (item) { return !editable(row, item[0]); }).map(function (item) { return item[1] + ': ' + fieldLock(row, item[0]); });
-      el('classificationFieldAccessNote').textContent = lockedLabels.length ? 'Protected labels — ' + lockedLabels.join(' · ') : 'All four reporting labels can be corrected. Financial evidence remains protected.';
-      el('classificationLockedFields').innerHTML = protectedCell('Amount', formatMoney(row.amount)) + protectedCell('Date', row.date) + protectedCell('Payment method', row.paymentMethod) + protectedCell('Paying account', row.account) + protectedCell('Proof evidence', Number(row.proofCount || 0) + ' file' + (Number(row.proofCount || 0) === 1 ? '' : 's')) + protectedCell('Reconciliation', row.reconciled ? 'Linked and protected' : 'Not reconciled');
+      el('classificationFieldAccessNote').textContent = lockedLabels.length ? 'Protected labels — ' + lockedLabels.join(' · ') : '';
       var hasEditableLabel = ['entity', 'category', 'vendor', 'narration'].some(function (field) { return editable(row, field); });
       el('classificationSaveEdit').disabled = !hasEditableLabel;
-      setMessage('classificationEditMessage', hasEditableLabel ? '' : 'This source workflow protects every reporting label. Correct it from the source record instead.', !hasEditableLabel); el('classificationEditDialog').showModal();
+      setMessage('classificationEditMessage', hasEditableLabel ? '' : 'This source workflow protects every reporting label. Correct it from the source record instead.', !hasEditableLabel);
+      renderCategories(); restoreViewportAnchor(anchor);
       var focusTarget = ['classificationEditEntity', 'classificationEditCategory', 'classificationEditVendor', 'classificationEditNarration'].map(el).find(function (node) { return !node.disabled; });
       (focusTarget || el('classificationCloseEdit')).focus();
     }
-    function closeEditor() { if (!state.loading) { el('classificationEditDialog').close(); state.editing = null; } }
+    function closeEditor(discard) {
+      if (state.loading || !state.editing) return;
+      if (!discard && guardDirty('closing this editor')) return;
+      var anchor = captureViewportAnchor(rowKey(state.editing));
+      state.editing = null; parkInlineEditor(); renderCategories(); restoreViewportAnchor(anchor);
+    }
     function patchOptions(body) { return { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }; }
+    function summaryCategoryName(value) { return clean(value) || 'Unclassified'; }
+    function rowMatchesAppliedFilters(row) {
+      var filters = state.appliedFilters || {}, entities = Array.isArray(filters.entities) ? filters.entities : [];
+      if (entities.length && entities.indexOf(String(row.entity || '')) < 0) return false;
+      var search = clean(filters.search).toLocaleLowerCase();
+      if (!search) return true;
+      return [row.id, row.recordId, row.vendor, row.narration, row.category, row.account, row.reference].some(function (value) { return String(value || '').toLocaleLowerCase().includes(search); });
+    }
+    function reduceDetailTotal() {
+      if (!state.details || !state.details.pagination) return;
+      state.details.pagination.total = Math.max(0, Number(state.details.pagination.total || 0) - 1);
+      state.details.pagination.pages = Math.max(1, Math.ceil(state.details.pagination.total / 50));
+    }
+    function applySavedRow(savedRow, previousRow) {
+      var next = Object.assign({}, previousRow, savedRow || {}), previousId = rowKey(previousRow), nextId = rowKey(next);
+      var previousName = summaryCategoryName(previousRow.category), nextName = summaryCategoryName(next.category);
+      var previousKey = keyOf(previousRow.entity, previousName), nextKey = keyOf(next.entity, nextName);
+      var nextVisible = rowMatchesAppliedFilters(next), summaryChanged = previousKey !== nextKey || !nextVisible;
+      if (state.details && Array.isArray(state.details.expenses)) {
+        if (previousKey === nextKey && nextVisible) state.details.expenses = state.details.expenses.map(function (row) { return rowKey(row) === previousId ? next : row; });
+        else {
+          state.details.expenses = state.details.expenses.filter(function (row) { return rowKey(row) !== previousId; });
+          reduceDetailTotal();
+        }
+      }
+      if (state.selectedRows.has(previousId)) { state.selectedRows.delete(previousId); state.selectedRows.set(nextId, next); }
+      if (summaryChanged) {
+        var oldSummary = state.categories.find(function (row) { return keyOf(row.entity, row.name) === previousKey; });
+        if (oldSummary) { oldSummary.count = Math.max(0, Number(oldSummary.count || 0) - 1); oldSummary.total = Math.max(0, amount(oldSummary.total) - amount(previousRow.amount)); }
+        var searchActive = clean(state.appliedFilters && state.appliedFilters.search).length > 0;
+        var oldSummaryRemoved = Boolean(searchActive && oldSummary && Number(oldSummary.count || 0) === 0);
+        if (oldSummaryRemoved) state.categories = state.categories.filter(function (row) { return row !== oldSummary; });
+        if (nextVisible) {
+          var newSummary = state.categories.find(function (row) { return keyOf(row.entity, row.name) === nextKey; });
+          if (!newSummary) {
+            var choice = choiceRows(next.entity).find(function (row) { return String(row.name || row) === String(next.category || ''); }) || {};
+            newSummary = { entity: next.entity, name: nextName, group: choice.group || 'Ungrouped', type: choice.type || '—', count: 0, total: 0, valid: nextName !== 'Unclassified' };
+            state.categories.push(newSummary);
+          }
+          newSummary.count = Number(newSummary.count || 0) + 1;
+          newSummary.total = amount(newSummary.total) + amount(next.amount);
+        }
+        state.categories = sortCategories(state.categories);
+        if (state.open && state.open.key === previousKey) {
+          if (oldSummaryRemoved) { state.open = null; state.details = null; }
+          else if (oldSummary) state.open.summary = oldSummary;
+        }
+      }
+      state.editing = null; parkInlineEditor(); renderCategories(); syncSelection();
+      return next;
+    }
     function saveEditor() {
       if (state.loading || !state.editing) return Promise.resolve(false);
       if (!hasWriteToken(state.editing)) { setMessage('classificationEditMessage', 'This row is missing its current safety token. Close the editor, refresh the category and try again.', true); return Promise.resolve(false); }
@@ -262,10 +381,13 @@
       body.sourceType = state.editing.sourceType || 'expense';
       body.expectedRevision = Number(state.editing.revision);
       body.fingerprint = String(state.editing.fingerprint || '');
-      var id = String(state.editing.recordId || state.editing.id); setBusy(true); setMessage('classificationEditMessage', 'Saving classification…');
+      var previousRow = state.editing, anchor = captureViewportAnchor(rowKey(previousRow));
+      var id = String(previousRow.recordId || previousRow.id); setBusy(true); setMessage('classificationEditMessage', 'Saving labels…');
       return request('/api/expenses/classification-review/' + encodeURIComponent(id), patchOptions(body)).then(function (data) {
         if (!data || data.success !== true || !data.expense) throw Error('The correction was saved but could not be confirmed. Refresh before retrying.');
-        el('classificationEditDialog').close(); state.editing = null; setBusy(false); return loadSummaries('Classification corrected. Amount, date, payment and evidence were unchanged.');
+        setBusy(false); applySavedRow(data.expense, previousRow); restoreViewportAnchor(anchor);
+        setMessage('classificationMessage', 'Labels corrected. Amount, date, payment and evidence were unchanged.');
+        return true;
       }).catch(function (error) { setMessage('classificationEditMessage', error.message, true); return false; }).finally(function () { if (state.loading) setBusy(false); });
     }
     function syncBulkCategories() {
@@ -278,6 +400,8 @@
     }
     function openBulk() {
       if (state.loading || !state.selectedRows.size) return;
+      if (guardDirty('opening the bulk editor')) return;
+      if (state.editing) closeEditor(true);
       el('classificationBulkSubtitle').textContent = state.selectedRows.size + ' selected expenses · ' + formatMoney(Array.from(state.selectedRows.values()).reduce(function (sum, row) { return sum + amount(row.amount); }, 0));
       el('classificationBulkEntity').innerHTML = '<option value="">Keep each current entity</option>' + state.allowedEntities.map(function (entity) { return '<option value="' + esc(entity) + '">' + esc(entity === 'PERSONAL' ? 'Gagan Sir Personal' : entity) + '</option>'; }).join('');
       var lockedEntities = Array.from(state.selectedRows.values()).filter(function (row) { return !editable(row, 'entity'); });
@@ -317,7 +441,7 @@
       });
       el('classificationTable').addEventListener('click', function (event) {
         var open = event.target.closest && event.target.closest('[data-open-classification]');
-        if (open && !state.loading) { var summary = state.categories[Number(open.getAttribute('data-open-classification'))]; if (!summary) return; var key = keyOf(summary.entity, summary.name); if (state.open && state.open.key === key) { state.open = null; state.details = null; renderCategories(); } else { state.open = { key: key, summary: summary }; loadCategory(summary, 1); } return; }
+        if (open && !state.loading) { if (guardDirty('opening another category')) return; var summary = state.categories[Number(open.getAttribute('data-open-classification'))]; if (!summary) return; var key = keyOf(summary.entity, summary.name); if (state.open && state.open.key === key) { state.open = null; state.details = null; state.editing = null; renderCategories(); } else { state.open = { key: key, summary: summary }; loadCategory(summary, 1); } return; }
         var edit = event.target.closest && event.target.closest('[data-edit-classification]'); if (edit) openEditor(edit.getAttribute('data-edit-classification'));
         var page = event.target.closest && event.target.closest('[data-classification-page]'); if (page && !page.disabled && state.open) loadCategory(state.open.summary, Number(page.getAttribute('data-classification-page')));
       });
@@ -329,9 +453,13 @@
       el('classificationClearSelection').onclick = function () { state.selectedRows.clear(); renderCategories(); syncSelection(); };
       el('classificationBulkEdit').onclick = openBulk;
       el('classificationEditEntity').onchange = function () { renderCategoryOptions(el('classificationEditCategory'), this.value, ''); };
-      el('classificationSaveEdit').onclick = saveEditor; el('classificationCloseEdit').onclick = closeEditor;
+      el('classificationSaveEdit').onclick = saveEditor; el('classificationCloseEdit').onclick = function () { closeEditor(true); };
       el('classificationBulkEntity').onchange = syncBulkCategories; el('classificationSaveBulk').onclick = saveBulk; el('classificationCloseBulk').onclick = closeBulk;
-      ['classificationEditDialog', 'classificationBulkDialog'].forEach(function (id) { el(id).addEventListener('cancel', function (event) { if (state.loading) event.preventDefault(); }); });
+      el('classificationEditDialog').addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && !state.loading) { event.preventDefault(); closeEditor(); }
+        else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !state.loading) { event.preventDefault(); saveEditor(); }
+      });
+      el('classificationBulkDialog').addEventListener('cancel', function (event) { if (state.loading) event.preventDefault(); });
     }
     function init() {
       if (state.initialized) return Promise.resolve(true);
