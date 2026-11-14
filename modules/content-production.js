@@ -50,8 +50,8 @@ function createStore(options={}){
   return x;
  }
  function save(b,u,id){if(!editor(u))fail('Content team access required to edit content.',403);return change(b.revision,u.username,s=>{const old=id?s.items.find(i=>i.id===id):null;if(id&&!old)fail('Content not found.',404);
-   const payload={...old,...b};if(!finances(u))payload.adIds=old?.adIds||[];
-   const item=normalize(payload,old,s);if(Object.prototype.hasOwnProperty.call(b,'type'))item.typeOverride=true;if(Object.prototype.hasOwnProperty.call(b,'postingStatus')){if(!['posted','not_posted'].includes(b.postingStatus))fail('Choose Posted or Not posted.');item.postingOverride=b.postingStatus;}item.updatedAt=new Date().toISOString();item.updatedBy=u.username;item.createdAt=old?.createdAt||item.updatedAt;if(old)Object.assign(old,item);else s.items.push(item);return {action:old?'update':'create',id:item.id};});}
+   const payload={...old,...b};if(payload.editStatus==='done'&&old?.editStatus!=='done'&&!payload.editedDate)payload.editedDate=today();if(!finances(u))payload.adIds=old?.adIds||[];
+   const item=normalize(payload,old,s);if(item.editStatus==='editing'&&old?.editStatus!=='editing')item.editingStartedAt=new Date().toISOString();if(item.editStatus==='done'&&old?.editStatus!=='done')item.editingCompletedAt=new Date().toISOString();if(Object.prototype.hasOwnProperty.call(b,'type'))item.typeOverride=true;if(Object.prototype.hasOwnProperty.call(b,'postingStatus')){if(!['posted','not_posted'].includes(b.postingStatus))fail('Choose Posted or Not posted.');item.postingOverride=b.postingStatus;}item.updatedAt=new Date().toISOString();item.updatedBy=u.username;item.createdAt=old?.createdAt||item.updatedAt;if(old)Object.assign(old,item);else s.items.push(item);return {action:old?'update':'create',id:item.id};});}
  function plan(s){
   const output=[],start=s.settings.start>today()?s.settings.start:today(),used=new Map(),latest={};
   for(const a of s.settings.accounts){const seen=new Set();used.set(a.account,seen);for(const p of s.publications.filter(p=>p.account===a.account)){seen.add(p.contentId);latest[p.contentId+'|'+a.account]=p;}}
@@ -112,6 +112,7 @@ function createRouter(store=createStore()){
  r.post(BASE+'/import',(req,res,next)=>{if(!manager(req.user))return res.status(403).json({success:false,error:'Only the owner can import content.'});upload.single('file')(req,res,err=>{if(err)return res.status(400).json({success:false,error:'Choose one XLSX file below 10 MB.'});next();});},run(req=>{if(!req.file||!req.file.originalname.toLowerCase().endsWith('.xlsx'))fail('Choose an XLSX workbook.');if(req.body.preview!=='true'&&req.body.confirmed!=='true')fail('Preview and confirm the import first.');return store.importSheet(req.file.buffer,Number(req.body.revision),req.user,req.body.preview==='true');}));
  r.get(BASE,run(req=>({...store.view(req.user),sheetSync:sheetSync.status()})));
  r.post(BASE+'/sheet-sync',async(req,res)=>{if(!manager(req.user))return res.status(403).json({success:false,error:'Only the owner can configure sheet sync.'});try{if(req.body.enabled!==undefined)sheetSync.configure(req.body.enabled);const status=req.body.refresh?await sheetSync.run(true):sheetSync.status();res.json({success:true,sheetSync:status});}catch(e){res.status(400).json({success:false,error:e.message});}});
+ r.get(BASE+'/revision',run(()=>({revision:store.load().revision})));
  r.get(BASE+'/catalogue',run(()=>({products:store.catalog()})));
  r.get(BASE+'/shoots',run(()=>({shoots:store.bookings()})));
  r.get(BASE+'/people',run(req=>{if(!editor(req.user))return {people:[]};const au=require('./auth-users');return {people:au.listContentPeople()};}));
