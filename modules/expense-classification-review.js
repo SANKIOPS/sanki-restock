@@ -69,6 +69,26 @@ function categoryChoices(store, selectedEntities, deps) {
   }));
 }
 
+function vendorChoices(store, allowedEntities, deps) {
+  return Object.fromEntries(allowedEntities.map(allowedEntity => {
+    const seen = new Set();
+    const names = (typeof deps.vendorChoicesForNature === 'function' ? [].concat(deps.vendorChoicesForNature(store, allowedEntity) || []) : [])
+      .map(value => String(value || '').trim())
+      .filter(name => {
+        const key = name.toLocaleLowerCase();
+        return !!name && !seen.has(key) && !!seen.add(key);
+      })
+      .sort((a, b) => a.localeCompare(b));
+    return [allowedEntity, names];
+  }));
+}
+
+function existingVendor(store, selectedEntity, requestedVendor, deps) {
+  const requestedKey = String(requestedVendor || '').trim().toLocaleLowerCase();
+  if (!requestedKey) return '';
+  return (vendorChoices(store, [selectedEntity], deps)[selectedEntity] || []).find(name => name.toLocaleLowerCase() === requestedKey) || '';
+}
+
 function refundLinked(store, expense) {
   if (!expense) return false;
   if (expense.expenseRefundReceiptId) return true;
@@ -156,19 +176,57 @@ function editPolicy(store, expense, sourceType) {
   return {editable:editableFields.length > 0, editableFields, fieldLocks, readOnlyReason:Array.from(new Set(Object.values(fieldLocks))).join(' ')};
 }
 
-function proofCount(expense) {
-  const values = [];
-  const add = value => {
+function safeProofUrl(value) {
+  const candidate = value && typeof value === 'object' ? value.url || value.href : value;
+  const raw = String(candidate || '');
+  if (/[\\\u0000-\u001f\u007f]/.test(raw)) return '';
+  const text = raw.trim();
+  if (!text || text.startsWith('//')) return '';
+  if (text.startsWith('/')) return text;
+  if (!/^https:\/\//i.test(text)) return '';
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === 'https:' && parsed.hostname && !parsed.username && !parsed.password ? text : '';
+  } catch {
+    return '';
+  }
+}
+
+function proofEntries(expense) {
+  const entries = [], seen = new Set(), counts = new Map();
+  const add = (value, kind, label) => {
     [].concat(Array.isArray(value) ? value : (value ? [value] : [])).forEach(item => {
-      const text = String(item || '').trim();
-      if (text) values.push(text);
+      const url = safeProofUrl(item);
+      if (!url || seen.has(url)) return;
+      seen.add(url);
+      const number = Number(counts.get(kind) || 0) + 1;
+      counts.set(kind, number);
+      entries.push({kind, label:label + ' ' + number, url});
     });
   };
-  ['billPhotos', 'billPhoto', 'purchasePaymentProofs', 'purchasePaymentProof', 'paymentProofs', 'paymentProof', 'qrPhoto', 'exceptionEvidence'].forEach(key => add(expense[key]));
-  [].concat(expense.payments || [], expense.reimbursementPayments || []).forEach(payment => {
-    add(payment && payment.proofs); add(payment && payment.proof);
+  add(expense && expense.billPhotos, 'bill', 'Bill');
+  add(expense && expense.billPhoto, 'bill', 'Bill');
+  add(expense && expense.qrPhoto, 'vendor_qr', 'QR');
+  add(expense && expense.purchasePaymentProofs, 'personal_payment', 'Personal payment');
+  add(expense && expense.purchasePaymentProof, 'personal_payment', 'Personal payment');
+  add(expense && expense.paymentProofs, 'payment', 'Payment');
+  add(expense && expense.paymentProof, 'payment', 'Payment');
+  add(expense && expense.proofs, 'reconciliation', 'Reconciliation');
+  add(expense && expense.proof, 'reconciliation', 'Reconciliation');
+  add(expense && expense.exceptionEvidence, 'other', 'Other evidence');
+  [].concat(expense && expense.payments || []).forEach(payment => {
+    add(payment && payment.proofs, 'payment', 'Payment');
+    add(payment && payment.proof, 'payment', 'Payment');
   });
-  return new Set(values).size;
+  [].concat(expense && expense.reimbursementPayments || []).forEach(payment => {
+    add(payment && payment.proofs, 'reimbursement', 'Reimbursement');
+    add(payment && payment.proof, 'reimbursement', 'Reimbursement');
+  });
+  return entries;
+}
+
+function proofCount(expense) {
+  return proofEntries(expense).length;
 }
 
 function reconciliationReference(store, expense, sourceType) {
@@ -195,7 +253,7 @@ function reconciled(store, expense, sourceType) {
 function row(store, expense, sourceType) {
   const source = SOURCE_TYPES.has(sourceType) ? sourceType : 'expense';
   const companyPayment = [].concat(expense.payments || []).filter(payment => payment && !payment.accountingExcluded).at(-1);
-  const policy = editPolicy(store, expense, source);
+  const policy = editPolicy(store, expense, source), proofs = proofEntries(expense);
   return {
     id: String(expense.id || ''),
     recordId: String(expense.id || ''),
@@ -216,7 +274,8 @@ function row(store, expense, sourceType) {
     account: String(companyPayment && companyPayment.account || expense.account || '').trim(),
     paymentMethod: String(companyPayment && companyPayment.paymentType || expense.paymentType || (source === 'reconciliation_expense' ? 'Bank reconciliation' : '')).trim(),
     reference: reconciliationReference(store, expense, source),
-    proofCount: proofCount(expense),
+    proofCount: proofs.length,
+    proofs,
     reconciled: reconciled(store, expense, source),
     ...policy
   };
@@ -286,10 +345,12 @@ function applyClassification(store, req, expense, sourceType, requested, reason,
         type:previous.type
       });
   if (!categoryDefinition) return { status:400, error:'Select an active category assigned to the selected accounting entity.' };
-  if (requested.vendor !== undefined && requested.vendor !== previous.vendor && !policy.editableFields.includes('vendor')) return { status:409, error:policy.fieldLocks.vendor || 'This expense vendor is locked by its accounting source.' };
-  const shouldRegisterVendor = targetEntity !== previous.entity || (requested.vendor !== undefined && requested.vendor !== previous.vendor);
+  const vendorChanged = requested.vendor !== undefined && requested.vendor.trim().toLocaleLowerCase() !== previous.vendor.trim().toLocaleLowerCase();
+  if (vendorChanged && !policy.editableFields.includes('vendor')) return { status:409, error:policy.fieldLocks.vendor || 'This expense vendor is locked by its accounting source.' };
+  const shouldResolveVendor = targetEntity !== previous.entity || vendorChanged;
   const proposedVendor = requested.vendor === undefined ? previous.vendor : requested.vendor;
-  const canonicalVendor = shouldRegisterVendor ? (deps.registerVendorForNature(store, targetEntity, proposedVendor, {}) || proposedVendor) : proposedVendor;
+  const canonicalVendor = shouldResolveVendor ? existingVendor(store, targetEntity, proposedVendor, deps) : proposedVendor;
+  if (shouldResolveVendor && !canonicalVendor) return { status:400, error:'Select an existing vendor assigned to the selected accounting entity. Review Classification cannot create vendors.' };
   const next = {
     entity: targetEntity,
     category: categoryDefinition.name,
@@ -306,7 +367,7 @@ function applyClassification(store, req, expense, sourceType, requested, reason,
   else expense.ledger = next.category;
   if (next.type) expense.type = next.type; else delete expense.type;
   if (next.categoryGroup) expense.categoryGroup = next.categoryGroup; else delete expense.categoryGroup;
-  if (shouldRegisterVendor) expense.vendor = next.vendor;
+  if (shouldResolveVendor) expense.vendor = next.vendor;
   expense.particulars = next.narration;
   expense.classificationRevision = revision(expense) + 1;
   const finalClassification = classificationSnapshot(expense, source);
@@ -370,7 +431,7 @@ function register(router, deps) {
     const limit = Math.max(1, Math.min(250, Math.floor(Number(req.query && req.query.limit) || 100)));
     const categoryFilter = String(req.query && req.query.category || '').trim();
     const search = String(req.query && req.query.search || '').trim().toLocaleLowerCase();
-    const store = deps.loadStore(), choices = categoryChoices(store, allowed, deps);
+    const store = deps.loadStore(), choices = categoryChoices(store, allowed, deps), vendors = vendorChoices(store, allowed, deps);
     const records = Object.values(store.expenses || {}).map(expense => ({sourceType:'expense',expense})).concat([].concat(store.reconciliationExpenses || []).map(expense => ({sourceType:'reconciliation_expense',expense}))).filter(record => {
       const {expense,sourceType} = record, expenseEntity = entity(expense && expense.nature) || 'SANKI';
       if (!selected.includes(expenseEntity) || !reviewableExpense(expense, sourceType, store) || !canAccessExpense(req, expense, deps)) return false;
@@ -393,7 +454,7 @@ function register(router, deps) {
       const current = summary.get(categoryKey) || {entity:selectedEntity,name:categoryName,group:'',type:String(expense.type || ''),count:0,total:0,valid:false};
       current.count += 1; current.total = money(current.total + money(expense.amount)); summary.set(categoryKey, current);
     });
-    const categories = Array.from(summary.values()).sort((a, b) => a.entity.localeCompare(b.entity) || a.name.localeCompare(b.name));
+    const categories = Array.from(summary.values()).sort((a, b) => a.entity.localeCompare(b.entity) || (money(a.total) > 0 ? 0 : 1) - (money(b.total) > 0 ? 0 : 1) || a.name.localeCompare(b.name));
     const matching = categoryFilter ? searchedRecords.filter(({expense,sourceType}) => displayedCategory(expense, sourceType).toLocaleLowerCase() === categoryFilter.toLocaleLowerCase()) : [];
     matching.sort((a, b) => money(b.expense.amount) - money(a.expense.amount) || String(b.expense.date || '').localeCompare(String(a.expense.date || '')) || String(a.expense.id || '').localeCompare(String(b.expense.id || '')) || a.sourceType.localeCompare(b.sourceType));
     const total = matching.length, start = (page - 1) * limit;
@@ -405,6 +466,7 @@ function register(router, deps) {
       selectedFrom:from || '',
       selectedTo:to || '',
       categoryChoices:choices,
+      vendorChoices:vendors,
       categories,
       expenses:matching.slice(start, start + limit).map(record => row(store, record.expense, record.sourceType)),
       pagination:{page,limit,total,pages:Math.max(1, Math.ceil(total / limit))}

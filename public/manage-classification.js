@@ -32,8 +32,39 @@
   }
   function sortCategories(rows) {
     return (Array.isArray(rows) ? rows : []).slice().sort(function (left, right) {
-      return String(left.entity || '').localeCompare(String(right.entity || '')) || String(left.name || '').localeCompare(String(right.name || ''));
+      var entityOrder = String(left.entity || '').localeCompare(String(right.entity || ''));
+      if (entityOrder) return entityOrder;
+      var leftEmpty = amount(left.total) > 0 ? 0 : 1, rightEmpty = amount(right.total) > 0 ? 0 : 1;
+      return leftEmpty - rightEmpty || String(left.name || '').localeCompare(String(right.name || ''));
     });
+  }
+  function safeProofUrl(value) {
+    var raw = String(value == null ? '' : value), url = raw.trim();
+    if (!url || /[\\\u0000-\u001f\u007f-\u009f]/.test(raw) || /%(?:0[0-9a-f]|1[0-9a-f]|5c|7f)/i.test(url)) return '';
+    if (/^\/(?!\/)/.test(url)) return url;
+    if (!/^https:\/\//i.test(url)) return '';
+    try {
+      var parsed = new URL(url);
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return '';
+      return parsed.href;
+    } catch (_) { return ''; }
+  }
+  function proofRows(row) {
+    return (row && Array.isArray(row.proofs) ? row.proofs : []).map(function (proof, index) {
+      if (!proof || typeof proof !== 'object') return null;
+      var url = safeProofUrl(proof.url || proof.href), label = clean(proof.label || proof.name || ('Proof ' + (index + 1)));
+      if (!url) return null;
+      var kind = clean(proof.kind || proof.type).toLowerCase();
+      return { url: url, label: label || ('Proof ' + (index + 1)), kind: kind, sameOrigin: url.charAt(0) === '/' };
+    }).filter(Boolean);
+  }
+  function proofControls(row) {
+    var proofs = proofRows(row);
+    if (!proofs.length) return '<span class="classification-no-proof">No proof attached</span>';
+    return '<span class="classification-proof-list">' + proofs.map(function (proof) {
+      var isImage = proof.sameOrigin && (proof.kind === 'image' || proof.kind.indexOf('image/') === 0 || /\.(?:png|jpe?g|gif|webp|heic)(?:[?#].*)?$/i.test(proof.url));
+      return '<a class="classification-proof-link' + (isImage ? ' has-thumb' : '') + '" href="' + esc(proof.url) + '" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">' + (isImage ? '<img src="' + esc(proof.url) + '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">' : '<span aria-hidden="true">↗</span>') + '<span>' + esc(proof.label) + '</span></a>';
+    }).join('') + '</span>';
   }
   function queryString(filters) {
     var params = [];
@@ -54,6 +85,9 @@
       allowedEntities: [],
       selectedEntities: new Set(),
       categoryChoices: {},
+      vendorChoices: {},
+      vendorChoicesAuthoritative: false,
+      loadedVendors: {},
       categories: [],
       appliedFilters: null,
       open: null,
@@ -110,6 +144,54 @@
         return String(a.name || a).localeCompare(String(b.name || b));
       });
     }
+    function categoryChoice(entity, category) {
+      return choiceRows(entity).find(function (row) { return String(row.name || row) === String(category || ''); }) || null;
+    }
+    function categoryMeta(entity, category, fallback) {
+      var choice = categoryChoice(entity, category), group = clean(choice && choice.group || fallback && fallback.categoryGroup), type = clean(choice && choice.type || fallback && fallback.categoryType);
+      return { group: group || 'Ungrouped', type: type || 'Type not set' };
+    }
+    function syncCategoryMeta() {
+      var node = el('classificationCategoryMeta');
+      if (!node) return;
+      var entity = el('classificationEditEntity').value, category = el('classificationEditCategory').value;
+      if (!category) { node.textContent = 'Choose a category to see its group and type.'; return; }
+      var meta = categoryMeta(entity, category, state.editing);
+      node.textContent = 'Group: ' + meta.group + ' · Type: ' + meta.type;
+    }
+    function acceptVendorChoices(data) {
+      if (!data || !Object.prototype.hasOwnProperty.call(data, 'vendorChoices')) return;
+      var grouped = {};
+      if (Array.isArray(data.vendorChoices)) data.vendorChoices.forEach(function (choice) {
+        var name = clean(choice && typeof choice === 'object' ? choice.name : choice), entity = clean(choice && typeof choice === 'object' ? choice.entity : '');
+        if (!name) return;
+        if (entity) (grouped[entity] = grouped[entity] || []).push(name);
+        else state.allowedEntities.forEach(function (allowed) { (grouped[allowed] = grouped[allowed] || []).push(name); });
+      });
+      else if (data.vendorChoices && typeof data.vendorChoices === 'object') Object.keys(data.vendorChoices).forEach(function (entity) {
+        grouped[entity] = [].concat(data.vendorChoices[entity] || []).map(function (choice) { return clean(choice && typeof choice === 'object' ? choice.name : choice); }).filter(Boolean);
+      });
+      Object.keys(grouped).forEach(function (entity) { grouped[entity] = Array.from(new Set(grouped[entity])).sort(function (a, b) { return a.localeCompare(b); }); });
+      state.vendorChoices = grouped; state.vendorChoicesAuthoritative = true;
+    }
+    function rememberLoadedVendors(rows) {
+      [].concat(rows || []).forEach(function (row) {
+        var entity = clean(row && row.entity), vendor = clean(row && row.vendor);
+        if (!entity || !vendor) return;
+        var current = state.loadedVendors[entity] || [];
+        if (!current.some(function (name) { return name.toLocaleLowerCase() === vendor.toLocaleLowerCase(); })) current.push(vendor);
+        state.loadedVendors[entity] = current.sort(function (a, b) { return a.localeCompare(b); });
+      });
+    }
+    function vendorNames(entity, current) {
+      var names = state.vendorChoicesAuthoritative ? [].concat(state.vendorChoices[entity] || []) : [].concat(state.loadedVendors[entity] || []), selected = clean(current);
+      if (selected && !state.vendorChoicesAuthoritative) names.push(selected);
+      var byKey = new Map(); names.forEach(function (name) { name = clean(name); if (name && !byKey.has(name.toLocaleLowerCase())) byKey.set(name.toLocaleLowerCase(), name); });
+      return Array.from(byKey.values()).sort(function (a, b) { return a.localeCompare(b); });
+    }
+    function renderVendorOptions(entity, current) {
+      el('classificationVendorChoices').innerHTML = vendorNames(entity, current).map(function (name) { return '<option value="' + esc(name) + '"></option>'; }).join('');
+    }
     function renderCategoryOptions(node, entity, selected, optionalLabel) {
       var choices = choiceRows(entity), names = choices.map(function (row) { return String(row.name || row); });
       selected = String(selected || '');
@@ -118,7 +200,7 @@
         : (!selected ? '<option value="" disabled selected>Select category</option>' : '');
       if (selected && names.indexOf(selected) < 0) html += '<option value="' + esc(selected) + '" selected>' + esc(selected) + ' · recorded</option>';
       html += choices.map(function (row) {
-        var name = String(row.name || row), suffix = row.group ? ' · ' + row.group : '';
+        var name = String(row.name || row), suffix = (row.group ? ' · ' + row.group : '') + (row.type ? ' · ' + row.type : '');
         return '<option value="' + esc(name) + '"' + (name === selected ? ' selected' : '') + '>' + esc(name + suffix) + '</option>';
       }).join('');
       node.innerHTML = html;
@@ -132,6 +214,7 @@
       state.selectedEntities = new Set((previous.length ? previous : data.selectedEntities || state.allowedEntities).filter(function (entity) { return state.allowedEntities.indexOf(entity) >= 0; }));
       if (!state.selectedEntities.size) state.allowedEntities.forEach(function (entity) { state.selectedEntities.add(entity); });
       state.categoryChoices = data.categoryChoices;
+      acceptVendorChoices(data);
       state.categories = sortCategories(data.categories);
       state.loaded = true;
       renderEntities();
@@ -153,10 +236,11 @@
       var selectedVisible = expenses.length && expenses.every(function (row) { return state.selectedRows.has(rowKey(row)); });
       var rows = expenses.map(function (row) {
         var id = rowKey(row), isEditing = Boolean(state.editing && rowKey(state.editing) === id);
-        var proofText = Number(row.proofCount || 0) + ' proof' + (Number(row.proofCount || 0) === 1 ? '' : 's');
-        var rowHtml = '<tr data-expense-id="' + esc(id) + '"' + (isEditing ? ' class="classification-editing-row"' : '') + '><td data-label="Select"><input type="checkbox" data-select-classification="' + esc(id) + '" aria-label="Select ' + esc(row.reference || id) + '"' + (state.selectedRows.has(id) ? ' checked' : '') + '></td><td data-label="Date / reference"><b>' + esc(row.date || '—') + '</b><span class="classification-lock">Locked</span><div class="classification-reference">' + esc(row.reference || id) + '</div></td><td data-label="Vendor / narration"><b>' + esc(row.vendor || 'Unspecified vendor') + '</b><br><span class="muted">' + esc(row.narration || 'No narration') + '</span></td><td data-label="Classification"><b>' + esc(row.entity || '—') + '</b> ' + (!editable(row, 'entity') ? '<span class="classification-lock">Entity locked</span>' : '') + '<br><span>' + esc(row.category || 'Unclassified') + '</span></td><td data-label="Payment / evidence"><span class="classification-lock">Locked</span> ' + esc(row.account || 'Account not recorded') + '<br><span class="muted">' + esc(row.paymentMethod || 'Method not recorded') + ' · ' + esc(proofText) + ' · ' + esc(row.reconciled ? 'reconciled' : 'not reconciled') + '</span></td><td data-label="Amount" class="num"><b>' + esc(formatMoney(row.amount)) + '</b><br><span class="classification-lock">Locked</span></td><td data-label="Action" class="classification-row-actions"><button type="button" data-edit-classification="' + esc(id) + '" aria-expanded="' + (isEditing ? 'true' : 'false') + '" aria-controls="classificationEditDialog">' + (isEditing ? 'Close editor' : 'Correct labels') + '</button></td></tr>';
-        if (isEditing) rowHtml += '<tr class="classification-inline-editor-row"><td colspan="7"><div data-classification-editor-host></div></td></tr>';
-        return rowHtml;
+        var meta = categoryMeta(row.entity, row.category, row), reconciliation = row.reconciled ? 'Reconciled' : 'Not reconciled';
+        if (isEditing) {
+          return '<tr data-expense-id="' + esc(id) + '" class="classification-editing-row"><td colspan="7" data-label="Editing expense"><div data-classification-editor-host></div></td></tr>';
+        }
+        return '<tr data-expense-id="' + esc(id) + '"><td data-label="Select"><input type="checkbox" data-select-classification="' + esc(id) + '" aria-label="Select ' + esc(row.reference || id) + '"' + (state.selectedRows.has(id) ? ' checked' : '') + '></td><td data-label="Date / reference"><b>' + esc(row.date || '—') + '</b><span class="classification-lock">Locked</span><div class="classification-reference">' + esc(row.reference || id) + '</div></td><td data-label="Vendor / narration"><b>' + esc(row.vendor || 'Unspecified vendor') + '</b><br><span class="muted">' + esc(row.narration || 'No narration') + '</span></td><td data-label="Classification"><b>' + esc(row.entity || '—') + '</b> ' + (!editable(row, 'entity') ? '<span class="classification-lock">Entity locked</span>' : '') + '<br><span>' + esc(row.category || 'Unclassified') + '</span><span class="classification-group">' + esc(meta.group) + ' · ' + esc(meta.type) + '</span></td><td data-label="Payment / evidence"><span class="classification-lock">Locked</span> ' + esc(row.account || 'Account not recorded') + '<br><span class="muted">' + esc(row.paymentMethod || 'Method not recorded') + ' · ' + esc(reconciliation) + '</span>' + proofControls(row) + '</td><td data-label="Amount" class="num"><b>' + esc(formatMoney(row.amount)) + '</b><br><span class="classification-lock">Locked</span></td><td data-label="Action" class="classification-row-actions"><button type="button" data-edit-classification="' + esc(id) + '" aria-expanded="false" aria-controls="classificationEditDialog">Correct labels</button></td></tr>';
       }).join('');
       var page = detail.pagination || { page: 1, pages: 1, total: expenses.length };
       return '<div class="table-wrap"><table class="classification-expense-table"><thead><tr><th class="check-cell"><input type="checkbox" data-select-visible aria-label="Select all visible expenses"' + (selectedVisible ? ' checked' : '') + '></th><th>Date / reference</th><th>Vendor / narration</th><th>Classification</th><th>Payment / evidence</th><th class="num">Amount</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="classification-pagination"><span>Page ' + Number(page.page || 1) + ' of ' + Number(page.pages || 1) + ' · ' + Number(page.total || expenses.length) + ' expenses</span><button type="button" data-classification-page="' + (Number(page.page || 1) - 1) + '"' + (Number(page.page || 1) <= 1 ? ' disabled' : '') + '>Previous</button><button type="button" data-classification-page="' + (Number(page.page || 1) + 1) + '"' + (Number(page.page || 1) >= Number(page.pages || 1) ? ' disabled' : '') + '>Next</button></div>';
@@ -205,7 +289,7 @@
         var entity = String(row.entity || 'Unassigned'), category = String(row.name || 'Unclassified'), key = keyOf(entity, category), open = state.open && state.open.key === key;
         var heading = entity !== lastEntity ? '<tr class="classification-entity-row"><th colspan="6">' + esc(entity === 'PERSONAL' ? 'Gagan Sir Personal' : entity) + '</th></tr>' : '';
         lastEntity = entity;
-        return heading + '<tr><td>' + esc(entity) + '</td><td><span class="classification-category-name">' + esc(category) + '</span>' + (row.valid === false ? '<span class="classification-needs-review">Needs review</span>' : '') + '</td><td>' + esc(row.group || 'Ungrouped') + '<span class="classification-group">' + esc(row.type || '—') + '</span></td><td class="num">' + Number(row.count || 0) + '</td><td class="num"><b>' + esc(formatMoney(row.total)) + '</b></td><td><button type="button" class="classification-expand" data-open-classification="' + index + '" aria-expanded="' + (open ? 'true' : 'false') + '" aria-controls="classification-detail-' + index + '">' + (open ? 'Close expenses' : 'Review expenses') + ' →</button></td></tr>' + (open ? '<tr class="classification-detail-row"><td colspan="6"><div id="classification-detail-' + index + '" class="classification-detail">' + renderExpenses() + '</div></td></tr>' : '');
+        return heading + '<tr class="classification-category-row"><td data-label="Entity">' + esc(entity) + '</td><td data-label="Category"><span class="classification-category-name">' + esc(category) + '</span>' + (row.valid === false ? '<span class="classification-needs-review">Needs review</span>' : '') + '</td><td data-label="Group / type">' + esc(row.group || 'Ungrouped') + '<span class="classification-group">' + esc(row.type || '—') + '</span></td><td data-label="Expenses" class="num">' + Number(row.count || 0) + '</td><td data-label="Recorded amount" class="num"><b>' + esc(formatMoney(row.total)) + '</b></td><td data-label="Review"><button type="button" class="classification-expand" data-open-classification="' + index + '" aria-expanded="' + (open ? 'true' : 'false') + '" aria-controls="classification-detail-' + index + '">' + (open ? 'Close expenses' : 'Review expenses') + ' →</button></td></tr>' + (open ? '<tr class="classification-detail-row"><td colspan="6"><div id="classification-detail-' + index + '" class="classification-detail">' + renderExpenses() + '</div></td></tr>' : '');
       }).join('');
       mountInlineEditor();
     }
@@ -226,7 +310,7 @@
       state.open = null; state.details = null; state.editing = null; parkInlineEditor(); state.selectedRows.clear(); syncSelection(); skeletonRows(); setBusy(true); setMessage('classificationMessage', 'Loading category totals…');
       return request('/api/expenses/classification-review' + queryString(appliedFilters)).then(function (data) {
         if (generation !== state.generation) return false;
-        acceptPayload(data); renderCategories(); setMessage('classificationMessage', successText || 'Categories are alphabetical by entity. Open one to review the highest recorded amounts first.'); return true;
+        acceptPayload(data); renderCategories(); setMessage('classificationMessage', successText || 'Categories with recorded spending appear first alphabetically; zero-amount categories follow alphabetically.'); return true;
       }).catch(function (error) {
         if (generation === state.generation) { state.categories = []; el('classificationTable').innerHTML = '<tr><td colspan="6" class="classification-empty"><strong>Classification review unavailable</strong><span>' + esc(error.message) + '</span></td></tr>'; setMessage('classificationMessage', error.message, true); }
         return false;
@@ -243,6 +327,7 @@
         if (!data || data.success !== true || !Array.isArray(data.expenses)) throw Error('The expense list could not be read safely.');
         state.details = { expenses: data.expenses.slice().sort(function (a, b) { return amount(b.amount) - amount(a.amount); }), pagination: data.pagination || null };
         if (data.categoryChoices) state.categoryChoices = data.categoryChoices;
+        acceptVendorChoices(data); rememberLoadedVendors(data.expenses);
         renderCategories(); syncSelection(); return true;
       }).catch(function (error) { if (state.open && state.open.key === keyOf(summary.entity, summary.name)) { state.details = { error: error.message, expenses: [] }; renderCategories(); } return false; }).finally(function () { if (generation === state.generation) setBusy(false); });
     }
@@ -288,11 +373,18 @@
       var anchor = captureViewportAnchor(id);
       state.editing = row;
       el('classificationEditTitle').textContent = 'Correct labels'; el('classificationEditSubtitle').textContent = (row.reference || row.id) + ' · ' + formatMoney(row.amount);
+      el('classificationEditSelected').checked = state.selectedRows.has(rowKey(row));
+      el('classificationEditSelected').setAttribute('data-select-classification', rowKey(row));
+      el('classificationEditSelected').setAttribute('aria-label', 'Select ' + String(row.reference || rowKey(row)));
+      el('classificationEditDate').textContent = row.date || '—'; el('classificationEditReference').textContent = row.reference || rowKey(row);
+      el('classificationEditAccount').textContent = row.account || 'Account not recorded'; el('classificationEditPaymentMethod').textContent = row.paymentMethod || 'Method not recorded';
+      el('classificationEditReconciliation').textContent = row.reconciled ? 'Reconciled' : 'Not reconciled'; el('classificationEditAmount').textContent = formatMoney(row.amount);
+      el('classificationEditProofs').innerHTML = proofControls(row);
       el('classificationEditEntity').innerHTML = state.allowedEntities.map(function (entity) { return '<option value="' + esc(entity) + '"' + (entity === row.entity ? ' selected' : '') + '>' + esc(entity === 'PERSONAL' ? 'Gagan Sir Personal' : entity) + '</option>'; }).join('');
       el('classificationEditEntity').value = row.entity; el('classificationEditEntity').disabled = !editable(row, 'entity');
       el('classificationEntityHint').textContent = editable(row, 'entity') ? 'Entity can be corrected for this unprotected source.' : 'Locked: ' + fieldLock(row, 'entity');
-      renderCategoryOptions(el('classificationEditCategory'), row.entity, row.category); el('classificationEditCategory').disabled = !editable(row, 'category');
-      el('classificationEditVendor').value = row.vendor || ''; el('classificationEditNarration').value = row.narration || ''; el('classificationEditReason').value = '';
+      renderCategoryOptions(el('classificationEditCategory'), row.entity, row.category); el('classificationEditCategory').disabled = !editable(row, 'category'); syncCategoryMeta();
+      rememberLoadedVendors([row]); renderVendorOptions(row.entity, row.vendor); el('classificationEditVendor').value = row.vendor || ''; el('classificationEditNarration').value = row.narration || ''; el('classificationEditReason').value = '';
       el('classificationEditVendor').disabled = !editable(row, 'vendor'); el('classificationEditNarration').disabled = !editable(row, 'narration');
       var lockedLabels = [['entity', 'Entity'], ['category', 'Category'], ['vendor', 'Vendor'], ['narration', 'Narration']].filter(function (item) { return !editable(row, item[0]); }).map(function (item) { return item[1] + ': ' + fieldLock(row, item[0]); });
       el('classificationFieldAccessNote').textContent = lockedLabels.length ? 'Protected labels — ' + lockedLabels.join(' · ') : '';
@@ -370,6 +462,11 @@
       var nextVendor = clean(el('classificationEditVendor').value);
       var nextNarration = el('classificationEditNarration').value.trim();
       var entityChanged = editable(state.editing, 'entity') && nextEntity !== String(state.editing.entity || '');
+      if (state.vendorChoicesAuthoritative && ((editable(state.editing, 'vendor') && nextVendor !== clean(state.editing.vendor)) || entityChanged)) {
+        var existingVendor = vendorNames(nextEntity, '').find(function (name) { return name.toLocaleLowerCase() === nextVendor.toLocaleLowerCase(); });
+        if (!existingVendor) { setMessage('classificationEditMessage', 'Select an existing vendor from the searchable list. New vendors cannot be created here.', true); return Promise.resolve(false); }
+        nextVendor = existingVendor;
+      }
       if (entityChanged && !nextCategory) { setMessage('classificationEditMessage', 'Select a category for the destination entity.', true); return Promise.resolve(false); }
       if (entityChanged) body.entity = nextEntity;
       if (editable(state.editing, 'category') && (nextCategory !== String(state.editing.category || '') || entityChanged)) body.category = nextCategory;
@@ -452,7 +549,8 @@
       });
       el('classificationClearSelection').onclick = function () { state.selectedRows.clear(); renderCategories(); syncSelection(); };
       el('classificationBulkEdit').onclick = openBulk;
-      el('classificationEditEntity').onchange = function () { renderCategoryOptions(el('classificationEditCategory'), this.value, ''); };
+      el('classificationEditEntity').onchange = function () { renderCategoryOptions(el('classificationEditCategory'), this.value, ''); renderVendorOptions(this.value, el('classificationEditVendor').value); syncCategoryMeta(); };
+      el('classificationEditCategory').onchange = syncCategoryMeta;
       el('classificationSaveEdit').onclick = saveEditor; el('classificationCloseEdit').onclick = function () { closeEditor(true); };
       el('classificationBulkEntity').onchange = syncBulkCategories; el('classificationSaveBulk').onclick = saveBulk; el('classificationCloseBulk').onclick = closeBulk;
       el('classificationEditDialog').addEventListener('keydown', function (event) {
@@ -470,5 +568,5 @@
     return { init: init, activate: activate, load: loadSummaries, loadCategory: loadCategory, state: state, renderCategories: renderCategories, openEditor: openEditor, saveEditor: saveEditor, openBulk: openBulk, saveBulk: saveBulk };
   }
 
-  return { create: create, esc: esc, clean: clean, amount: amount, formatMoney: formatMoney, keyOf: keyOf, rowKey: rowKey, editable: editable, fieldLock: fieldLock, hasWriteToken: hasWriteToken, sortCategories: sortCategories, queryString: queryString };
+  return { create: create, esc: esc, clean: clean, amount: amount, formatMoney: formatMoney, keyOf: keyOf, rowKey: rowKey, editable: editable, fieldLock: fieldLock, hasWriteToken: hasWriteToken, sortCategories: sortCategories, safeProofUrl: safeProofUrl, proofRows: proofRows, proofControls: proofControls, queryString: queryString };
 });
