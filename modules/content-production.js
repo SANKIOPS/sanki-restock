@@ -5,6 +5,8 @@ const {rolesOf,hasUserPermission,userSummary}=require('./auth-users');
 const workflow=require('../public/content-workflow');
 const BASE='/api/content-production',ACCOUNTS=['Femme','Homme','Fashion'];
 const TYPES=workflow.TYPES;
+// Categories confirmed by the owner; future models are categorised through Manage.
+const MODEL_GENDERS=Object.fromEntries([...['Gullu','Honey Singh','Tushar'].map(n=>[workflow.modelKey(n),'male']),...['Amisha Patel','Chhavi','Diamond','Ding','Diya','Gagan Lamba','Julia','Katrina','Merlyn','Mili','Preeti','Priyanka'].map(n=>[workflow.modelKey(n),'female'])]);
 const dir=()=>process.env.DATA_PATH?path.dirname(process.env.DATA_PATH):path.join(__dirname,'..');
 const manager=u=>rolesOf(u).includes('owner');
 const allowed=u=>!!u&&rolesOf(u).some(r=>['owner','admin','content_team'].includes(r));
@@ -32,7 +34,7 @@ function createStore(options={}){
  function person(v){v=text(v,100);if(v&&!allowed(users(v)))fail('Select a user with Content team access: '+v);return v;}
  function assigned(i,s,key){return i[key]?[i[key]]:s.settings.accounts.filter(a=>i.accounts.includes(a.account)).map(a=>a[key]).filter(Boolean);}
  function normalize(b,previous,s){
-  const x={...previous,id:previous?.id||crypto.randomUUID(),title:text(b.title,200),accounts:b.accounts,type:workflow.videoType(b.type),productIds:b.productIds,model:text(b.model,120),shootDate:date(b.shootDate),editedDate:date(b.editedDate??previous?.editedDate??previous?.source?.editedDate),shotBy:text(b.shotBy??previous?.shotBy??previous?.source?.shooter,120),editedBy:text(b.editedBy??previous?.editedBy??previous?.source?.editor,120),dueDate:date(b.dueDate),shootStatus:b.shootStatus,editStatus:b.editStatus,shooter:person(b.shooter),editor:person(b.editor),publisher:person(b.publisher),rawUrl:url(b.rawUrl),finalUrl:url(b.finalUrl),notes:text(b.notes,3000),adIds:b.adIds||[],shootId:text(b.shootId,100),adCreative:!!b.adCreative};
+  const x={...previous,id:previous?.id||crypto.randomUUID(),title:text(b.title,200),accounts:b.accounts,type:workflow.videoType(b.type),productIds:b.productIds,model:workflow.personName(text(b.model,120)),shootDate:date(b.shootDate),editedDate:date(b.editedDate??previous?.editedDate??previous?.source?.editedDate),shotBy:workflow.personName(text(b.shotBy??previous?.shotBy??previous?.source?.shooter,120)),editedBy:workflow.personName(text(b.editedBy??previous?.editedBy??previous?.source?.editor,120)),dueDate:date(b.dueDate),shootStatus:b.shootStatus,editStatus:b.editStatus,shooter:person(b.shooter),editor:person(b.editor),publisher:person(b.publisher),rawUrl:url(b.rawUrl),finalUrl:url(b.finalUrl),notes:text(b.notes,3000),adIds:b.adIds||[],shootId:text(b.shootId,100),adCreative:!!b.adCreative};
   if(!x.title)fail('Give this content a name.');
   if(!Array.isArray(x.accounts)||x.accounts.some(a=>!ACCOUNTS.includes(a)))fail('Choose valid posting accounts.');x.accounts=[...new Set(x.accounts)];
   if((!TYPES.includes(x.type)&&!(previous&&!x.type))||!['planned','shot'].includes(x.shootStatus)||!['pending','editing','done'].includes(x.editStatus))fail('Choose a valid video type and status.');
@@ -91,8 +93,9 @@ function createStore(options={}){
   });
  }
  function archive(b,u,id){if(!manager(u))fail('Only the owner can archive content.',403);return change(b.revision,u.username,s=>{const i=s.items.find(i=>i.id===id);if(!i)fail('Content not found.',404);i.archived=b.archived!==false;return {action:i.archived?'archive':'restore',id};});}
- function view(u){const s=load(),m=finances(u)?adData():null;const linkedIds=new Set(s.items.flatMap(i=>i.adIds||[]));const items=s.items.map(i=>{const display={...i,type:workflow.videoType(i.type),legacyType:TYPES.includes(i.type)?'':i.type,editedDate:i.editedDate??i.source?.editedDate??'',shotBy:i.shotBy??i.source?.shooter??'',editedBy:i.editedBy??i.source?.editor??''};return finances(u)?display:(({adIds,...rest})=>rest)(display);});return {...s,items,summary:workflow.summary(s.items,s.publications),history:manager(u)?s.history:[],plan:plan(s),today:today(),permissions:{manage:manager(u),results:finances(u)},ads:m?m.ads.filter(a=>!a.archived).map(a=>({id:a.id,name:a.name,status:a.status,updatedAt:a.updatedAt,adSetId:a.adSetId,mediaUrls:a.mediaUrls||[]})):[],results:m?(m.results||[]).filter(r=>!r.archived&&linkedIds.has(r.adId)):[]};}
- return {load,save,publish,configure,view,plan,catalog,bookings,importSheet,archive};
+ function configureModels(b,u){if(!manager(u))fail('Only the owner can change model groups.',403);return change(b.revision,u.username,s=>{if(!b.models||typeof b.models!=='object'||Array.isArray(b.models))fail('Choose model groups.');const models={};for(const [name,gender] of Object.entries(b.models)){if(!['male','female',''].includes(gender))fail('Choose Male or Female.');const key=workflow.modelKey(text(name,120));if(key)models[key]=gender;}s.modelGenders=models;return {action:'model-groups'};});}
+ function view(u){const s=load(),m=finances(u)?adData():null;const linkedIds=new Set(s.items.flatMap(i=>i.adIds||[]));const items=s.items.map(i=>{const display={...i,type:workflow.videoType(i.type),legacyType:TYPES.includes(i.type)?'':i.type,editedDate:i.editedDate??i.source?.editedDate??'',shotBy:i.shotBy??i.source?.shooter??'',editedBy:i.editedBy??i.source?.editor??''};return finances(u)?display:(({adIds,...rest})=>rest)(display);});return {...s,modelGenders:{...MODEL_GENDERS,...s.modelGenders},items,summary:workflow.summary(s.items,s.publications),history:manager(u)?s.history:[],plan:plan(s),today:today(),permissions:{manage:manager(u),results:finances(u)},ads:m?m.ads.filter(a=>!a.archived).map(a=>({id:a.id,name:a.name,status:a.status,updatedAt:a.updatedAt,adSetId:a.adSetId,mediaUrls:a.mediaUrls||[]})):[],results:m?(m.results||[]).filter(r=>!r.archived&&linkedIds.has(r.adId)):[]};}
+ return {load,save,publish,configure,configureModels,view,plan,catalog,bookings,importSheet,archive};
 }
 function createRouter(store=createStore()){
  const r=express.Router();r.use(BASE,(req,res,next)=>{if(!req.user)return res.status(401).json({success:false,error:'Sign in first.'});if(!allowed(req.user))return res.status(403).json({success:false,error:'Content team access required.'});if(!['GET','HEAD','OPTIONS'].includes(req.method)&&!manager(req.user))return res.status(403).json({success:false,error:'Only the owner can change content.'});next();});r.use(BASE,express.json({limit:'256kb'}));
@@ -107,6 +110,7 @@ function createRouter(store=createStore()){
  r.patch(BASE+'/items/:id',run(req=>store.save(req.body,req.user,req.params.id)));
  r.post(BASE+'/items/:id/archive',run(req=>store.archive(req.body,req.user,req.params.id)));
  r.post(BASE+'/posted',run(req=>store.publish(req.body,req.user)));
+ r.post(BASE+'/models',run(req=>store.configureModels(req.body,req.user)));
  r.post(BASE+'/settings',run(req=>store.configure(req.body,req.user)));
  return r;
 }
