@@ -11,3 +11,5 @@ main{max-width:1600px;padding:22px 26px}main>header{margin-bottom:14px;padding-b
 .content-filters{display:flex;gap:12px;padding:10px 0 0}.content-filters label{min-width:170px;max-width:260px;flex:1;font-size:11px}.content-filters select{padding:7px 9px;font-size:12px}.extra-filters>.filters{grid-template-columns:1fr;width:210px}@media(max-width:750px){.content-filters{gap:8px}.content-filters label{min-width:0;max-width:none}}
 
 .account-ready{display:inline-block;margin-left:6px;padding:2px 6px;border-radius:4px;background:#e6f0e5;color:var(--green);font-size:10px;font-weight:600;white-space:nowrap}.account-tabs button{white-space:nowrap}@media(max-width:750px){.account-tabs button{padding:9px 5px}.account-ready{display:block;margin:3px 0 0;font-size:9px}}
+
+.account-tabs{flex-wrap:wrap}.account-tabs button{padding-left:14px;padding-right:14px}@media(max-width:750px){.account-tabs button{flex:0 0 calc(33.333% - 2px);padding-left:5px;padding-right:5px}}
