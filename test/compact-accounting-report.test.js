@@ -69,3 +69,11 @@ test('Sewak Park reporting unit is valid only within PERSONAL accounting',()=>{
  assert.throws(()=>build(sources(),{...options,unit:'UNKNOWN'}),/valid reporting unit/);
  assert.throws(()=>build(sources(),{...options,entity:'SAMAST',unit:'SEWAK_PARK_HOTEL'}),/only inside PERSONAL/);
 });
+
+test('SANKI exposes simple unit economics with clickable app expense identity, while other entities stay unchanged',()=>{
+ const src=sources();src.expenses.expenses.SAL={id:'SAL',nature:'SANKI',status:'paid',date:'2026-10-01',amount:150,ledger:'Salary Expense',particulars:'October team salary',vendor:'Team',payments:[{id:'PAY',amount:150,date:'2026-10-01',account:'Axis Bank 3448'}]};
+ const before=JSON.stringify(src),r=build(src,{...options,entity:'SANKI'});
+ assert.equal(r.unitEconomics.values.operatingExpenses,150);assert.equal(r.unitEconomics.values.ebitda,-150);assert.equal(r.unitEconomics.values.netProfit,-150);
+ assert.equal(r.unitEconomics.entries[0].appExpense.id,'SAL');assert.equal(r.unitEconomics.entries[0].appExpense.particulars,'October team salary');
+ assert.equal(build(src,options).unitEconomics,undefined);assert.equal(JSON.stringify(src),before);
+});

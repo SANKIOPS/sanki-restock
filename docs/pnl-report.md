@@ -209,3 +209,24 @@ affected source assertions are unchanged from the main-branch baseline.
 Focused Results, navigation, authorization and refund/incentive checks pass;
 this is not a claim of a fully green legacy suite. No accounting records
 were edited to produce this report.
+
+## Simple SANKI overview
+
+`/compact-reports.html?entity=SANKI` presents Sales, Discounts & Returns, GST,
+Net Sales, COGS, Gross Profit, Order Costs, Marketing, Operating Expenses,
+EBITDA and Net Profit. Other income, interest earned and non-operating deductions
+appear when recorded. Previous-period values use the same calculation.
+Each figure opens searchable app entries; paid expenses retain their detail and
+proof links. COGS retains the existing verified SKU/FIFO or Shopify-cost source.
+
+This is a payment-based management view, not an accrued statutory income statement.
+Salaries, rent and other overhead stay in Operating Expenses. Saved marketing
+categories/type identify Marketing; explicit packaging, delivery, payment/platform
+fee and sales-incentive categories identify Order Costs. Other costs remain in
+Operating Expenses. Interest, income tax, depreciation and amortisation are
+excluded from EBITDA, then deducted for Net Profit; bank interest earned is also
+outside EBITDA. Missing cost/tax evidence or unresolved repayments block profit.
+Transfers, loan principal, deposits and stock purchases do not become operating
+expenses. Units are sold quantities minus returned quantities; no quantity is
+invented for receipts or sales without item details. Per-item profit is available
+only for a positive known net quantity and a complete profit figure.
