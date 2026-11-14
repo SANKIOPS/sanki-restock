@@ -67,18 +67,23 @@ function createStore(options={}){
  }
  function publish(b,u){if(!editor(u))fail('Content team access required to edit posting status.',403);return change(b.revision,u.username,s=>{const item=s.items.find(i=>i.id===b.contentId&&!i.archived);if(!item||!item.accounts.includes(b.account))fail('Select content for this account.');const a=s.settings.accounts.find(a=>a.account===b.account);if(item.editStatus!=='done'||!item.finalUrl)fail('Finish editing and attach the file first.');if(workflow.isPosted(item,s.publications,b.account))fail('Already posted on this account.');const postedDate=date(b.date,false);if(postedDate>today())fail('Do not mark a future post as published.');const link=url(b.url);if(!link)fail('Add the live post link.');const slotId=text(b.slotId,200);if(slotId){const slot=plan(s).find(p=>p.slotId===slotId);if(!slot||slot.contentId!==item.id||slot.account!==b.account)fail('The calendar changed. Refresh the slot.',409);if(s.publications.some(p=>p.slotId===slotId))fail('This slot is already posted.');}item.postingOverride='posted';s.publications.push({id:crypto.randomUUID(),contentId:item.id,account:b.account,date:postedDate,url:link,slotId,by:u.username});return {action:'posted',id:item.id};});}
  function configure(b,u){if(!manager(u))fail('Only the owner can change the posting plan.',403);return change(b.revision,u.username,s=>{const z=b.settings;if(!z||!Array.isArray(z.accounts)||z.accounts.length!==3||new Set(z.accounts.map(a=>a.account)).size!==3)fail('Configure all three accounts.');const integer=(v,min,max)=>{if(!Number.isInteger(v)||v<min||v>max)fail('Invalid planning number.');return v;};s.settings={start:date(z.start,false),days:integer(z.days,1,14),buffer:integer(z.buffer,0,7),editLead:integer(z.editLead,0,14),shootLead:integer(z.shootLead,0,14),accounts:z.accounts.map(a=>{if(!ACCOUNTS.includes(a.account))fail('Invalid account.');return {account:a.account,daily:integer(a.daily,0,5),shooter:person(a.shooter),editor:person(a.editor),publisher:person(a.publisher)};})};if(s.settings.shootLead<s.settings.editLead)fail('Allow at least as much lead time for shooting as editing.');return {action:'plan'};});}
- function importSheet(buffer,revision,u,preview){
+ function importSheet(buffer,revision,u,preview,syncMode=false){
   if(!manager(u))fail('Only the owner can import content.',403);
   let parsed;try{parsed=require('./content-production-import').parse(buffer);}catch(e){fail('Could not read this workbook: '+e.message);}
   const existing=load(),keys=new Map(existing.items.filter(i=>i.sourceKey).map(i=>[i.sourceKey,i])),urls=new Map();
   for(const i of existing.items)if(i.sourceKey&&i.finalUrl)urls.set(i.finalUrl,i);
-  const matched=new Set(),entries=[];let unchanged=0;
+  const matched=new Set(),entries=[],incomingUrls=new Set(parsed.records.map(i=>i.finalUrl).filter(Boolean));let unchanged=0;
   const owned=['title','accounts','type','contentFormat','model','shootDate','shootStatus','editStatus','rawUrl','finalUrl','adCreative','source','sourceKey'];
   for(const entry of parsed.records){
-   const old=(entry.finalUrl&&urls.get(entry.finalUrl))||keys.get(entry.sourceKey);
+   const byUrl=entry.finalUrl&&urls.get(entry.finalUrl),byRow=keys.get(entry.sourceKey);
+   // A moved file keeps its app record; an inserted row must not steal that record.
+   const old=byUrl||(byRow&&!matched.has(byRow.id)&&(!byRow.finalUrl||!incomingUrls.has(byRow.finalUrl)||byRow.finalUrl===entry.finalUrl)?byRow:null);
    if(old&&matched.has(old.id))fail('Multiple source rows match the same content. Review the source before updating.');
    if(old)matched.add(old.id);
-   const patch=Object.fromEntries(owned.filter(k=>k!=='type'||!old?.typeOverride).map(k=>[k,entry[k]]));
+   const incoming=Object.fromEntries(owned.map(k=>[k,entry[k]]));
+   const patch=Object.fromEntries(owned.filter(k=>(k!=='type'||!old?.typeOverride)&&(!syncMode||!old?.sourceSnapshot||JSON.stringify(entry[k])!==JSON.stringify(old.sourceSnapshot[k]))).map(k=>[k,entry[k]]));
+   if(syncMode&&old){for(const [field,sourceField] of [['editedDate','editedDate'],['shotBy','shooter'],['editedBy','editor']])if(JSON.stringify(old.source?.[sourceField]||'')!==JSON.stringify(entry.source?.[sourceField]||''))patch[field]=entry.source[sourceField]||'';if(String(old.source?.posted||'')!==String(entry.source?.posted||''))patch.postingOverride=/^posted$/i.test(entry.source.posted||'')?'posted':'not_posted';}
+   if(syncMode)patch.sourceSnapshot=incoming;
    if(!old||Object.keys(patch).some(k=>JSON.stringify(old[k])!==JSON.stringify(patch[k])))entries.push({entry,old,patch});else unchanged++;
   }
   const added=entries.filter(x=>!x.old).length,updated=entries.length-added;
@@ -88,7 +93,7 @@ function createStore(options={}){
    const now=new Date().toISOString();
    for(const {entry,old,patch} of entries){
     if(old){const target=s.items.find(i=>i.id===old.id);Object.assign(target,patch,{updatedAt:now,updatedBy:u.username});target.notes=String(target.notes||'').replace(/^Source posting status:.*$/gm,'').trim();}
-    else s.items.push({...entry,id:crypto.randomUUID(),createdAt:now,updatedAt:now,updatedBy:u.username});
+    else s.items.push({...entry,...patch,id:crypto.randomUUID(),createdAt:now,updatedAt:now,updatedBy:u.username});
    }
    return {action:'import',...report};
   });
@@ -99,11 +104,13 @@ function createStore(options={}){
  return {load,save,publish,configure,configureModels,view,plan,catalog,bookings,importSheet,archive};
 }
 function createRouter(store=createStore()){
- const r=express.Router();r.use(BASE,(req,res,next)=>{if(!req.user)return res.status(401).json({success:false,error:'Sign in first.'});if(!allowed(req.user))return res.status(403).json({success:false,error:'Content team access required.'});if(!['GET','HEAD','OPTIONS'].includes(req.method)&&!editor(req.user))return res.status(403).json({success:false,error:'Content team access required to change content.'});next();});r.use(BASE,express.json({limit:'256kb'}));
+ const sheetSync=require('./content-sheet-sync').createSync(store);
+ const r=express.Router();r.startSheetSync=()=>sheetSync.start();r.use(BASE,(req,res,next)=>{if(!req.user)return res.status(401).json({success:false,error:'Sign in first.'});if(!allowed(req.user))return res.status(403).json({success:false,error:'Content team access required.'});if(!['GET','HEAD','OPTIONS'].includes(req.method)&&!editor(req.user))return res.status(403).json({success:false,error:'Content team access required to change content.'});next();});r.use(BASE,express.json({limit:'256kb'}));
  const run=fn=>(req,res)=>{try{res.json({success:true,...fn(req)});}catch(e){res.status(e.status||500).json({success:false,error:e.status?e.message:'Unable to save content. Existing records were preserved.'});}};
  const upload=require('multer')({storage:require('multer').memoryStorage(),limits:{fileSize:10*1024*1024,files:1}});
  r.post(BASE+'/import',(req,res,next)=>{if(!manager(req.user))return res.status(403).json({success:false,error:'Only the owner can import content.'});upload.single('file')(req,res,err=>{if(err)return res.status(400).json({success:false,error:'Choose one XLSX file below 10 MB.'});next();});},run(req=>{if(!req.file||!req.file.originalname.toLowerCase().endsWith('.xlsx'))fail('Choose an XLSX workbook.');if(req.body.preview!=='true'&&req.body.confirmed!=='true')fail('Preview and confirm the import first.');return store.importSheet(req.file.buffer,Number(req.body.revision),req.user,req.body.preview==='true');}));
- r.get(BASE,run(req=>store.view(req.user)));
+ r.get(BASE,run(req=>({...store.view(req.user),sheetSync:sheetSync.status()})));
+ r.post(BASE+'/sheet-sync',async(req,res)=>{if(!manager(req.user))return res.status(403).json({success:false,error:'Only the owner can configure sheet sync.'});try{if(req.body.enabled!==undefined)sheetSync.configure(req.body.enabled);const status=req.body.refresh?await sheetSync.run(true):sheetSync.status();res.json({success:true,sheetSync:status});}catch(e){res.status(400).json({success:false,error:e.message});}});
  r.get(BASE+'/catalogue',run(()=>({products:store.catalog()})));
  r.get(BASE+'/shoots',run(()=>({shoots:store.bookings()})));
  r.get(BASE+'/people',run(req=>{if(!editor(req.user))return {people:[]};const au=require('./auth-users');return {people:au.listContentPeople()};}));
