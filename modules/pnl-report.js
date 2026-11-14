@@ -221,7 +221,7 @@ function buildReport(sources = {}, options = {}) {
         const allocation = components.length?{qty,bundle:true,missing:components.reduce((n,c)=>n+c.allocation.missing,0),cost:money(components.reduce((n,c)=>n+c.allocation.cost,0)),parts:components.flatMap(c=>c.allocation.parts)}:present(line.pnlUnitCost) ? {qty,missing:0,cost:money(qty*number(line.pnlUnitCost)),parts:['shipping','rounding'].includes(line.pnlKind)?[]:[{lotId:'PNL-CORRECTION/'+order.id+'/'+line.id,purchaseId:'User-confirmed Results custom-item cost',qty,unitCost:line.pnlUnitCost,amount:money(qty*line.pnlUnitCost),exactCost:line.pnlUnitCost,returned:0}]} : allocate(sku, Math.max(0, qty), made.date, reference, ch,line.pnlInventoryItemId);
         allocations.set(key, { ...allocation, sku });
         taxAllocations.set(key, { ...tax, qty, taxesIncluded, returnedQty: 0, returnedShare: 0, returnedTax: 0, returnedGross: 0 });
-        detail.push({ sku, qty, title:line.title||'', lineId: line.id || index, gross: tax.gross, gst: tax.tax, netSales: tax.valid ? money(tax.gross - tax.tax) : null, cogs: allocation.missing ? null : allocation.cost, correction:line.pnlCorrection||null, itemKind:components.length?'bundle':line.pnlKind||'product', components:components.map(({allocation,...component})=>({...component,cogs:allocation.missing?null:allocation.cost})), allocations: allocation.parts.map(({ exactCost, returned, ...part }) => part) });
+        detail.push({ sku, qty, title:line.title||'', lineId: line.id || index, gross: tax.gross, gst: tax.tax, gstRate:tax.rate, netSales: tax.valid ? money(tax.gross - tax.tax) : null, cogs: allocation.missing ? null : allocation.cost, correction:line.pnlCorrection||null, itemKind:components.length?'bundle':line.pnlKind||'product', components:components.map(({allocation,...component})=>({...component,cogs:allocation.missing?null:allocation.cost})), allocations: allocation.parts.map(({ exactCost, returned, ...part }) => part) });
         const taxRecord = { id: key, date: made.date, reference, sku, qty, channel: ch, ...tax, taxesIncluded };
         taxRows.push(taxRecord); taxDetail.push(taxRecord);
         taxComplete = taxComplete && tax.valid; costComplete = costComplete && qty > 0 && allocation.missing === 0;
@@ -264,7 +264,7 @@ function buildReport(sources = {}, options = {}) {
           const sourceLineGross = present(line.subtotal) && present(line.tax) ? money(number(line.subtotal) + number(line.tax)) : null;
           recordedRefundGst += number(line.tax);
           recordedRefundKnown = recordedRefundKnown && present(line.tax);
-          let tax = null;
+          let tax = null, returnedGross = null, returnedItemCost = 0;
           if (!originalTax?.valid || !(qty > 0) || qty + originalTax.returnedQty > originalTax.qty + 1e-8) taxComplete = false;
           else {
             // Reverse the original Results allocation, never the source refund
@@ -277,6 +277,7 @@ function buildReport(sources = {}, options = {}) {
               const nextShare = Math.min(1, originalTax.returnedShare + share);
               tax = money(money(originalTax.tax * nextShare) - originalTax.returnedTax);
               const reportLineGross = money(money(originalTax.gross * nextShare) - originalTax.returnedGross);
+              returnedGross = reportLineGross;
               originalTax.returnedQty += qty; originalTax.returnedShare = nextShare;
               originalTax.returnedTax = money(originalTax.returnedTax + tax); originalTax.returnedGross = money(originalTax.returnedGross + reportLineGross);
               refundGst += tax;
@@ -285,9 +286,10 @@ function buildReport(sources = {}, options = {}) {
           }
           if (line.restockType === 'return' && !['shipping','rounding'].includes(original.pnlKind)) {
             const returned = returnCost(id + '/' + (original.id || originalIndex), qty, date, rid, ch);
+            returnedItemCost = returned.complete ? -money(returned.cost) : null;
             reversedCost += returned.cost; costComplete = costComplete && returned.complete;
           }
-          detail.push({ sku: original.sku, qty, returnedToStock: line.restockType === 'return', subtotal: line.subtotal, gst: tax });
+          detail.push({ sku: original.sku, title:original.title||'', itemKind:original.pnlKind||'product', qty, returnedToStock: line.restockType === 'return', subtotal: line.subtotal, gst:tax==null?null:-money(tax), gstRate:originalTax?.rate??null, netSales:returnedGross==null||tax==null?null:-money(returnedGross-tax), cogs:returnedItemCost });
         }
         if (!(amount > 0)) amount = money((refund.lineItems || []).reduce((sum, l) => sum + number(l.subtotal) + number(l.tax), 0) + number(refund.adjustmentAmount));
         if (!(amount > 0)) return;

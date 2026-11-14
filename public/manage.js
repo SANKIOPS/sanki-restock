@@ -15,7 +15,7 @@
     try { var url = new URL(value, origin); return url.origin === origin && url.pathname !== '/manage.html' ? url.pathname + url.search + url.hash : ''; } catch (_) { return ''; }
   }
   function createApp(doc, win, injectedRequest) {
-    var state = { config: null, catalog: [], groups: [], revision: '', selected: new Set(), busy: false, loading: 0, tool: '', editAction: '', editSources: [], preview: null, operationId: '' };
+    var state = { config: null, catalog: [], groups: [], revision: '', selected: new Set(), selectedCategories: new Set(), busy: false, loading: 0, tool: '', editAction: '', editSources: [], preview: null, operationId: '' };
     var openingController, transactionController, classificationController;
     function el(id) { return doc.getElementById(id); }
     function message(id, text, bad) { el(id).textContent = text || ''; el(id).className = 'message ' + (bad ? 'error' : 'success'); }
@@ -44,6 +44,13 @@
       syncSelection();
     }
     function allItems() { return state.catalog.reduce(function (items, head) { return items.concat(head.items); }, []); }
+    function money(value) { return '₹' + Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function categoryKey(group, category) { return String(group) + '\u0000' + String(category); }
+    function selectedCategoryRows() {
+      var selected = [];
+      state.groups.forEach(function (group) { (group.categories || []).forEach(function (category) { if (state.selectedCategories.has(categoryKey(group.name, category.name))) selected.push({ name: category.name, source: group.name, entryCount: Number(category.entryCount || 0), totalAmount: Number(category.totalAmount || 0) }); }); });
+      return selected;
+    }
     function renderCatalog() {
       var query = cleanName(el('manageSearch').value).toLowerCase();
       el('manageHeads').innerHTML = state.catalog.map(function (head) {
@@ -61,15 +68,23 @@
       el('mergeSelected').disabled = state.busy || !state.revision || count < 1;
       el('selectAllGroups').checked = state.groups.length > 0 && count === state.groups.length;
       el('selectAllGroups').indeterminate = count > 0 && count < state.groups.length;
+      var categories = selectedCategoryRows();
+      el('categoryMoveForm').hidden = categories.length === 0;
+      el('categoryMoveSelection').textContent = categories.length ? categories.length + ' categor' + (categories.length === 1 ? 'y' : 'ies') + ' selected · ' + categories.reduce(function (sum, item) { return sum + item.entryCount; }, 0) + ' linked expenses · ' + money(categories.reduce(function (sum, item) { return sum + item.totalAmount; }, 0)) + ' recorded' : '';
     }
     function renderGroups() {
       var current = new Set(state.groups.map(function (group) { return group.name; }));
       state.selected.forEach(function (name) { if (!current.has(name)) state.selected.delete(name); });
+      var currentCategories = new Set(); state.groups.forEach(function (group) { (group.categories || []).forEach(function (category) { currentCategories.add(categoryKey(group.name, category.name)); }); });
+      state.selectedCategories.forEach(function (key) { if (!currentCategories.has(key)) state.selectedCategories.delete(key); });
       el('groupsTable').innerHTML = state.groups.map(function (group, index) {
         var categories = Array.isArray(group.categories) ? group.categories : [];
-        return '<tr><td><input type="checkbox" data-select-group="' + index + '" aria-label="Select ' + esc(group.name) + '"' + (state.selected.has(group.name) ? ' checked' : '') + '></td><td class="group-name">' + esc(group.name) + (categories.length ? '<details class="group-detail"><summary>View categories</summary><ul>' + categories.map(function (category) { return '<li>' + esc(category.name) + ' <span class="muted">(' + Number(category.entryCount || 0) + ' entries)</span></li>'; }).join('') + '</ul></details>' : '') + '</td><td class="num">' + Number(group.categoryCount || 0) + '</td><td class="num">' + Number(group.entryCount || 0) + '</td><td>' + esc((group.businesses || []).join(', ') || 'Unused') + '</td><td><div class="actions"><button type="button" class="compact" data-rename-group="' + index + '">Rename</button><button type="button" class="compact" data-merge-group="' + index + '">Merge</button></div></td></tr>';
+        var selectedCount = categories.filter(function (category) { return state.selectedCategories.has(categoryKey(group.name, category.name)); }).length;
+        var detail = categories.length ? '<details class="group-detail"' + (selectedCount ? ' open' : '') + '><summary>View categories' + (selectedCount ? '<span class="group-move-badge">' + selectedCount + ' selected</span>' : '') + '</summary><div class="group-category-shell"><table class="group-category-table"><thead><tr><th class="check-cell">Move</th><th>Category</th><th class="num">Expenses</th><th class="num">Recorded amount</th><th>Entities</th></tr></thead><tbody>' + categories.map(function (category, categoryIndex) { var checked = state.selectedCategories.has(categoryKey(group.name, category.name)); return '<tr><td><input type="checkbox" data-select-category="' + index + ':' + categoryIndex + '" aria-label="Select category ' + esc(category.name) + ' from ' + esc(group.name) + '"' + (checked ? ' checked' : '') + '></td><td class="group-category-name">' + esc(category.name) + '</td><td class="num">' + Number(category.entryCount || 0) + '</td><td class="num">' + esc(money(category.totalAmount || 0)) + '</td><td class="group-category-businesses">' + esc((category.businesses || []).join(', ') || 'Unused') + '</td></tr>'; }).join('') + '</tbody></table></div></details>' : '<p class="hint">No categories in this group.</p>';
+        return '<tr><td><input type="checkbox" data-select-group="' + index + '" aria-label="Select ' + esc(group.name) + '"' + (state.selected.has(group.name) ? ' checked' : '') + '></td><td class="group-name"><b>' + esc(group.name) + '</b>' + detail + '</td><td class="num">' + Number(group.categoryCount || 0) + '</td><td class="num">' + Number(group.entryCount || 0) + '</td><td>' + esc((group.businesses || []).join(', ') || 'Unused') + '</td><td><div class="actions"><button type="button" class="compact" data-rename-group="' + index + '">Rename</button><button type="button" class="compact" data-merge-group="' + index + '">Merge</button></div></td></tr>';
       }).join('') || '<tr><td colspan="6" class="muted">No groups yet. Add the first group above.</td></tr>';
       el('knownGroups').innerHTML = state.groups.map(function (group) { return '<option value="' + esc(group.name) + '">'; }).join('');
+      el('categoryMoveGroups').innerHTML = state.groups.map(function (group) { return '<option value="' + esc(group.name) + '">'; }).join('');
       syncSelection();
     }
     function acceptGroups(data) {
@@ -134,15 +149,40 @@
         return true;
       }).catch(function (error) { message('groupMessage', error.message, true); return false; }).finally(function () { setBusy(false); });
     }
+    function previewCategoryMove() {
+      if (!permitted() || state.busy) return Promise.resolve(false);
+      var categories = selectedCategoryRows(), rawTarget = cleanName(el('categoryMoveTarget').value), reason = el('categoryMoveReason').value.trim();
+      if (!categories.length) { message('groupMessage', 'Select at least one category inside View categories.', true); return Promise.resolve(false); }
+      var targetRow = state.groups.find(function (group) { return group.name.toLowerCase() === rawTarget.toLowerCase(); });
+      if (!targetRow) { message('groupMessage', 'Choose an existing destination group from the searchable list.', true); return Promise.resolve(false); }
+      if (categories.some(function (category) { return category.source === targetRow.name; })) { message('groupMessage', 'Every selected category must come from a different group than the destination.', true); return Promise.resolve(false); }
+      if (!reason || reason.length > 1000 || /[\p{C}\u2028\u2029]/u.test(reason)) { message('groupMessage', 'Enter a printable reason for moving these categories (up to 1,000 characters).', true); return Promise.resolve(false); }
+      if (!state.revision) { message('groupMessage', 'Refresh the group list before reviewing this move.', true); return Promise.resolve(false); }
+      var body = { action: 'move_categories', sources: [], categories: categories.map(function (category) { return { name: category.name, source: category.source }; }), target: targetRow.name, reason: reason, revision: state.revision };
+      setBusy(true); message('groupMessage', '');
+      return post('/api/expenses/category-groups/preview', body).then(function (data) {
+        if (data.action !== 'move_categories' || typeof data.previewToken !== 'string' || !data.previewToken || typeof data.revision !== 'string' || !Array.isArray(data.sources) || !Array.isArray(data.categories) || !data.target) throw Error('The category-move preview is incomplete. Refresh and review it again.');
+        state.preview = Object.assign({}, body, { sources: data.sources, target: data.target, reason: data.reason || body.reason, revision: data.revision, previewToken: data.previewToken });
+        state.operationId = uuid();
+        el('groupReviewTitle').textContent = 'Review category move';
+        var summary = [['From group' + (data.sources.length === 1 ? '' : 's'), data.sources.join(' + ')], ['Destination group', data.target], ['Categories moving', Number(data.categoryCount || 0)], ['Linked expenses', Number(data.entryCount || 0)], ['Recorded amount', money(data.totalAmount || 0)], ['Entities affected', (data.businesses || []).join(', ') || 'None — unused categories'], ['Reason', body.reason]];
+        el('groupPreviewSummary').innerHTML = summary.map(function (row) { return '<dt>' + esc(row[0]) + '</dt><dd>' + esc(row[1]) + '</dd>'; }).join('');
+        el('groupPreviewWarnings').innerHTML = (data.warnings || []).map(function (warning) { return '<p class="hint">' + esc(warning) + '</p>'; }).join('');
+        el('groupPreviewCategories').innerHTML = data.categories.map(function (category) { return '<li><b>' + esc(category.name) + '</b> — ' + esc(category.source) + ' → ' + esc(data.target) + ' <span class="muted">(' + Number(category.entryCount || 0) + ' expenses · ' + esc(money(category.totalAmount || 0)) + ')</span></li>'; }).join('');
+        message('groupReviewMessage', ''); el('confirmGroupChange').textContent = 'Confirm category move'; el('groupReviewDialog').showModal(); return true;
+      }).catch(function (error) { message('groupMessage', error.message, true); return false; }).finally(function () { setBusy(false); });
+    }
     function applyChange() {
       if (!permitted() || state.busy || !state.preview || !state.operationId) return Promise.resolve(false);
       var body = Object.assign({}, state.preview, { operationId: state.operationId });
       state.loading++;
       setBusy(true); message('groupReviewMessage', 'Saving reviewed change…');
       return post('/api/expenses/category-groups/apply', body).then(function (data) {
-        state.selected.clear(); acceptGroups(data); state.editAction = ''; state.editSources = []; state.preview = null; state.operationId = '';
+        var movedCategories = state.preview && state.preview.action === 'move_categories';
+        state.selected.clear(); state.selectedCategories.clear(); acceptGroups(data); state.editAction = ''; state.editSources = []; state.preview = null; state.operationId = '';
         el('groupEditForm').hidden = true; el('groupReviewDialog').close();
-        message('groupMessage', (data.already ? 'Change already recorded. Final group: ' : 'Saved. Final group: ') + data.group + '. No financial transactions were changed.');
+        el('categoryMoveTarget').value = ''; el('categoryMoveReason').value = '';
+        message('groupMessage', (data.already ? 'Change already recorded. Final group: ' : movedCategories ? 'Categories moved to ' : 'Saved. Final group: ') + data.group + '. No financial transactions were changed.');
         return true;
       }).catch(function (error) {
         if (error.status === 409 || ['STALE_REVISION', 'PREVIEW_REQUIRED', 'STALE_PREVIEW', 'SOURCE_CHANGED', 'OPERATION_REUSED'].includes(error.code)) { state.preview = null; state.operationId = ''; }
@@ -236,12 +276,18 @@
       el('refreshGroups').onclick = function () { if (!state.busy) { cancelEdit(); loadGroups(); } };
       el('cancelGroupEdit').onclick = cancelEdit;
       el('previewGroupChange').onclick = previewChange;
+      el('previewCategoryMove').onclick = previewCategoryMove;
+      el('clearCategoryMove').onclick = function () { if (state.busy) return; state.selectedCategories.clear(); el('categoryMoveTarget').value = ''; el('categoryMoveReason').value = ''; renderGroups(); };
       el('confirmGroupChange').onclick = applyChange;
       el('closeGroupReview').onclick = closeReview;
       el('groupReviewDialog').addEventListener('cancel', function (event) { if (state.busy) event.preventDefault(); });
       el('groupReviewDialog').addEventListener('close', function () { if (!state.busy) { state.preview = null; state.operationId = ''; } });
       el('selectAllGroups').onchange = function () { if (state.busy) return; state.selected.clear(); if (this.checked) state.groups.forEach(function (group) { state.selected.add(group.name); }); renderGroups(); };
-      el('groupsTable').addEventListener('change', function (event) { if (state.busy || !event.target.matches('[data-select-group]')) return; var group = state.groups[Number(event.target.dataset.selectGroup)]; if (!group) return; if (event.target.checked) state.selected.add(group.name); else state.selected.delete(group.name); syncSelection(); });
+      el('groupsTable').addEventListener('change', function (event) {
+        if (state.busy) return;
+        if (event.target.matches('[data-select-group]')) { var group = state.groups[Number(event.target.dataset.selectGroup)]; if (!group) return; if (event.target.checked) state.selected.add(group.name); else state.selected.delete(group.name); syncSelection(); return; }
+        if (event.target.matches('[data-select-category]')) { var indexes = String(event.target.dataset.selectCategory || '').split(':').map(Number), source = state.groups[indexes[0]], category = source && (source.categories || [])[indexes[1]]; if (!category) return; var key = categoryKey(source.name, category.name); if (event.target.checked) state.selectedCategories.add(key); else state.selectedCategories.delete(key); renderGroups(); }
+      });
       el('groupsTable').addEventListener('click', function (event) { var rename = event.target.closest('[data-rename-group]'), merge = event.target.closest('[data-merge-group]'), node = rename || merge; if (!node || state.busy) return; var group = state.groups[Number(rename ? node.dataset.renameGroup : node.dataset.mergeGroup)]; if (group) beginEdit(rename ? 'rename' : 'merge', [group.name]); });
       el('manageCategoryGroups').onclick = function () { showTool('groups'); };
       el('saveNewCategory').onclick = addCategory;
@@ -266,7 +312,7 @@
         });
       }).catch(function (error) { message('pageMessage', error.message, true); return false; });
     }
-    return { init: init, state: state, renderCatalog: renderCatalog, loadGroups: loadGroups, beginEdit: beginEdit, previewChange: previewChange, applyChange: applyChange, addGroup: addGroup, addCategory: addCategory, showTool: showTool, showHome: showHome, closeReview: closeReview, acceptGroups: acceptGroups };
+    return { init: init, state: state, renderCatalog: renderCatalog, loadGroups: loadGroups, beginEdit: beginEdit, previewChange: previewChange, previewCategoryMove: previewCategoryMove, applyChange: applyChange, addGroup: addGroup, addCategory: addCategory, showTool: showTool, showHome: showHome, closeReview: closeReview, acceptGroups: acceptGroups };
   }
   return { createApp: createApp, esc: esc, cleanName: cleanName, safeReturn: safeReturn };
 });

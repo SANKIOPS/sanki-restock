@@ -16,9 +16,12 @@
   <script src="/manage-opening-balances.js?v=d09e4354d079" defer></script>
   <script src="/manage-transactions.js?v=c2453d32bcf9" defer></script>
   <script src="/manage-classification.js?v=row-columns-2-20261114" defer></script>
-  <script src="/manage.js?v=96c5d2748d1f" defer></script>
+  <script src="/manage.js?v=category-move-20261114" defer></script>
   <script src="/sidebar.js" defer></script>
   <style>
+    .group-workspace{--gw-ivory:#f6f1e5;--gw-paper:#fffdf7;--gw-ink:#17372e;--gw-muted:#6c766f;--gw-line:#ddd7c8;--gw-green:#0b6b52;--gw-green-dark:#07513f;--gw-mint:#e5f2eb;margin:0 -20px -20px;padding:20px;background:var(--gw-ivory);border-radius:0 0 12px 12px;color:var(--gw-ink)}
+    .group-review-dialog{--gw-ivory:#f6f1e5;--gw-paper:#fffdf7;--gw-ink:#17372e;--gw-muted:#6c766f;--gw-line:#ddd7c8;--gw-green:#0b6b52;--gw-green-dark:#07513f;--gw-mint:#e5f2eb;background:var(--gw-paper);border-color:var(--gw-line);color:var(--gw-ink)}.group-review-dialog .dialog-content{background:linear-gradient(180deg,var(--gw-paper),var(--gw-ivory))}.group-review-dialog h2{font-family:Georgia,"Times New Roman",serif;color:var(--gw-green-dark)}.group-review-dialog .green{background:var(--gw-green);border-color:var(--gw-green)}.group-review-dialog .green:hover{background:var(--gw-green-dark)}.group-review-dialog .group-detail summary{color:var(--gw-green);font-weight:700}
+    .group-workspace .primary,.group-workspace .green{background:var(--gw-green);border-color:var(--gw-green);color:#fff}.group-workspace .primary:hover,.group-workspace .green:hover{background:var(--gw-green-dark)}.group-workspace input[type=checkbox]{accent-color:var(--gw-green)}.group-workspace input,.group-workspace textarea{border-color:#cec7b8;background:#fffefb}.group-workspace input:focus-visible,.group-workspace textarea:focus-visible{outline:3px solid #84b5a5;outline-offset:1px}.group-workspace .inline-form{border-color:var(--gw-line);background:var(--gw-paper)}.group-workspace>.table-wrap{border:1px solid var(--gw-line);border-radius:12px;background:var(--gw-paper);box-shadow:0 7px 24px #183d300d}.group-workspace>.table-wrap>table>thead th{background:#eee9dc;color:#52665f;text-transform:uppercase;letter-spacing:.35px;font-size:10px}.group-workspace>.table-wrap>table>tbody>tr:hover{background:#fbf8ef}.group-workspace .group-detail summary{color:var(--gw-green);font-weight:700}.group-category-shell{margin-top:9px;overflow:auto;border:1px solid var(--gw-line);border-radius:9px;background:#fff}.group-category-table{min-width:560px}.group-category-table th{padding:7px 8px;background:#f3efe4;color:#596b64;font-size:9px;text-transform:uppercase;letter-spacing:.35px}.group-category-table td{padding:7px 8px;font-size:11px}.group-category-table tr:has(input:checked){background:var(--gw-mint)}.group-category-name{font-weight:680}.group-category-businesses{color:var(--gw-muted)}.category-move-form{position:sticky;top:10px;z-index:3;border-color:#82aa9b!important;box-shadow:0 10px 28px #17372e21}.category-move-form h3{color:var(--gw-green-dark)}.category-move-form textarea{min-height:62px}.group-workspace .selection{color:#536c63}.group-move-badge{display:inline-block;margin-left:6px;padding:2px 6px;border-radius:999px;background:var(--gw-mint);color:var(--gw-green-dark);font-size:9px;font-weight:700}.group-workspace .group-detail ul{padding-left:19px}@media(max-width:620px){.group-workspace{margin:0 -14px -14px;padding:14px}.category-move-form{position:static}.group-workspace>.actions button{flex:1 1 44%}}
     .classification-field-access{margin:9px 0 0;padding:7px 9px;border-left:3px solid var(--cr-emerald);background:var(--cr-mint);color:var(--cr-ink);font-size:11px;line-height:1.4}.classification-field-access:empty{display:none}
     .classification-editing-row{background:#edf6f0!important;box-shadow:inset 3px 0 0 var(--cr-emerald)}
     .classification-editing-row>td{padding:0!important;background:#f1f6f1}
@@ -54,13 +57,18 @@
           <div id="transactionMessage" class="message" role="status" aria-live="polite"></div>
           <div id="transactionResults" aria-live="polite"></div>
         </div>
-        <div id="groupWorkspace" hidden>
+        <div id="groupWorkspace" class="group-workspace" hidden>
           <div class="actions"><button type="button" class="primary" id="showGroupAdd">＋ Add group</button><button type="button" id="renameSelected">Rename selected</button><button type="button" id="mergeSelected">Merge selected</button><button type="button" id="refreshGroups">Refresh groups</button></div>
           <div class="inline-form" id="groupAddForm" hidden><label for="newGroupName">New group name</label><input id="newGroupName" maxlength="120" autocomplete="off"><div class="actions" style="margin-top:12px"><button type="button" class="primary" id="saveNewGroup">Save group</button><button type="button" id="cancelGroupAdd">Cancel</button></div></div>
           <div class="inline-form" id="groupEditForm" hidden>
             <h3 id="groupEditTitle">Rename group</h3><p id="groupEditSources" class="selection"></p>
             <div class="fields"><div class="field full"><label for="finalGroupName">Final group name</label><input id="finalGroupName" list="knownGroups" maxlength="120" autocomplete="off"><datalist id="knownGroups"></datalist><p class="hint" id="groupTargetHint"></p></div><div class="field full"><label for="groupChangeReason">Reason for this change — required</label><textarea id="groupChangeReason" maxlength="1000" placeholder="Explain why these groups are being reorganized"></textarea></div></div>
             <div class="actions" style="margin-top:12px"><button type="button" class="primary" id="previewGroupChange">Review change</button><button type="button" id="cancelGroupEdit">Cancel</button></div>
+          </div>
+          <div class="inline-form category-move-form" id="categoryMoveForm" hidden>
+            <h3>Move selected categories</h3><p id="categoryMoveSelection" class="selection"></p>
+            <div class="fields"><div class="field"><label for="categoryMoveTarget">Destination group — searchable</label><input id="categoryMoveTarget" list="categoryMoveGroups" maxlength="120" autocomplete="off" placeholder="Type 2–3 letters or choose a group"><datalist id="categoryMoveGroups"></datalist><p class="hint">Choose an existing group. Category names and recorded expenses will stay unchanged.</p></div><div class="field"><label for="categoryMoveReason">Reason for moving — required</label><textarea id="categoryMoveReason" maxlength="1000" placeholder="Why do these categories belong in this group?"></textarea></div></div>
+            <div class="actions" style="margin-top:12px"><button type="button" class="primary" id="previewCategoryMove">Review impact</button><button type="button" id="clearCategoryMove">Clear selection</button></div>
           </div>
           <div class="message" id="groupMessage" role="status" aria-live="polite"></div><div class="selection" id="groupSelection" aria-live="polite"></div>
           <div class="table-wrap"><table><thead><tr><th class="check-cell"><input type="checkbox" id="selectAllGroups" aria-label="Select all groups"></th><th>Group</th><th class="num">Categories</th><th class="num">Linked entries</th><th>Businesses using it</th><th>Actions</th></tr></thead><tbody id="groupsTable"></tbody></table></div>
@@ -107,7 +115,7 @@
       </div>
     </section>
   </main>
-  <dialog id="groupReviewDialog" aria-labelledby="groupReviewTitle"><div class="dialog-content">
+  <dialog id="groupReviewDialog" class="group-review-dialog" aria-labelledby="groupReviewTitle"><div class="dialog-content">
     <h2 id="groupReviewTitle">Review group change</h2><dl id="groupPreviewSummary" class="preview-summary"></dl>
     <div class="safety">Only group organization changes. Category identities, expense amounts and dates, payments, balances, proofs and reconciliation links remain unchanged. Group-level subtotals will reflect the new structure.</div>
     <div id="groupPreviewWarnings"></div><details class="group-detail"><summary>Categories included in this change</summary><ul id="groupPreviewCategories"></ul></details>

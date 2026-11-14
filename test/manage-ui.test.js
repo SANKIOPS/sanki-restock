@@ -132,6 +132,20 @@ test('group table shows usage once per group and escapes all data', async () => 
   assert.equal(h.nodes.groupsTable.innerHTML.includes('<svg'), false);
 });
 
+test('expanded group rows select categories and review a searchable audited move in the ivory-green workspace', async () => {
+  const h = harness(); await h.init('groups');
+  assert.match(html, /class="group-workspace"/); assert.match(html, /--gw-ivory:#f6f1e5/); assert.match(html, /--gw-green:#0b6b52/);
+  assert.match(h.nodes.groupsTable.innerHTML, /data-select-category="0:0"/); assert.match(h.nodes.groupsTable.innerHTML, /Recorded amount/);
+  assert.match(h.nodes.categoryMoveGroups.innerHTML, /value="Travel"/); assert.match(h.nodes.categoryMoveGroups.innerHTML, /value="Final"/);
+  h.app.state.selectedCategories.add('Travel\u0000Flowers'); h.app.acceptGroups(initialGroups());
+  assert.equal(h.nodes.categoryMoveForm.hidden, false); assert.match(h.nodes.categoryMoveSelection.textContent, /1 category selected/);
+  h.nodes.categoryMoveTarget.value = 'final'; h.nodes.categoryMoveReason.value = 'Move this category to its correct report group';
+  assert.equal(await h.app.previewCategoryMove(), true); assert.equal(h.nodes.groupReviewDialog.open, true); assert.match(h.nodes.groupReviewTitle.textContent, /category move/i);
+  const preview = h.calls.find(call => call.endpoint.endsWith('/preview'));
+  assert.deepEqual(preview.body, { action: 'move_categories', sources: [], categories: [{ name: 'Flowers', source: 'Travel' }], target: 'Final', reason: 'Move this category to its correct report group', revision: 'revision-1' });
+  assert.equal(await h.app.applyChange(), true); assert.equal(h.app.state.selectedCategories.size, 0); assert.match(h.nodes.groupMessage.textContent, /Categories moved to Final/);
+});
+
 test('rename requires one valid source and a printable name and reason before sending a preview', async () => {
   const h = harness(); await h.init('groups');
   h.app.beginEdit('rename', ['Travel', 'Transport']); assert.equal(h.app.state.editAction, '');
