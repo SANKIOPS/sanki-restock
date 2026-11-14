@@ -32,6 +32,10 @@ function categoryRows(store, categories = []) {
 function entries(store) {
   return Object.entries(store.expenses || {}).map(([id, record]) => ({ id, collection: 'expenses', record })).concat((store.reconciliationExpenses || []).map((record, index) => ({ id: record.id || String(index), collection: 'reconciliationExpenses', record })));
 }
+function entryAmount(record) {
+  const value = Number(record && (record.amount != null ? record.amount : record.totalAgreed));
+  return Number.isFinite(value) ? Math.abs(value) : 0;
+}
 function categoryGroupNames(store, categories = []) {
   const seen = new Set(), groups = [], rows = categoryRows(store, categories), categoryNames = new Set(rows.map(category => category.name.trim().toLowerCase()));
   for (const value of rows.map(category => category.group).concat(Array.isArray(store.customCategoryGroups) ? store.customCategoryGroups : [], entries(store).filter(entry => !categoryNames.has(String(entry.record.ledger || entry.record.category || '').trim().toLowerCase())).map(entry => entry.record.categoryGroup))) {
@@ -54,7 +58,7 @@ function catalog(store, categories = []) {
     const key = row.name.trim().toLowerCase(), group = byGroup.get(groupKey(resolveGroupName(store, row.group)));
     if (!group) continue;
     if (!byCategory.has(key)) byCategory.set(key, group);
-    if (!group.categories.some(category => category.name.trim().toLowerCase() === key)) group.categories.push({ name: row.name, entryCount: 0, businesses: [] });
+    if (!group.categories.some(category => category.name.trim().toLowerCase() === key)) group.categories.push({ name: row.name, entryCount: 0, totalAmount: 0, businesses: [] });
   }
   for (const { record } of entries(store)) {
     const categoryName = String(record.ledger || record.category || '').trim(), key = categoryName.toLowerCase();
@@ -64,8 +68,8 @@ function catalog(store, categories = []) {
     group.entryCount += 1;
     if (!group.businesses.includes(business)) group.businesses.push(business);
     let category = group.categories.find(category => category.name.trim().toLowerCase() === key);
-    if (!category && categoryName) { category = { name: categoryName, entryCount: 0, businesses: [] }; group.categories.push(category); }
-    if (category) { category.entryCount += 1; if (!category.businesses.includes(business)) category.businesses.push(business); }
+    if (!category && categoryName) { category = { name: categoryName, entryCount: 0, totalAmount: 0, businesses: [] }; group.categories.push(category); }
+    if (category) { category.entryCount += 1; category.totalAmount += entryAmount(record); if (!category.businesses.includes(business)) category.businesses.push(business); }
   }
   for (const group of groups) {
     group.categoryCount = group.categories.length; group.businesses.sort(); group.categories.sort((a, b) => a.name.localeCompare(b.name));
@@ -78,22 +82,59 @@ function input(body) {
   body = body || {};
   const action = body.action, target = cleanGroupName(body.target), sources = Array.isArray(body.sources) ? body.sources.map(cleanGroupName) : [];
   const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
-  if (!['rename', 'merge'].includes(action)) fail(400, 'Choose rename or merge.', 'INVALID_ACTION');
-  if (!sources.length || sources.length > 100 || sources.some(name => !name) || (action === 'rename' && sources.length !== 1)) fail(400, 'Choose valid source groups; rename accepts one source.', 'INVALID_SOURCES');
-  if (new Set(sources.map(groupKey)).size !== sources.length) fail(400, 'Select each source group only once.', 'DUPLICATE_SOURCES');
+  if (!['rename', 'merge', 'move_categories'].includes(action)) fail(400, 'Choose rename, merge or move categories.', 'INVALID_ACTION');
+  const categoryMoves = Array.isArray(body.categories) ? body.categories.map(item => ({
+    name: cleanGroupName(typeof item === 'string' ? item : item && item.name),
+    source: cleanGroupName(item && typeof item === 'object' ? item.source : '')
+  })) : [];
+  if (action === 'move_categories') {
+    if (!categoryMoves.length || categoryMoves.length > 100 || categoryMoves.some(item => !item.name || !item.source)) fail(400, 'Choose between 1 and 100 valid categories to move.', 'INVALID_CATEGORIES');
+    if (new Set(categoryMoves.map(item => item.name.toLowerCase())).size !== categoryMoves.length) fail(400, 'Select each category only once.', 'DUPLICATE_CATEGORIES');
+  } else {
+    if (!sources.length || sources.length > 100 || sources.some(name => !name) || (action === 'rename' && sources.length !== 1)) fail(400, 'Choose valid source groups; rename accepts one source.', 'INVALID_SOURCES');
+    if (new Set(sources.map(groupKey)).size !== sources.length) fail(400, 'Select each source group only once.', 'DUPLICATE_SOURCES');
+  }
   if (!target) fail(400, 'Enter a final group name using printable characters (up to 120 characters).', 'INVALID_TARGET');
   if (!reason || reason.length > 1000 || /[\p{C}\u2028\u2029]/u.test(reason)) fail(400, 'Enter a printable reason for this change (up to 1000 characters).', 'INVALID_REASON');
-  return { action, sources, target, reason };
+  return { action, sources, categories: categoryMoves, target, reason };
 }
 function fingerprint(body, actor) {
   const normalized = input(body);
   normalized.sources = normalized.sources.map(groupKey).sort();
-  if (normalized.action === 'merge') normalized.target = groupKey(normalized.target);
+  normalized.categories = normalized.categories.map(item => ({ name: item.name.toLowerCase(), source: groupKey(item.source) })).sort((a, b) => a.name.localeCompare(b.name));
+  if (normalized.action === 'merge' || normalized.action === 'move_categories') normalized.target = groupKey(normalized.target);
   return crypto.createHash('sha256').update(JSON.stringify({ ...normalized, actor: String(actor || '').trim().toLowerCase() })).digest('hex');
 }
 function planChange(store, body, categories = []) {
   const normalized = input(body), view = catalog(store, categories);
   if (body.revision !== view.revision) fail(409, 'The groups or accounting records changed. Refresh and review a new preview before confirming.', 'STALE_PREVIEW');
+  if (normalized.action === 'move_categories') {
+    const existingTarget = view.groups.find(group => groupKey(group.name) === groupKey(normalized.target));
+    if (!existingTarget) fail(400, 'Choose an existing destination group.', 'TARGET_MISSING');
+    const selected = normalized.categories.map(item => {
+      const sourceGroup = view.groups.find(group => groupKey(group.name) === groupKey(item.source));
+      const category = sourceGroup && sourceGroup.categories.find(row => row.name.trim().toLowerCase() === item.name.toLowerCase());
+      if (!sourceGroup || !category) fail(409, 'A selected category is no longer in its displayed source group. Refresh the group list.', 'SOURCE_CHANGED');
+      if (groupKey(sourceGroup.name) === groupKey(existingTarget.name)) fail(400, 'Choose a different destination group for every selected category.', 'TARGET_IS_SOURCE');
+      return { name: category.name, source: sourceGroup.name, entryCount: category.entryCount, totalAmount: category.totalAmount || 0, businesses: category.businesses || [] };
+    });
+    const preview = {
+      revision: view.revision,
+      action: normalized.action,
+      sources: Array.from(new Set(selected.map(item => item.source))).sort(),
+      target: existingTarget.name,
+      reason: normalized.reason,
+      categoryCount: selected.length,
+      entryCount: selected.reduce((sum, item) => sum + Number(item.entryCount || 0), 0),
+      totalAmount: selected.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0),
+      businesses: Array.from(new Set(selected.flatMap(item => item.businesses))).sort(),
+      categories: selected,
+      warnings: ['Only the selected categories move. Category names and every expense amount, date, vendor, payment, proof and reconciliation link stay unchanged.'],
+      already: false
+    };
+    preview.previewToken = crypto.createHmac('sha256', previewSecret).update(JSON.stringify(preview)).digest('hex');
+    return preview;
+  }
   const sourceGroups = normalized.sources.map(source => view.groups.find(group => groupKey(group.name) === groupKey(source)));
   if (sourceGroups.some(group => !group)) fail(409, 'A source group is no longer available. Refresh the group list.', 'SOURCE_CHANGED');
   const existingTarget = view.groups.find(group => groupKey(group.name) === groupKey(normalized.target));
@@ -123,9 +164,11 @@ function financialInvariant(store) {
 function classificationSnapshot(store, preview, categories = []) {
   const sources = new Set(preview.sources.map(groupKey)), definitions = categoryRows(store, categories);
   const assignments = new Map(definitions.map(category => [category.name.trim().toLowerCase(), resolveGroupName(store, category.group)]));
+  const selectedNames = preview.action === 'move_categories' ? new Set(preview.categories.map(category => category.name.trim().toLowerCase())) : null;
   const changedCategories = [];
   const captureCategory = (category, collection, key) => {
     if (!category) return;
+    if (selectedNames && !selectedNames.has(String(category.name || '').trim().toLowerCase())) return;
     const authoritative = assignments.get(String(category.name || '').trim().toLowerCase());
     if (!sources.has(groupKey(authoritative)) && !sources.has(groupKey(resolveGroupName(store, category.group)))) return;
     changedCategories.push({ collection, key, name: category.name, hasGroup: Object.hasOwn(category, 'group'), group: Object.hasOwn(category, 'group') ? category.group : null });
@@ -133,6 +176,7 @@ function classificationSnapshot(store, preview, categories = []) {
   Object.entries(store.customLedgers || {}).forEach(([key, category]) => captureCategory(category, 'customLedgers', key));
   (store.sankiCategoryCatalog && store.sankiCategoryCatalog.categories || []).forEach((category, index) => captureCategory(category, 'sankiCategoryCatalog.categories', index));
   const changedEntries = entries(store).filter(({ record }) => {
+    if (selectedNames && !selectedNames.has(String(record.ledger || record.category || '').trim().toLowerCase())) return false;
     const group = assignments.get(String(record.ledger || record.category || '').trim().toLowerCase()) || resolveGroupName(store, record.categoryGroup);
     return sources.has(groupKey(group));
   }).map(({ id, collection, record }) => ({ collection, id, hasCategoryGroup: Object.hasOwn(record, 'categoryGroup'), categoryGroup: Object.hasOwn(record, 'categoryGroup') ? record.categoryGroup : null }));
@@ -143,33 +187,38 @@ function classificationSnapshot(store, preview, categories = []) {
     customCategoryGroups: Array.isArray(store.customCategoryGroups) ? store.customCategoryGroups : null,
     categoryGroupAliasesPresent: Object.hasOwn(store, 'categoryGroupAliases'),
     categoryGroupAliases: store.categoryGroupAliases || null,
-    categoryAssignments: definitions.filter(category => sources.has(groupKey(resolveGroupName(store, category.group)))).map(category => ({ name: category.name, group: resolveGroupName(store, category.group) })),
+    categoryAssignments: definitions.filter(category => (!selectedNames || selectedNames.has(category.name.trim().toLowerCase())) && sources.has(groupKey(resolveGroupName(store, category.group)))).map(category => ({ name: category.name, group: resolveGroupName(store, category.group) })),
     categories: changedCategories,
     entries: changedEntries
   }));
 }
 function applyChange(store, preview, categories = []) {
   const before = financialInvariant(store), sourceKeys = new Set(preview.sources.map(groupKey)), definitions = categoryRows(store, categories), categoryGroups = new Map();
+  const selectedNames = preview.action === 'move_categories' ? new Set(preview.categories.map(category => category.name.trim().toLowerCase())) : null;
   for (const category of definitions) if (category && typeof category.name === 'string' && !categoryGroups.has(category.name.toLowerCase())) categoryGroups.set(category.name.toLowerCase(), groupKey(resolveGroupName(store, category.group)));
   for (const category of Object.values(store.customLedgers || {}).concat(store.sankiCategoryCatalog && store.sankiCategoryCatalog.categories || [])) {
     if (!category) continue;
+    if (selectedNames && !selectedNames.has(String(category.name || '').trim().toLowerCase())) continue;
     const authoritative = definitions.find(definition => definition.name.trim().toLowerCase() === String(category.name || '').trim().toLowerCase());
     const currentGroup = authoritative && resolveGroupName(store, authoritative.group);
     if (sourceKeys.has(groupKey(currentGroup))) category.group = preview.target;
     else if (sourceKeys.has(groupKey(resolveGroupName(store, category.group)))) category.group = currentGroup || preview.target;
   }
   for (const { record } of entries(store)) {
+    if (selectedNames && !selectedNames.has(String(record.ledger || record.category || '').trim().toLowerCase())) continue;
     const key = categoryGroups.get(String(record.ledger || record.category || '').toLowerCase()) || groupKey(resolveGroupName(store, record.categoryGroup));
     if (sourceKeys.has(key)) record.categoryGroup = preview.target;
   }
-  store.customCategoryGroups = categoryGroupNames(store, categories).filter(name => !sourceKeys.has(groupKey(name)));
+  store.customCategoryGroups = categoryGroupNames(store, categories).filter(name => preview.action === 'move_categories' || !sourceKeys.has(groupKey(name)));
   if (!store.customCategoryGroups.some(name => groupKey(name) === groupKey(preview.target))) store.customCategoryGroups.push(preview.target);
-  const aliases = new Map(Object.entries(store.categoryGroupAliases || {}));
-  for (const [key, value] of aliases) if (sourceKeys.has(groupKey(resolveGroupName(store, value)))) aliases.set(key, preview.target);
-  // Same-key aliases retain the final display casing for legacy/default
-  // category providers that cannot themselves be rewritten in this store.
-  for (const source of preview.sources) aliases.set(groupKey(source), preview.target);
-  store.categoryGroupAliases = Object.fromEntries(aliases);
+  if (preview.action !== 'move_categories') {
+    const aliases = new Map(Object.entries(store.categoryGroupAliases || {}));
+    for (const [key, value] of aliases) if (sourceKeys.has(groupKey(resolveGroupName(store, value)))) aliases.set(key, preview.target);
+    // Same-key aliases retain the final display casing for legacy/default
+    // category providers that cannot themselves be rewritten in this store.
+    for (const source of preview.sources) aliases.set(groupKey(source), preview.target);
+    store.categoryGroupAliases = Object.fromEntries(aliases);
+  }
   if (financialInvariant(store) !== before) throw new Error('Group management attempted to change non-group accounting data. No changes were saved.');
   return { categoryCount: preview.categoryCount, entryCount: preview.entryCount, businesses: preview.businesses };
 }
