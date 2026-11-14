@@ -3640,6 +3640,31 @@ UPI/RVSLLUVKUS/7982361268@axl/UPI/Kotak/661596115981/ICIghi
   assert.equal(rows.statementSummary.accountLast4,'0992');assert.equal(rows.statementSummary.validated,true);
 });
 
+test('ICICI transaction-history PDF accepts the current Account heading',()=>{
+  const text=`Statement of Transactions in Account no. XXXXXXXX0992 for the period November 1, 2026 - November 2, 2026
+Withdrawal
+Amount (INR)
+Deposit
+Amount (INR)
+Balance
+10101.11.2026
+MERCHANT
+UPI/MERCHANT/store@upi/Payment fr/BANK/123456789001/ICIabc
+100.00900.00
+10202.11.2026
+CUSTOMER
+UPI/CUSTOMER/customer@upi/Payment fr/BANK/123456789002/ICIdef
+200.001100.00`;
+  const rows=parseBankStatementText(text);
+  assert.deepEqual(rows.map(x=>[x.row,x.date,x.debit,x.credit,x.balance]),[
+    [101,'2026-11-01',100,0,900],
+    [102,'2026-11-02',0,200,1100]
+  ]);
+  assert.deepEqual(rows.statementSummary,{
+    format:'ICICI Bank PDF',accountLast4:'0992',from:'2026-11-01',to:'2026-11-02',openingBalance:1000,closingBalance:1100,totalDebits:100,totalCredits:200,validated:true
+  });
+});
+
 test('bank-charge reconciliation adjustments become visible spending without double-posting the bank', () => {
   invoke('POST','/api/expenses/balances',{role:'owner',body:{nature:'SANKI',adjust:{account:'Axis Bank 3448',direction:'deduct',amount:250,date:'2026-08-22',note:'Bank charges'}}});
   invoke('POST','/api/expenses/balances',{role:'owner',body:{nature:'SANKI',adjust:{account:'Axis Bank 3448',direction:'deduct',amount:45,date:'2026-08-22',note:'Bank charges'}}});
