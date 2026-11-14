@@ -18,3 +18,25 @@ test('authoritative manual SAMAST attribution survives own-account finalization 
 test('incoming transfer selection metadata is revalidated independently of registry-inference metadata',async()=>{const d=seed(true);const made=await dispatch('/api/expenses/bank-statements/create-incoming',{draftId:d.id,rowId:'bank-0',sourceKind:'internal',ownAccountTransfer:true,fromNature:'PERSONAL',fromAccount:other,note:'Verified own personal incoming transfer'});assert.equal(made.status,200);const store=read();store.transfers[0].ownAccountSelection={...store.transfers[0].ownAccountSelection,fromAccount:'ICICI Bank 0992'};fs.writeFileSync(file,JSON.stringify(store));const before=fs.readFileSync(file,'utf8'),finalized=await dispatch('/api/expenses/bank-statements/finalize',{draftId:d.id});assert.equal(finalized.status,409);assert.match(finalized.body.error,/recorded selection|own-account/i);assert.equal(fs.readFileSync(file,'utf8'),before);});
 test('new reference-verified financial sources block an already staged own-transfer rather than being ignored',async()=>{const d=seed();assert.equal((await dispatch('/api/expenses/bank-statements/resolve',body(d))).status,200);const store=read();store.expenses['EX-NEW-SOURCE']={id:'EX-NEW-SOURCE',nature:'PERSONAL',date,amount:1000,status:'paid',paidAmount:1000,approvedAt:date,vendor:'Synthetic existing source',particulars:'Separate logged bill',ledger:'Shopping',payments:[{id:'PAY-001',date,amount:1000,account,bankReference:d.transactions[0].reference}],reimbursementPayments:[]};fs.writeFileSync(file,JSON.stringify(store));const before=fs.readFileSync(file,'utf8'),finalized=await dispatch('/api/expenses/bank-statements/finalize',{draftId:d.id});assert.equal(finalized.status,409);assert.equal(fs.readFileSync(file,'utf8'),before);assert.equal(read().transfers.length,0);});
 test('finalization submission rechecks current personal-account permission rather than trusting a retained own-mode flag',async()=>{const d=seed(),actor={role:'admin',username:'prashant',permissions:{personalAccounting:true}};assert.equal((await dispatch('/api/expenses/bank-statements/resolve',body(d),actor)).status,200);const before=fs.readFileSync(file,'utf8'),submitted=await dispatch('/api/expenses/bank-statements/finalize',{draftId:d.id},{role:'admin',username:'prashant'});assert.equal(submitted.status,409);assert.match(submitted.body.error,/current account permissions/i);assert.equal(fs.readFileSync(file,'utf8'),before);assert.deepEqual(read().bankReconciliationApprovals,{});});
+
+for(const reportingEntity of [false,true]) test('a shared-bank receipt and staged own transfer complete Owner approval and history: reporting entity '+reportingEntity, async()=>{
+  const d=seed(),s=read(),draft=s.bankReconciliationDrafts[d.id];
+  draft.transactions.push({date,credit:2000,debit:0,balance:11000,reference:'990001234567',description:'External refund received'});
+  Object.assign(draft.summary,{closingBalance:11000,totalCredits:2000});
+  fs.writeFileSync(file,JSON.stringify(s));
+  if(reportingEntity){
+    const bulk={draftId:d.id,account,nature:'SAMAST',rowIds:['bank-1'],targetNature:'SAMAST',reason:'Confirmed reporting entity',dryRun:true};
+    const preview=await dispatch('/api/expenses/bank-statements/assign-entity-bulk',bulk);assert.equal(preview.status,200,JSON.stringify(preview.body));
+    const applied=await dispatch('/api/expenses/bank-statements/assign-entity-bulk',{...bulk,dryRun:false,fingerprint:preview.body.fingerprint});assert.equal(applied.status,200,JSON.stringify(applied.body));
+  }
+  const incoming=await dispatch('/api/expenses/bank-statements/create-incoming',{draftId:d.id,rowId:'bank-1',sourceKind:'external',source:'Synthetic payer',receiptType:'refund',category:'Refund Received',note:'Verified refund'});
+  assert.equal(incoming.status,200,JSON.stringify(incoming.body));
+  assert.equal((await dispatch('/api/expenses/bank-statements/resolve',body(d))).status,200);
+  const requested=await dispatch('/api/expenses/bank-statements/finalize',{draftId:d.id},{role:'admin',username:'prashant',permissions:{personalAccounting:true}});assert.equal(requested.status,202,JSON.stringify(requested.body));
+  const finalized=await dispatch('/api/expenses/bank-statements/finalize',{draftId:d.id,approveRequestId:requested.body.approval.id});
+  assert.equal(finalized.status,200,JSON.stringify(finalized.body));
+  const saved=read();assert.equal(saved.transfers.length,1);assert.equal(saved.receipts.length,1);
+  assert.equal(saved.bankReconciliationApprovals[requested.body.approval.id].status,'approved');
+  assert.equal(saved.bankReconciliationDrafts[d.id],undefined);
+  assert.equal(saved.bankStatements[account].imports[0].reconciliationRows.length,2);
+});

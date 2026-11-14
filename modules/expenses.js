@@ -7636,7 +7636,9 @@ router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{const b=req
 function applyFinalizedInternalTransfers(draft,username){
   const result={created:[],blocked:[]};
   if(!draft||!Object.values(draft.resolutions||{}).some(r=>r.action==='create_internal_transfer'))return result;
-  const preflightError=stagedOwnerPersonalTransferError(draft);if(preflightError)throw new Error(preflightError);
+  // The finalize route validates all staged evidence before posting. Re-running
+  // receipt/source discovery here sees this request's newly finalized bank rows
+  // as conflicts and can abort after the main record and draft deletion saved.
   const s=loadStore(),now=new Date().toISOString(),view=draftReconciliation(s,draft),rowsById=new Map(view.rows.map(row=>[row.id,row]));
   const finalizedRows=finalizedPostingRows(s,draft);
   Object.entries(draft.resolutions||{}).forEach(([bankRowId,r])=>{
