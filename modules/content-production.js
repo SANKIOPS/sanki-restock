@@ -91,7 +91,7 @@ function createStore(options={}){
   });
  }
  function archive(b,u,id){if(!manager(u))fail('Only an owner or admin can archive content.',403);return change(b.revision,u.username,s=>{const i=s.items.find(i=>i.id===id);if(!i)fail('Content not found.',404);i.archived=b.archived!==false;return {action:i.archived?'archive':'restore',id};});}
- function view(u){const s=load(),m=finances(u)?adData():null;const items=s.items.map(i=>finances(u)?i:(({adIds,...rest})=>rest)(i));return {...s,items,summary:workflow.summary(s.items,s.publications),history:manager(u)?s.history:[],plan:plan(s),today:today(),permissions:{manage:manager(u),results:finances(u)},ads:m?m.ads.filter(a=>!a.archived).map(a=>({id:a.id,name:a.name,status:a.status,updatedAt:a.updatedAt,adSetId:a.adSetId,mediaUrls:a.mediaUrls||[]})):[],results:m?(m.results||[]).filter(r=>!r.archived):[]};}
+ function view(u){const s=load(),m=finances(u)?adData():null;const linkedIds=new Set(s.items.flatMap(i=>i.adIds||[]));const items=s.items.map(i=>finances(u)?i:(({adIds,...rest})=>rest)(i));return {...s,items,summary:workflow.summary(s.items,s.publications),history:manager(u)?s.history:[],plan:plan(s),today:today(),permissions:{manage:manager(u),results:finances(u)},ads:m?m.ads.filter(a=>!a.archived).map(a=>({id:a.id,name:a.name,status:a.status,updatedAt:a.updatedAt,adSetId:a.adSetId,mediaUrls:a.mediaUrls||[]})):[],results:m?(m.results||[]).filter(r=>!r.archived&&linkedIds.has(r.adId)):[]};}
  return {load,save,publish,configure,view,plan,catalog,bookings,importSheet,archive};
 }
 function createRouter(store=createStore()){
