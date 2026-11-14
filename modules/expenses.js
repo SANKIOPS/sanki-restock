@@ -1420,7 +1420,7 @@ function loadStore() {
     (s.paytmSettlements||[]).filter(x=>num(x.chargeAmount)>0).forEach(x=>{
       if(!s.reconciliationExpenses.some(e=>e.settlementId===x.id)){s.reconciliationExpenses.push({id:'BRE-'+x.id,nature:'SANKI',date:x.date,amount:num(x.chargeAmount),account:x.bankAccount||DEFAULT_SALES_BANK,category:'BANK CHARGES',type:'running',vendor:'Paytm',particulars:'Paytm settlement charges · connected sales '+((x.orderIds||[]).map(n=>'#'+String(n).replace(/^#/,'')).join(', ')||'not specified'),settlementId:x.id,bankTransactionId:x.bankTransactionId||'',reconciliationDraft:x.reconciliationDraft||'',createdAt:x.createdAt||new Date().toISOString(),createdBy:x.createdBy||'system'});bankChargeRepairAdded=true;}
     });
-    s.reconciliationExpenses.filter(e=>e.settlementId&&e.category!=='PAYTM CHARGES').forEach(e=>{e.previousCategory=e.category;e.category='PAYTM CHARGES';e.reclassifiedAt=e.reclassifiedAt||new Date().toISOString();e.reclassificationReason='Paytm processing charges separated from ordinary bank charges';bankChargeRepairAdded=true;});
+    s.reconciliationExpenses.filter(e=>e.settlementId&&e.category!=='PAYTM CHARGES'&&!(Number.isInteger(Number(e.classificationRevision))&&Number(e.classificationRevision)>0)).forEach(e=>{e.previousCategory=e.category;e.category='PAYTM CHARGES';e.reclassifiedAt=e.reclassifiedAt||new Date().toISOString();e.reclassificationReason='Paytm processing charges separated from ordinary bank charges';bankChargeRepairAdded=true;});
     (s.transfers || []).forEach(x => { x.fromAccount = rename(x.fromAccount); x.toAccount = rename(x.toAccount); });
     const namitaJatinTransferKey='convert-ex-00316-to-namita-5464-transfer-v1';
     if(!s.oneTimeMigrations[namitaJatinTransferKey]){
@@ -2281,6 +2281,14 @@ function bankAmountManualMatchApproval(req,plan){
   return{difference,limit:PRASHANT_BANK_AMOUNT_MATCH_LIMIT,authorized:owner||prashant&&withinPrashantLimit,ownerApprovalRequired:!owner&&(!prashant||!withinPrashantLimit),policy:owner?'owner':prashant&&withinPrashantLimit?'prashant_under_3':'owner_required'};
 }
 function canManageCategoriesAndVendors(req){return isOwner(req)||isPrashant(req);}
+const expenseClassificationReview=require('./expense-classification-review');
+expenseClassificationReview.register(router,{
+  loadStore,saveStore,
+  canManageCategoriesAndVendors,
+  claimantOnly:claimantPolicy.claimantOnly,
+  approvalNatures,canManagePersonalAccounting,canViewExpense,canAccessExpense:canManageRestrictedExpense,
+  pickableLedgers,registerVendorForNature,audit
+});
 function canSelectOwnerPersonalTransferAccounts(req){return isOwner(req)||(rolesOfReq(req).includes('admin')&&isPrashant(req));}
 function ownerPersonalTransferClassification(fromNature,toNature){
   return fromNature==='PERSONAL'&&toNature==='SANKI'?'owner_contribution':fromNature==='SANKI'&&toNature==='PERSONAL'?'owner_withdrawal':'';
@@ -4424,7 +4432,8 @@ router.get('/api/expenses/vendors', (req, res) => {
   };
   const natures=nature?[nature]:approvalNatures(req);
   natures.forEach(n=>{const master=vendorMasterForNature(s,n);Object.values(master).forEach(v=>ensureBook(n,v.name,v));});
-  Object.values(s.expenses).concat(cardExpenseRecords(s)).forEach(e => {
+  const finalizedBankExpenseRecords=(s.reconciliationExpenses||[]).filter(e=>!e.creditCardStatementId&&!e.accountingExcluded&&num(e.amount)>0&&!expenseClassificationReview.activeReconciliationDraft(s,e)).map(e=>Object.assign({},e,{ledger:e.category,status:'paid',paidAmount:num(e.amount),requestedAmount:num(e.amount),paymentType:'Bank reconciliation',source:'bank_reconciliation_expense',statementBacked:true,readOnly:true,approvedAt:e.createdAt,approvedBy:e.createdBy,claimant:'',payments:[{id:'RECONCILIATION',date:e.date,amount:num(e.amount),account:e.account,paymentType:'Bank reconciliation',bankReference:e.bankTransactionId||e.adjustmentId||e.settlementId||'',proof:e.proof||'',personalFunds:false,unpayBlockedReason:'Correct this transaction through Review Classification or its bank reconciliation history.'}]}));
+  Object.values(s.expenses).concat(cardExpenseRecords(s),finalizedBankExpenseRecords).forEach(e => {
     if(e.expenseRefundReceiptId||expenseRefunds.records(s).filter(expenseRefunds.received).some(r=>r.components.some(c=>c.externalMovementId===e.id)))return;
     const n=normalizedNature(e.nature);
     if (!canViewExpense(req,e)||!natures.includes(n)||!e.vendor||!['approved','partially_paid','paid'].includes(e.status)) return;

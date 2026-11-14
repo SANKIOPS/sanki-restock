@@ -16,7 +16,7 @@
   }
   function createApp(doc, win, injectedRequest) {
     var state = { config: null, catalog: [], groups: [], revision: '', selected: new Set(), busy: false, loading: 0, tool: '', editAction: '', editSources: [], preview: null, operationId: '' };
-    var openingController, transactionController;
+    var openingController, transactionController, classificationController;
     function el(id) { return doc.getElementById(id); }
     function message(id, text, bad) { el(id).textContent = text || ''; el(id).className = 'message ' + (bad ? 'error' : 'success'); }
     function request(url, options) {
@@ -191,7 +191,7 @@
       el('openingWorkspace').hidden = section !== 'opening-balances';
       el('transactionWorkspace').hidden = section !== 'transactions';
       el('toolTitle').textContent = section === 'groups' ? 'Manage groups' : section === 'opening-balances' ? 'Manage opening balances' : 'Manage categories';
-      el('toolDescription').textContent = section === 'groups' ? 'Organize shared expense groups with a reviewed, audited rename or merge.' : section === 'opening-balances' ? 'Account-ledger openings: stage first, then explicit Owner review. Nothing is posted on opening this screen.' : 'Add approved expense categories and assign their group. Shared by SANKI, SAMAST and PERSONAL.';
+      el('toolDescription').textContent = section === 'groups' ? 'Organize shared expense groups with a reviewed, audited rename or merge.' : section === 'opening-balances' ? 'Account-ledger openings: stage first, then explicit Owner review. Nothing is posted on opening this screen.' : 'Set up approved categories, or review the entity, category, vendor and narration behind your reports.';
       if (updateUrl !== false) { var url = new URL(win.location.href); url.searchParams.set('section', section); win.history.replaceState(null, '', url.pathname + url.search + url.hash); }
       if (section === 'transactions') {
         el('toolTitle').textContent = 'Manage transactions';
@@ -205,7 +205,14 @@
         if (!openingController) { message('pageMessage','Opening-balance tools could not load. Refresh this page.',true); return Promise.resolve(false); }
         return openingController.load();
       }
-      return loadGroups().then(function () { if (state.tool === 'categories') renderCategories(); return true; });
+      return loadGroups().then(function () {
+        if (state.tool === 'categories') {
+          renderCategories();
+          if (!classificationController && win.SankiManageClassification) classificationController = win.SankiManageClassification.create(doc, win, state.config, request, function (value) { state.busy = value; el('backToManage').disabled = value; });
+          if (classificationController) return classificationController.init();
+        }
+        return true;
+      });
     }
     function showHome() {
       if (state.busy) return;

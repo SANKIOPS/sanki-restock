@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const classificationReview = require('../modules/expense-classification-review');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
@@ -3681,9 +3682,40 @@ test('bank-charge reconciliation adjustments become visible spending without dou
   assert.equal(persisted.chargeAmount,539.64);
   assert.equal(persisted.grossAmount,15295);
   assert.equal(JSON.parse(fs.readFileSync(expenseStorePath,'utf8')).reconciliationExpenses.find(x=>x.settlementId==='PTM-LEGACY-NOTE').category,'PAYTM CHARGES');
+  const classifiedStore=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')),classifiedPaytm=classifiedStore.reconciliationExpenses.find(x=>x.settlementId==='PTM-LEGACY-NOTE');
+  classifiedPaytm.category='Fittings';classifiedPaytm.classificationRevision=1;classifiedPaytm.auditHistory=[{classificationOnly:true,reason:'Owner reporting correction'}];
+  fs.writeFileSync(expenseStorePath,JSON.stringify(classifiedStore));
+  invoke('GET','/api/expenses/spending-dashboard',{role:'owner',query:{from:'2026-08-22',to:'2026-08-22',nature:'SANKI',category:'Fittings'}});
+  const preservedPaytm=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')).reconciliationExpenses.find(x=>x.settlementId==='PTM-LEGACY-NOTE');
+  assert.equal(preservedPaytm.category,'Fittings','legacy Paytm repair preserves an audited Review Classification correction');
+  assert.equal(preservedPaytm.classificationRevision,1);
   const source=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(source,/Connected sales:/);
   assert.match(source,/Hidden \/ unknown charges/);
+});
+
+test('review classification corrections flow into finalized bank-expense vendor ledgers', () => {
+  const expenseStorePath=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(expenseStorePath)?fs.readFileSync(expenseStorePath,'utf8'):'{}';
+  try{
+    const stored=JSON.parse(baseline),id='BRE-VENDOR-CLASSIFICATION',amount=1499;
+    stored.reconciliationExpenses=stored.reconciliationExpenses||[];
+    stored.reconciliationExpenses=stored.reconciliationExpenses.filter(row=>row.id!==id);
+    const row={id,nature:'SANKI',date:'2097-03-01',category:'Fittings',vendor:'Old Bank Vendor',particulars:'Bank-created historical expense',amount,account:'Axis Bank 3448',paymentType:'Bank reconciliation',bankTransactionId:'BTX-VENDOR-CLASSIFICATION',createdBy:'owner-user',createdAt:'2097-03-01T10:00:00.000Z'};
+    stored.reconciliationExpenses.push(row);
+    fs.writeFileSync(expenseStorePath,JSON.stringify(stored));
+    const corrected=invoke('PATCH','/api/expenses/classification-review/:id',{role:'owner',params:{id},body:{sourceType:'reconciliation_expense',expectedRevision:0,fingerprint:classificationReview.recordFingerprint(row,'reconciliation_expense'),vendor:'Corrected Bank Vendor',reason:'Correct historical bank-created vendor'}});
+    assert.equal(corrected.status,200,JSON.stringify(corrected.body));
+    const response=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'SANKI',search:'Corrected Bank Vendor',from:'2097-03-01',to:'2097-03-01'}});
+    assert.equal(response.status,200,JSON.stringify(response.body));
+    const book=response.body.vendors.find(vendor=>vendor.name==='Corrected Bank Vendor');
+    assert.ok(book,'the corrected vendor gets a vendor book');
+    assert.equal(book.billed,amount);assert.equal(book.paid,amount);assert.equal(book.outstanding,0);
+    assert.equal(book.entries.filter(entry=>entry.id===id).length,1,'the finalized bank expense is counted once');
+    const expenseLine=book.ledgerRows.find(entry=>entry.entryId===id&&entry.kind==='expense');
+    const paymentLine=book.ledgerRows.find(entry=>entry.entryId===id&&entry.kind==='payment');
+    assert.equal(expenseLine.out,amount);assert.equal(paymentLine.in,amount);
+    assert.equal(paymentLine.reference,'BTX-VENDOR-CLASSIFICATION');
+  }finally{fs.writeFileSync(expenseStorePath,baseline);}
 });
 
 test('Paytm clearing starts on 22 August and shows settlement and charges separately',()=>{

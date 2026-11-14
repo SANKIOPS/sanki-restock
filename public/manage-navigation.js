@@ -49,7 +49,7 @@
       add('classification', 'vendors', 'Manage vendors', 'Add approved vendors, rename shared names or merge duplicate vendor ledgers.', '/expenses.html?tab=vendors', ['Add vendor', 'Rename vendor', 'Merge vendors']);
     }
     if (expenses && cfg.canManageCategories === true) {
-      add('classification', 'categories', 'Manage categories', 'View current categories and add a category under an existing or newly organized group.', '/manage.html?section=categories', ['View categories', 'Add category', 'Assign group when adding']);
+      add('classification', 'categories', 'Manage categories', 'Set up categories and review the accounting classification behind reports.', '/manage.html?section=categories', ['Category setup', 'Review classification', 'Correct entity, category, vendor or narration']);
       add('classification', 'groups', 'Manage groups', 'Add groups, rename a group or merge duplicates into one final group.', '/manage.html?section=groups', ['Add group', 'Rename group', 'Merge groups']);
     }
     if (expenses && cfg.canApprove === true) {

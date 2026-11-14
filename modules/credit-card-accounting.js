@@ -1,4 +1,5 @@
 'use strict';
+const crypto=require('node:crypto');
 const number=v=>Number(v)||0;
 const money=v=>Math.round(number(v)*100)/100;
 const expenseClasses=['expense','fee','emi_interest','refund'];
@@ -21,6 +22,22 @@ function rowMatches(a,b){
   if(a.reference&&b.reference)return ref(a.reference)===ref(b.reference);
   return merchantName(a.merchant||a.narration).toLowerCase()===merchantName(b.merchant||b.narration).toLowerCase();
 }
+function postingFingerprint(record){
+  const fields=['id','nature','date','amount','account','expenseRefundReceiptId','creditCardId','ownerOnly','creditCardStatementId','creditCardRowId','classification','unbilled','source'];
+  return crypto.createHash('sha256').update(JSON.stringify(fields.map(key=>(record&&record[key])??null))).digest('hex');
+}
+function applyClassificationOverride(expenses,posting){
+  const override=expenses.expenseClassificationOverrides&&expenses.expenseClassificationOverrides[posting.id];
+  if(!override||override.sourceType!=='reconciliation_expense'||override.sourceFingerprint!==postingFingerprint(posting))return posting;
+  posting.category=String(override.category||posting.category||'');
+  posting.type=String(override.type||posting.type||'');
+  if(override.categoryGroup)posting.categoryGroup=String(override.categoryGroup);else delete posting.categoryGroup;
+  posting.vendor=String(override.vendor||posting.vendor||'');
+  posting.particulars=String(override.particulars||posting.particulars||'');
+  posting.classificationRevision=Number.isInteger(Number(override.classificationRevision))&&Number(override.classificationRevision)>=0?Number(override.classificationRevision):0;
+  posting.auditHistory=JSON.parse(JSON.stringify(Array.isArray(override.auditHistory)?override.auditHistory:[]));
+  return posting;
+}
 function matchRows(store,statement){
   const used=new Set();
   const candidates=Object.values(store.statements||{}).filter(s=>s.id!==statement.id&&s.cardId===statement.cardId&&s.status==='finalized').flatMap(s=>(s.rows||[]).filter(activeRow).map(row=>({statement:s,row}))).sort((a,b)=>Number(a.statement.kind==='unbilled')-Number(b.statement.kind==='unbilled'));
@@ -40,15 +57,16 @@ function syncPostings(store,expenses){
     const card=store.cards[st.cardId];if(!card)continue;
     for(const row of (st.rows||[]).filter(r=>activeRow(r)&&expenseClasses.includes(r.classification))){
       const merchant=merchantName(row.merchant||row.narration,card.issuingBank||card.name);
-      expenses.reconciliationExpenses.push({id:'CCE-'+st.id+'-'+row.id,nature:row.nature,date:row.date,amount:row.classification==='refund'?-number(row.amount):number(row.amount),account:card.name+' '+card.last4,category:row.category,type:row.type||(/marketing|advertis/i.test(row.category||'')?'marketing':/fee|charge|subscription/i.test(row.category||'')?'running':'variable'),vendor:merchant,particulars:row.narration,channel:row.channel||'',expenseRefundReceiptId:row.expenseRefundReceiptId||'',creditCardId:card.id,ownerOnly:!!card.ownerOnly,creditCardStatementId:st.id,creditCardRowId:row.id,classification:row.classification,unbilled:st.kind==='unbilled',source:'credit_card_statement',createdBy:st.finalizedBy,createdAt:st.finalizedAt});
+      const posting=applyClassificationOverride(expenses,{id:'CCE-'+st.id+'-'+row.id,nature:row.nature,date:row.date,amount:row.classification==='refund'?-number(row.amount):number(row.amount),account:card.name+' '+card.last4,category:row.category,type:row.type||(/marketing|advertis/i.test(row.category||'')?'marketing':/fee|charge|subscription/i.test(row.category||'')?'running':'variable'),vendor:merchant,particulars:row.narration,channel:row.channel||'',expenseRefundReceiptId:row.expenseRefundReceiptId||'',creditCardId:card.id,ownerOnly:!!card.ownerOnly,creditCardStatementId:st.id,creditCardRowId:row.id,classification:row.classification,unbilled:st.kind==='unbilled',source:'credit_card_statement',createdBy:st.finalizedBy,createdAt:st.finalizedAt});
+      expenses.reconciliationExpenses.push(posting);
       const master=row.nature==='SANKI'?expenses.vendors:(expenses.vendorsByNature[row.nature]=expenses.vendorsByNature[row.nature]||{});
       const key=Object.keys(master).find(k=>String(master[k].name||'').toLowerCase()===merchant.toLowerCase())||merchant.toLowerCase();
       const saved=master[key]||{name:merchant,notes:''};saved.tags=Array.from(new Set([...(saved.tags||[]),'Credit-card merchant']));master[key]=saved;
     }
   }
 }
-function cardExpenseRecords(expenses){return(expenses.reconciliationExpenses||[]).filter(e=>e.creditCardStatementId).map(e=>({...e,vendor:merchantName(e.vendor||e.particulars,e.account),ledger:e.category,status:'paid',paidAmount:number(e.amount),requestedAmount:number(e.amount),paymentType:'Credit',source:'credit_card_statement',statementBacked:true,readOnly:true,bill:'statement',approvedAt:e.createdAt,approvedBy:e.createdBy,claimant:'',payments:[{id:'STATEMENT',date:e.date,amount:number(e.amount),account:e.account,paymentType:'Credit',personalFunds:false,unpayBlockedReason:'Correct this transaction in its credit-card statement.'}],reimbursementStatus:'not_applicable'}));}
-module.exports={merchantName,activeRow,totals,rowMatches,matchRows,syncPostings,cardExpenseRecords};
+function cardExpenseRecords(expenses){return(expenses.reconciliationExpenses||[]).filter(e=>e.creditCardStatementId).map(e=>({...e,vendor:number(e.classificationRevision)>0?String(e.vendor||'').trim():merchantName(e.vendor||e.particulars,e.account),ledger:e.category,status:'paid',paidAmount:number(e.amount),requestedAmount:number(e.amount),paymentType:'Credit',source:'credit_card_statement',statementBacked:true,readOnly:true,bill:'statement',approvedAt:e.createdAt,approvedBy:e.createdBy,claimant:'',payments:[{id:'STATEMENT',date:e.date,amount:number(e.amount),account:e.account,paymentType:'Credit',personalFunds:false,unpayBlockedReason:'Correct this transaction in its credit-card statement.'}],reimbursementStatus:'not_applicable'}));}
+module.exports={merchantName,activeRow,totals,rowMatches,matchRows,syncPostings,cardExpenseRecords,postingFingerprint};
 
 // Mobile current-cycle lists often contain one amount and no running balance.
 function parseUnbilledTransactions(raw){
