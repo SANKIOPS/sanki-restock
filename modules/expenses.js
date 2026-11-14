@@ -8371,7 +8371,8 @@ router.post('/api/expenses/category-groups/apply', (req, res) => {
     const classification=categoryGroupManagement.classificationSnapshot(s,preview,categories),affected=categoryGroupManagement.applyChange(s,preview,categories);
     s.categoryGroupOperations=s.categoryGroupOperations||{};
     Object.defineProperty(s.categoryGroupOperations,b.operationId,{value:{fingerprint:intent,action:preview.action,sources:preview.sources,target:preview.target,reason:preview.reason,affected,actor:String(req.user&&req.user.username||''),appliedAt:new Date().toISOString()},enumerable:true,writable:true,configurable:true});
-    audit(s,req,preview.action==='rename'?'CATEGORY_GROUP_RENAMED':'CATEGORY_GROUPS_MERGED','category_group',preview.target,{before:{groups:preview.sources,classification},after:{group:preview.target,...affected,categories:preview.categories.map(category=>category.name)},note:preview.reason+' · Group labels only; financial records, payments and reconciliation evidence unchanged.'});
+    const auditAction=preview.action==='rename'?'CATEGORY_GROUP_RENAMED':preview.action==='merge'?'CATEGORY_GROUPS_MERGED':'CATEGORY_GROUP_CATEGORIES_MOVED';
+    audit(s,req,auditAction,'category_group',preview.target,{before:{groups:preview.sources,classification},after:{group:preview.target,...affected,totalAmount:preview.totalAmount||0,categories:preview.categories.map(category=>category.name)},note:preview.reason+' · Group labels only; financial records, payments and reconciliation evidence unchanged.'});
     saveStore(s,{skipCategoryNormalization:true});
     res.json({success:true,group:preview.target,affected,...categoryGroupManagement.catalog(s,pickableLedgers(s))});
   } catch(error) { return categoryGroupManagementError(res,error); }

@@ -71,7 +71,7 @@ test('group catalog and preview are byte-read-only and report category, entry an
   seed(); const before = fs.readFileSync(filename, 'utf8'), result = invoke('GET', '');
   assert.equal(result.status, 200); assert.equal(result.headers['cache-control'], 'no-store');
   const old = result.body.groups.find(group => group.name === 'Old Group');
-  assert.deepEqual(old, { name: 'Old Group', categoryCount: 1, entryCount: 3, businesses: ['PERSONAL', 'SANKI'], categories: [{ name: 'Flowers', entryCount: 3, businesses: ['PERSONAL', 'SANKI'] }] });
+  assert.deepEqual(old, { name: 'Old Group', categoryCount: 1, entryCount: 3, businesses: ['PERSONAL', 'SANKI'], categories: [{ name: 'Flowers', entryCount: 3, totalAmount: 130.9, businesses: ['PERSONAL', 'SANKI'] }] });
   const body = request(), preview = invoke('POST', '/preview', { body });
   assert.equal(preview.status, 200); assert.equal(preview.body.entryCount, 3); assert.equal(preview.body.categoryCount, 1); assert.match(preview.body.previewToken, /^[a-f0-9]{64}$/);
   assert.equal(fs.readFileSync(filename, 'utf8'), before, 'no migration bookkeeping or hidden save');
@@ -121,6 +121,46 @@ test('merge several groups into an existing final group without merging category
   assert.deepEqual(applied.groups.map(group => group.name), ['Final Group']);
   assert.equal(after.auditLog[0].action, 'CATEGORY_GROUPS_MERGED');
   assert.deepEqual(after.categoryGroupAliases, { 'old group': 'Final Group', 'second group': 'Final Group', 'empty group': 'Final Group' });
+});
+
+test('selected categories move to an existing group with impact totals and without changing financial data', () => {
+  const before = seed(), beforeInvariant = groups.financialInvariant(before);
+  const body = { action: 'move_categories', sources: [], categories: [{ name: 'Flowers', source: 'Old Group' }], target: 'Final Group', reason: 'Flowers belongs with the final reporting group', revision: invoke('GET', '').body.revision };
+  const { preview, applied } = previewAndApply(body, 'move-category-001');
+  assert.deepEqual(preview.sources, ['Old Group']); assert.equal(preview.categoryCount, 1); assert.equal(preview.entryCount, 3); assert.equal(preview.totalAmount, 130.9);
+  assert.deepEqual(preview.categories, [{ name: 'Flowers', source: 'Old Group', entryCount: 3, totalAmount: 130.9, businesses: ['PERSONAL', 'SANKI'] }]);
+  const after = read();
+  assert.equal(after.customLedgers.Flowers.group, 'Final Group'); assert.equal(after.sankiCategoryCatalog.categories[0].group, 'Final Group');
+  assert.equal(after.customLedgers.Office.group, 'Second Group'); assert.equal(after.customLedgers.Final.group, 'Final Group');
+  assert.equal(after.expenses['EX-G1'].categoryGroup, 'Final Group'); assert.equal(after.expenses['EX-G3'].categoryGroup, 'Final Group'); assert.equal(after.reconciliationExpenses[0].categoryGroup, 'Final Group');
+  assert.equal(after.expenses['EX-G2'].categoryGroup, 'Second Group'); assert.deepEqual(after.categoryGroupAliases || {}, {});
+  assert.equal(after.auditLog[0].action, 'CATEGORY_GROUP_CATEGORIES_MOVED'); assert.equal(after.auditLog[0].after.totalAmount, 130.9);
+  assert.equal(groups.financialInvariant(after), beforeInvariant); assert.equal(applied.group, 'Final Group');
+});
+
+test('categories from several source groups can be reviewed and moved together', () => {
+  const before = seed(), body = { action: 'move_categories', sources: [], categories: [{ name: 'Flowers', source: 'Old Group' }, { name: 'Office', source: 'Second Group' }], target: 'Final Group', reason: 'Consolidate report headings while keeping categories separate', revision: invoke('GET', '').body.revision };
+  const { preview } = previewAndApply(body, 'move-category-multiple');
+  assert.deepEqual(preview.sources, ['Old Group', 'Second Group']); assert.equal(preview.categoryCount, 2); assert.equal(preview.entryCount, 4); assert.equal(preview.totalAmount, 180.9);
+  const after = read(); assert.equal(after.customLedgers.Flowers.group, 'Final Group'); assert.equal(after.customLedgers.Office.group, 'Final Group'); assert.equal(after.expenses['EX-G2'].categoryGroup, 'Final Group');
+  assert.equal(groups.financialInvariant(after), groups.financialInvariant(before));
+});
+
+test('category move validates exact source and destination and detects intervening changes', () => {
+  seed();
+  const base = { action: 'move_categories', sources: [], categories: [{ name: 'Flowers', source: 'Old Group' }], target: 'Final Group', reason: 'Correct reporting group', revision: invoke('GET', '').body.revision };
+  for (const [patch, status, code] of [
+    [{ categories: [] }, 400, 'INVALID_CATEGORIES'],
+    [{ categories: [{ name: 'Flowers', source: 'Old Group' }, { name: ' flowers ', source: 'Old Group' }] }, 400, 'DUPLICATE_CATEGORIES'],
+    [{ categories: [{ name: 'Missing', source: 'Old Group' }] }, 409, 'SOURCE_CHANGED'],
+    [{ categories: [{ name: 'Flowers', source: 'Second Group' }] }, 409, 'SOURCE_CHANGED'],
+    [{ target: 'Missing Group' }, 400, 'TARGET_MISSING'],
+    [{ target: 'Old Group' }, 400, 'TARGET_IS_SOURCE']
+  ]) { const result = invoke('POST', '/preview', { body: { ...base, ...patch } }); assert.equal(result.status, status); assert.equal(result.body.code, code); }
+  const preview = invoke('POST', '/preview', { body: base });
+  const changed = read(); changed.expenses['EX-G1'].vendor = 'Changed after preview'; fs.writeFileSync(filename, JSON.stringify(changed));
+  const stale = invoke('POST', '/apply', { body: { ...base, previewToken: preview.body.previewToken, operationId: 'move-category-stale' } });
+  assert.equal(stale.status, 409); assert.equal(stale.body.code, 'STALE_PREVIEW');
 });
 
 test('merge audit preserves precise recoverable source classification without copying financial fields', () => {
