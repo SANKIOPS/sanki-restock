@@ -37,3 +37,8 @@ test('explicit bank-interest receipt type wins over a custom display category',(
  const src=report();const interest=src.transactions.find(r=>r.id==='BANK-INTEREST');interest.reference='REC-INTEREST';interest.category='Custom bank credit';
  const r=build(src,{books:{receipts:[{id:'REC-INTEREST',receiptType:'bank_interest'}]}});assert.equal(r.values.interestIncome,10);assert.equal(r.values.ebitda,400);
 });
+test('missing row cost or tax cannot become zero-cost profit in any profit drill-down',()=>{
+ const src=report();src.transactions[0].costComplete=false;const r=build(src),sale=r.entries.find(e=>e.id==='SALE');
+ assert.equal(sale.values.cogs,null);for(const key of ['grossProfit','ebitda','netProfit'])assert.equal(sale.values[key],null,key);
+ src.transactions[0].costComplete=true;src.transactions[0].taxComplete=false;const taxMissing=build(src).entries.find(e=>e.id==='SALE');assert.equal(taxMissing.values.gst,null);assert.equal(taxMissing.values.netSales,null);assert.equal(taxMissing.values.grossProfit,null);
+});

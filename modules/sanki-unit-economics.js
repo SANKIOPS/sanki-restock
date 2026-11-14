@@ -28,10 +28,12 @@ function build(report,{blocked=false,books={}}={}){
       if(!items.length||items.some(d=>!(Number(d.qty)>0)))unitsKnown=false;
       else units+=items.reduce((n,d)=>n+Number(d.qty),0)*(row.kind==='return'?-1:1);
     }
-    v.grossProfit=money((row.netSales||0)-row.cogs);
-    v.ebitda=money(v.grossProfit+row.otherIncome-(v.interestIncome||0)-(v.orderCosts||0)-(v.marketing||0)-(v.operatingExpenses||0));
+    if(row.costComplete===false)v.cogs=null;
+    if(row.taxComplete===false){v.gst=null;v.netSales=null;}
+    v.grossProfit=v.netSales==null||v.cogs==null?null:money(v.netSales-v.cogs);
+    v.ebitda=v.grossProfit==null?null:money(v.grossProfit+row.otherIncome-(v.interestIncome||0)-(v.orderCosts||0)-(v.marketing||0)-(v.operatingExpenses||0));
     v.otherDeductions=money((v.interest||0)+(v.tax||0)+(v.depreciation||0));
-    v.netProfit=money(v.grossProfit+row.otherIncome-row.expenses);
+    v.netProfit=v.grossProfit==null?null:money(v.grossProfit+row.otherIncome-row.expenses);
     return {...row,kind:row.expenses?'expense':row.otherIncome?'income':row.kind,entity:'SANKI',description:row.particulars,values:v};
   });
   values.otherIncome=money(values.otherIncome-values.interestIncome);

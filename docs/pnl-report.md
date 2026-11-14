@@ -230,3 +230,12 @@ Transfers, loan principal, deposits and stock purchases do not become operating
 expenses. Units are sold quantities minus returned quantities; no quantity is
 invented for receipts or sales without item details. Per-item profit is available
 only for a positive known net quantity and a complete profit figure.
+
+COGS drill-downs show product/SKU, quantity, unit cost, signed cost and availability,
+including unmapped items. Known cost is a subtotal when any item is missing.
+Gross Profit shows each order's net sales, COGS and margin; missing tax or cost
+blocks that row's profit, EBITDA contribution and net-profit contribution.
+GST separates charged tax from tax reversed on returns and exposes report tax
+rates. Discounts and returns have separate tables. Order references open the
+retained report item details. These changes are read-only; total accounting and
+Results tax/cost policies are unchanged.
