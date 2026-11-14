@@ -15,10 +15,34 @@
   <script src="/manage-navigation.js?v=e8b4bd75a517" defer></script>
   <script src="/manage-opening-balances.js?v=d09e4354d079" defer></script>
   <script src="/manage-transactions.js?v=c2453d32bcf9" defer></script>
-  <script src="/manage-classification.js?v=96c5d2748d1f" defer></script>
+  <script src="/manage-classification.js?v=inline-20261114" defer></script>
   <script src="/manage.js?v=96c5d2748d1f" defer></script>
   <script src="/sidebar.js" defer></script>
-  <style>.classification-field-access{margin:12px 0 0;padding:9px 11px;border-left:3px solid var(--cr-emerald);background:var(--cr-mint);color:var(--cr-ink);font-size:11px;line-height:1.45}</style>
+  <style>
+    .classification-field-access{margin:9px 0 0;padding:7px 9px;border-left:3px solid var(--cr-emerald);background:var(--cr-mint);color:var(--cr-ink);font-size:11px;line-height:1.4}.classification-field-access:empty{display:none}
+    .classification-editing-row{background:#edf6f0!important;box-shadow:inset 3px 0 0 var(--cr-emerald)}
+    .classification-editing-row .classification-row-actions button{background:var(--cr-mint);border-color:var(--cr-emerald);font-weight:700}
+    .classification-inline-editor-row>td{padding:0;border-bottom:1px solid #b8cfc4;background:#f1f6f1}
+    .classification-inline-editor{--cr-ivory:#f6f1e5;--cr-paper:#fffdf7;--cr-ink:#17372e;--cr-muted:#6c766f;--cr-line:#ddd7c8;--cr-emerald:#0b6b52;--cr-emerald-dark:#07513f;--cr-mint:#e5f2eb;--cr-wash:#faf7ef;padding:13px 14px 14px;border-left:3px solid var(--cr-emerald);background:var(--cr-paper);color:var(--cr-ink)}
+    .classification-inline-editor[hidden]{display:none!important}
+    .classification-inline-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:9px}
+    .classification-inline-head h2{margin:0;font:600 15px/1.2 "Avenir Next","Segoe UI",sans-serif;color:var(--cr-ink)}
+    .classification-inline-head .dialog-subtitle{margin:2px 0 0;color:var(--cr-muted);font-size:11px}
+    .classification-inline-lock-note{margin:0;color:var(--cr-muted);font-size:10px;text-align:right;max-width:430px}
+    .classification-inline-grid{display:grid;grid-template-columns:minmax(120px,.85fr) minmax(150px,1fr) minmax(150px,1fr) minmax(190px,1.45fr) minmax(180px,1.25fr) auto;gap:9px;align-items:end}
+    .classification-inline-grid .field{min-width:0}
+    .classification-inline-grid label{display:block;margin-bottom:3px;color:#35584c;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.45px}
+    .classification-inline-grid input,.classification-inline-grid select{height:36px;padding:7px 9px;border-color:#c9c2b3;background:#fffefb;font-size:12px}
+    .classification-inline-grid input:focus-visible,.classification-inline-grid select:focus-visible{outline:3px solid #84b5a5;outline-offset:1px}
+    .classification-inline-grid .hint{margin:3px 0 0;font-size:9px;line-height:1.25}
+    .classification-inline-actions{display:flex;gap:6px;align-items:center;padding-bottom:1px}
+    .classification-inline-actions button{height:36px;padding:7px 11px;font-size:11px;white-space:nowrap}
+    .classification-inline-actions .primary{background:var(--cr-emerald);border-color:var(--cr-emerald);color:#fff}
+    .classification-inline-actions .primary:hover{background:var(--cr-emerald-dark)}
+    .classification-inline-editor .classification-dialog-message{min-height:0;margin:6px 0 0;font-size:11px}
+    @media(max-width:1180px){.classification-inline-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.classification-inline-narration,.classification-inline-reason{grid-column:span 1}.classification-inline-actions{justify-content:flex-end}}
+    @media(max-width:720px){.classification-inline-editor-row{display:block!important;padding:0!important}.classification-inline-editor-row>td{display:block!important;padding:0!important}.classification-inline-editor-row>td::before{display:none!important}.classification-inline-editor{padding:12px}.classification-inline-head{align-items:flex-start;flex-direction:column;gap:3px}.classification-inline-lock-note{text-align:left}.classification-inline-grid{grid-template-columns:1fr}.classification-inline-narration,.classification-inline-reason{grid-column:auto}.classification-inline-actions{justify-content:stretch}.classification-inline-actions button{flex:1}.classification-editing-row{border-color:var(--cr-emerald)!important}}
+  </style>
 </head>
 <body>
   <main>
@@ -99,15 +123,21 @@
     <div class="message" id="groupReviewMessage" role="status" aria-live="polite"></div>
     <div class="actions dialog-actions"><button type="button" class="green" id="confirmGroupChange">Confirm change</button><button type="button" id="closeGroupReview">Back to editing</button></div>
   </div></dialog>
-  <dialog id="classificationEditDialog" class="classification-dialog" aria-labelledby="classificationEditTitle"><div class="dialog-content">
-    <h2 id="classificationEditTitle">Correct classification</h2><p id="classificationEditSubtitle" class="dialog-subtitle"></p>
-    <div class="classification-edit-grid"><div class="field"><label for="classificationEditEntity">Entity</label><select id="classificationEditEntity"></select><p id="classificationEntityHint" class="hint"></p></div><div class="field"><label for="classificationEditCategory">Category</label><select id="classificationEditCategory"></select></div><div class="field"><label for="classificationEditVendor">Vendor</label><input id="classificationEditVendor" maxlength="160" autocomplete="off"></div><div class="field full"><label for="classificationEditNarration">Narration</label><textarea id="classificationEditNarration" maxlength="1000"></textarea></div></div>
-    <p id="classificationFieldAccessNote" class="classification-field-access" aria-live="polite"></p>
-    <div class="classification-locked"><h3>◆ Protected source fields</h3><div id="classificationLockedFields" class="classification-locked-grid"></div><p class="classification-protection-note">Amount, date, paying account, payment method, proof and reconciliation evidence cannot be changed here.</p></div>
-    <div class="classification-reason"><label for="classificationEditReason">Reason for correction — required</label><textarea id="classificationEditReason" maxlength="1000" placeholder="Why is this accounting classification being corrected?"></textarea></div>
-    <div id="classificationEditMessage" class="classification-dialog-message message" role="status" aria-live="polite"></div>
-    <div class="actions dialog-actions"><button type="button" class="primary" id="classificationSaveEdit">Save classification</button><button type="button" id="classificationCloseEdit">Cancel</button></div>
-  </div></dialog>
+  <div id="classificationInlineEditorStash" hidden>
+    <section id="classificationEditDialog" class="classification-inline-editor" aria-labelledby="classificationEditTitle" hidden>
+      <div class="classification-inline-head"><div><h2 id="classificationEditTitle">Correct labels</h2><p id="classificationEditSubtitle" class="dialog-subtitle"></p></div><p class="classification-inline-lock-note">Amount, date, paying account, payment method, proof and reconciliation evidence cannot be changed here.</p></div>
+      <div class="classification-inline-grid">
+        <div class="field"><label for="classificationEditEntity">Entity</label><select id="classificationEditEntity"></select><p id="classificationEntityHint" class="hint"></p></div>
+        <div class="field"><label for="classificationEditCategory">Category</label><select id="classificationEditCategory"></select></div>
+        <div class="field"><label for="classificationEditVendor">Vendor</label><input id="classificationEditVendor" maxlength="160" autocomplete="off"></div>
+        <div class="field classification-inline-narration"><label for="classificationEditNarration">Narration</label><input id="classificationEditNarration" maxlength="1000" autocomplete="off"></div>
+        <div class="field classification-inline-reason"><label for="classificationEditReason">Reason — required</label><input id="classificationEditReason" maxlength="1000" autocomplete="off" placeholder="Why is this label being corrected?"></div>
+        <div class="classification-inline-actions"><button type="button" class="primary" id="classificationSaveEdit">Save</button><button type="button" id="classificationCloseEdit">Cancel</button></div>
+      </div>
+      <p id="classificationFieldAccessNote" class="classification-field-access" aria-live="polite"></p>
+      <div id="classificationEditMessage" class="classification-dialog-message message" role="status" aria-live="polite"></div>
+    </section>
+  </div>
   <dialog id="classificationBulkDialog" class="classification-dialog" aria-labelledby="classificationBulkTitle"><div class="dialog-content">
     <h2 id="classificationBulkTitle">Correct selected expenses</h2><p id="classificationBulkSubtitle" class="dialog-subtitle"></p>
     <div class="classification-danger-note">Only entity and category can be changed in bulk. Amounts, dates, vendors, narrations, payments, proofs and reconciliation links stay exactly as recorded.</div>
