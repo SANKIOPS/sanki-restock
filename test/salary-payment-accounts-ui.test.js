@@ -11,6 +11,7 @@ const inline = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)]
   .map(match => match[1]).filter(script => script.trim()).join('\n');
 const baseAccounts = ['Axis Bank 3448', 'IndusInd Bank 8181', 'Prashant Cash', 'Gagan Sir Cash', 'Counter Cash'];
 const sharedAccount = 'IndusInd Bank 7883';
+const personalAccounts = [sharedAccount, 'ICICI Bank 0993', 'ICICI Bank 0992'];
 const retiredAccount = 'Prashant Axis 3645';
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const options = markup => [...markup.matchAll(/<option(?:\s[^>]*)?>([^<]+)<\/option>/g)].map(match => match[1]);
@@ -80,7 +81,7 @@ function harness(entity = 'SAMAST') {
       else if (parsed.pathname === '/api/salary/employees')
         response = {
           success: true, employees: [],
-          salaryPayingAccounts: baseAccounts.concat(parsed.searchParams.get('entity') === 'SAMAST' ? [sharedAccount] : []),
+          salaryPayingAccounts: baseAccounts.concat(personalAccounts),
           retiredSalaryPayingAccounts: [retiredAccount],
           advancePayingAccounts: [{name: 'ICICI Bank 0993', nature: 'PERSONAL'}]
         };
@@ -107,14 +108,14 @@ test('salary inline scripts remain syntactically valid', () => {
   assert.doesNotThrow(() => new vm.Script(inline));
 });
 
-test('SAMAST loads the entity-specific 7883 option into single, batch and correction pickers', async () => {
+test('SAMAST loads 7883, 0993 and 0992 into single, batch and correction pickers', async () => {
   const {context, node, calls} = harness();
   await flush();
   assert.ok(calls.some(call => call.url === '/api/salary/employees?entity=SAMAST'));
-  // Unrelated advance/personal sources must not be used to populate salary pickers.
+  // Unrelated account-cache entries must not be used to populate salary pickers.
   context.state.accounts = ['ICICI Bank 0993', 'ICICI Bank 0992', 'Namita 5464', retiredAccount];
   context.openSalaryPay('E1');
-  const expected = baseAccounts.concat(sharedAccount);
+  const expected = baseAccounts.concat(personalAccounts);
   assert.deepEqual(options(node('one_account').innerHTML), expected);
   assert.deepEqual(options(node('sp_account').innerHTML), expected);
   assert.equal(node('salaryPayTitle').textContent, 'Pay salary · Rajendra Singh');
@@ -124,22 +125,38 @@ test('SAMAST loads the entity-specific 7883 option into single, batch and correc
   assert.equal(salaryWrites(calls).length, 0, 'viewing payment options never posts money');
 });
 
-test('switching SAMAST to SANKI and back refreshes salary accounts without leaking 7883', async () => {
+test('switching payroll entities keeps all three approved personal bank choices', async () => {
   const {context, node, calls} = harness();
   await flush();
   node('entity_SANKI').onclick.call(node('entity_SANKI'));
   await flush();
   context.openSalaryPay('E1');
   assert.equal(context.state.entity, 'SANKI');
-  assert.deepEqual(options(node('one_account').innerHTML), baseAccounts);
-  assert.deepEqual(options(node('sp_account').innerHTML), baseAccounts);
+  const expected = baseAccounts.concat(personalAccounts);
+  assert.deepEqual(options(node('one_account').innerHTML), expected);
+  assert.deepEqual(options(node('sp_account').innerHTML), expected);
   assert.ok(calls.some(call => call.url === '/api/salary/employees?entity=SANKI'));
   node('entity_SAMAST').onclick.call(node('entity_SAMAST'));
   await flush();
   context.openSalaryPay('E1');
-  assert.deepEqual(options(node('one_account').innerHTML), baseAccounts.concat(sharedAccount));
+  assert.deepEqual(options(node('one_account').innerHTML), expected);
   assert.equal(calls.filter(call => call.url === '/api/salary/employees?entity=SAMAST').length, 2);
   assert.equal(salaryWrites(calls).length, 0);
+});
+
+test('single SANKI salary payment submits the selected ICICI 0993 account', async () => {
+  const {context, node, calls} = harness('SANKI');
+  await flush();
+  context.openSalaryPay('E1');
+  node('one_account').value = 'ICICI Bank 0993';
+  node('one_date').value = '2026-10-20';
+  node('one_proof').files = [{name: 'salary.jpg'}];
+  context.submitSingleSalaryPayment();
+  await flush();
+  const writes = salaryWrites(calls);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].url, '/api/salary/payments/batch?entity=SANKI');
+  assert.equal(JSON.parse(writes[0].request.body).account, 'ICICI Bank 0993');
 });
 
 test('single SAMAST salary payment submits the chosen 7883 account and SAMAST entity', async () => {
@@ -210,6 +227,8 @@ test('retired 3645 is offered only while correcting its own historical salary pa
   assert.equal(node('edit_account').value, retiredAccount);
   assert.match(node('edit_account').innerHTML, /Prashant Axis 3645 — historical payment only/);
   assert.match(node('edit_account').innerHTML, /IndusInd Bank 7883/);
+  assert.match(node('edit_account').innerHTML, /ICICI Bank 0993/);
+  assert.match(node('edit_account').innerHTML, /ICICI Bank 0992/);
   context.openSalaryPaymentCorrection('CURRENT');
   assert.doesNotMatch(node('edit_account').innerHTML, /3645/);
 });

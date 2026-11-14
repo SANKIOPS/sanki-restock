@@ -42,14 +42,15 @@ const payment = (emp, account='IndusInd Bank 7883', amount=17000) => ({
   reference:'SAMAST-PAYROLL-TEST', items:[{empId:emp.id, amount}]
 });
 
-test('SAMAST exposes shared 7883 to authorized salary users without broadening SANKI or private accounts', () => {
+test('both payroll entities expose approved 7883, 0993 and 0992 salary sources without private accounts', () => {
   const original = ['Axis Bank 3448','IndusInd Bank 8181','Prashant Cash','Gagan Sir Cash','Counter Cash'];
+  const approved = ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992'];
   for (const [username, role] of [['prashant','admin'], ['owner','owner'], ['accountant','accounting']]) {
     const samast = invoke('GET', '/api/salary/employees', {username, role}).body;
     assert.equal(samast.entity, 'SAMAST');
-    assert.deepEqual(samast.salaryPayingAccounts, original.concat('IndusInd Bank 7883'));
-    assert.deepEqual(invoke('GET', '/api/salary/employees', {entity:'SANKI', username, role}).body.salaryPayingAccounts, original);
-    for (const account of ['ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash','Prashant Axis 3645']) {
+    assert.deepEqual(samast.salaryPayingAccounts, original.concat(approved));
+    assert.deepEqual(invoke('GET', '/api/salary/employees', {entity:'SANKI', username, role}).body.salaryPayingAccounts, original.concat(approved));
+    for (const account of ['Gagan Personal Cash','Namita 5464','Namita Cash','Prashant Axis 3645']) {
       assert.ok(!samast.salaryPayingAccounts.includes(account), account+' is not a new ordinary salary source');
     }
   }
@@ -94,7 +95,6 @@ test('new account option does not bypass proof, account, employee or role checks
   const emp = employee(), before = read('SAMAST');
   for (const body of [
     {...payment(emp), proofs:[]},
-    payment(emp,'ICICI Bank 0993'),
     payment(emp,'Namita 5464'),
     payment(emp,'Prashant Axis 3645'),
     {...payment(emp), items:[{empId:'MISSING', amount:17000}]}
@@ -106,17 +106,30 @@ test('new account option does not bypass proof, account, employee or role checks
   assert.deepEqual(read('SAMAST'), before);
 });
 
-test('7883 is rejected for SANKI salary even when the request body claims SAMAST', () => {
-  const emp = employee('SANKI');
-  assert.equal(invoke('POST', '/api/salary/payments/batch', {
-    entity:'SANKI', body:{...payment(emp), entity:'SAMAST', payingNature:'SAMAST'}
-  }).status, 400);
-  assert.equal(read('SANKI').salaryPayments.length, 0);
-  const allowed = invoke('POST', '/api/salary/payments/batch', {entity:'SANKI', body:payment(emp,'Axis Bank 3448')});
-  assert.equal(allowed.status, 200);
-  const recorded = read('SANKI').salaryPayments[0];
-  assert.equal(recorded.entity, 'SANKI');
-  assert.equal(recorded.payingNature, 'SANKI');
+test('SANKI 7883, 0993 and 0992 salary payments are stored against PERSONAL physical ledgers', () => {
+  for (const [index,account] of ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992'].entries()) {
+    const emp = employee('SANKI','SANKI personal source '+index,17000);
+    const paid=invoke('POST', '/api/salary/payments/batch', {
+      entity:'SANKI', body:{...payment(emp,account), entity:'SAMAST', payingNature:'SAMAST'}
+    });
+    assert.equal(paid.status, 200);
+    const recorded = read('SANKI').salaryPayments.find(x=>x.batchId===paid.body.batchId);
+    assert.equal(recorded.account, account);
+    assert.equal(recorded.entity, 'SANKI');
+    assert.equal(recorded.payingNature, 'PERSONAL');
+  }
+});
+
+test('SAMAST keeps 7883 as SAMAST but stores 0993 and 0992 against PERSONAL physical ledgers', () => {
+  for (const [index,account] of ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992'].entries()) {
+    const emp=employee('SAMAST','SAMAST source '+index,17000);
+    const paid=invoke('POST','/api/salary/payments/batch',{body:payment(emp,account)});
+    assert.equal(paid.status,200);
+    const recorded=read('SAMAST').salaryPayments.find(x=>x.batchId===paid.body.batchId);
+    assert.equal(recorded.account,account);
+    assert.equal(recorded.entity,'SAMAST');
+    assert.equal(recorded.payingNature,account==='IndusInd Bank 7883'?'SAMAST':'PERSONAL');
+  }
 });
 
 test('SAMAST payment correction can use 7883 and records bank/entity changes in its audit', () => {

@@ -953,7 +953,7 @@ test('Prashant can edit salary and record proof-backed payments from authorized 
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Prashant Payment Access Test',salary:20000,joiningDate:'2099-02-01'}}).body.employee,ym='2099-02';
   assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym},body:{empId:emp.id,paidDays:20}}).status,200);
   const who={role:'claimant',username:'prashant'},accounts=invoke('GET','/api/salary/employees',who).body.salaryPayingAccounts;
-  assert.deepEqual(accounts,['Axis Bank 3448','IndusInd Bank 8181','Prashant Cash','Gagan Sir Cash','Counter Cash']);
+  assert.deepEqual(accounts,['Axis Bank 3448','IndusInd Bank 8181','Prashant Cash','Gagan Sir Cash','Counter Cash','IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992']);
   assert.equal(invoke('POST','/api/salary/row/:ym',{...who,params:{ym},body:{empId:emp.id,paidDays:15}}).status,200);
   assert.equal(invoke('PATCH','/api/salary/final-amount/:ym/:empId',{...who,params:{ym,empId:emp.id},body:{amount:10000,reason:'Confirmed final amount'}}).status,200);
   assert.equal(invoke('GET','/api/salary/month/:ym',{...who,params:{ym}}).body.permissions.canModifyPayroll,true);

@@ -41,17 +41,22 @@ function salaryForMonth(e, ym) {
 
 const CHANNELS = ['POS', 'Website', 'Shared'];
 const SALARY_PAYING_ACCOUNTS = ['Axis Bank 3448', 'IndusInd Bank 8181', 'Prashant Cash', 'Gagan Sir Cash', 'Counter Cash'];
-// 7883 is shared by SAMAST and PERSONAL. A SAMAST salary is a SAMAST
-// payment from that bank, not permission to use other personal salary sources.
-function salaryPayingAccounts(){return activeSalaryEntity()==='SAMAST'?SALARY_PAYING_ACCOUNTS.concat('IndusInd Bank 7883'):SALARY_PAYING_ACCOUNTS;}
-function salaryPaymentNature(account){return activeSalaryEntity()==='SAMAST'&&account==='IndusInd Bank 7883'?'SAMAST':'SANKI';}
+const PERSONAL_SALARY_PAYING_ACCOUNTS = ['IndusInd Bank 7883', 'ICICI Bank 0993', 'ICICI Bank 0992'];
+// These Owner-approved bank accounts are valid ordinary salary sources for
+// either payroll. Their physical ledger remains PERSONAL, except that 7883 is
+// SAMAST's own bank when the salary itself belongs to SAMAST payroll.
+function salaryPayingAccounts(){return SALARY_PAYING_ACCOUNTS.concat(PERSONAL_SALARY_PAYING_ACCOUNTS);}
+function salaryPaymentNature(account){
+  if(activeSalaryEntity()==='SAMAST'&&account==='IndusInd Bank 7883')return 'SAMAST';
+  return PERSONAL_SALARY_PAYING_ACCOUNTS.includes(account)?'PERSONAL':'SANKI';
+}
 const RETIRED_SALARY_PAYING_ACCOUNTS = ['Prashant Axis 3645'];
 // Retiring a salary source does not rewrite earlier payments or change the
 // separate advance/import policies. Historical corrections may retain 3645.
 const ADVANCE_PAYING_ACCOUNTS = ['Prashant Axis 3645', 'IndusInd Bank 8181', 'Prashant Cash', 'Gagan Sir Cash', 'Counter Cash', 'Axis Bank 3448'];
-// Admins may use Sir's Owner-approved PERSONAL sources for salary advances
-// only, except the explicit SAMAST salary use of shared 7883 above. They are
-// not generally available for ordinary salary payments or other accounting flows.
+// Admins may also use Sir's Owner-approved PERSONAL sources for salary
+// advances. Ordinary salary payments use the narrower three-account list
+// above; Gagan Personal Cash remains advance-only.
 // Namita's bank/cash accounts remain private and are not staff payment options.
 const ADMIN_PERSONAL_ADVANCE_PAYING_ACCOUNTS = ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash'];
 // Real bank/cash accounts only. Clearing ledgers hold money in transit and
