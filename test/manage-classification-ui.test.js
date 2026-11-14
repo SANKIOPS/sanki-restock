@@ -19,27 +19,59 @@ test('Manage categories exposes separate setup and classification workspaces wit
 });
 
 test('classification workspace uses a compact inline label editor and keeps protected evidence read-only', () => {
-  for (const id of ['classificationEditEntity', 'classificationEditCategory', 'classificationEditVendor', 'classificationEditNarration', 'classificationEditReason', 'classificationSaveEdit', 'classificationCloseEdit']) assert.match(html, new RegExp(`id="${id}"`));
+  for (const id of ['classificationEditDate', 'classificationEditReference', 'classificationEditEntity', 'classificationEditCategory', 'classificationCategoryMeta', 'classificationEditVendor', 'classificationVendorChoices', 'classificationEditNarration', 'classificationEditAccount', 'classificationEditPaymentMethod', 'classificationEditReconciliation', 'classificationEditProofs', 'classificationEditAmount', 'classificationEditReason', 'classificationSaveEdit', 'classificationCloseEdit']) assert.match(html, new RegExp(`id="${id}"`));
   assert.match(html, /id="classificationInlineEditorStash" hidden/);
   assert.match(html, /<section id="classificationEditDialog" class="classification-inline-editor"[^>]+hidden/);
   assert.doesNotMatch(html, /<dialog id="classificationEditDialog"/);
+  assert.match(html, /id="classificationEditVendor"[^>]+list="classificationVendorChoices"[^>]+role="combobox"[^>]+aria-autocomplete="list"/);
   assert.match(html, /id="classificationEditReason"[^>]+placeholder="Why is this label being corrected\?"/);
   assert.match(html, /id="classificationSaveEdit">Save<\/button>/);
   assert.match(html, /id="classificationCloseEdit">Cancel<\/button>/);
   assert.match(html, /Amount, date, paying account, payment method, proof and reconciliation evidence cannot be changed here/);
   assert.match(html, /Only entity and category can be changed in bulk/);
-  assert.doesNotMatch(html, /id="classificationEditAmount"|id="classificationEditDate"|id="classificationEditPayment/);
+  assert.doesNotMatch(html, /<input[^>]+id="classificationEditAmount"|<input[^>]+id="classificationEditDate"|<input[^>]+id="classificationEditPayment/);
+  assert.doesNotMatch(html, /classification-edit-summary|classification-inline-head|classification-inline-grid/);
+  assert.match(html, /\.classification-table\{display:block;min-width:0;width:100%/);
+  assert.match(html, /\.classification-category-row\{display:grid;grid-template-columns:1fr 1fr/);
 });
 
-test('classification adapters sort summaries by entity and category and encode optional filters safely', () => {
+test('classification adapters put positive categories first alphabetically and zero totals last per entity', () => {
   const sorted = classification.sortCategories([
-    { entity: 'SANKI', name: 'Travel' },
-    { entity: 'PERSONAL', name: 'Food' },
-    { entity: 'SANKI', name: 'Advertising' }
+    { entity: 'SANKI', name: 'Advertising', total: 0 },
+    { entity: 'SANKI', name: 'Travel', total: 50 },
+    { entity: 'PERSONAL', name: 'Food', total: 0 },
+    { entity: 'SANKI', name: 'Beauty', total: 20 },
+    { entity: 'SANKI', name: 'Bank Charges', total: 0 }
   ]);
-  assert.deepEqual(sorted.map(row => `${row.entity}/${row.name}`), ['PERSONAL/Food', 'SANKI/Advertising', 'SANKI/Travel']);
+  assert.deepEqual(sorted.map(row => `${row.entity}/${row.name}`), ['PERSONAL/Food', 'SANKI/Beauty', 'SANKI/Travel', 'SANKI/Advertising', 'SANKI/Bank Charges']);
   assert.equal(classification.queryString({ entities: ['SANKI', 'PERSONAL'], category: 'Food & Drinks', from: '2026-11-01', to: '2026-11-14', search: 'bed sheet', page: 2, limit: 50 }), '?entities=SANKI%2CPERSONAL&category=Food%20%26%20Drinks&from=2026-11-01&to=2026-11-14&search=bed%20sheet&page=2&limit=50');
   assert.equal(classification.rowKey({ sourceType: 'reconciliation_expense', recordId: 'EX-12' }), 'reconciliation_expense:EX-12');
+});
+
+test('proof controls expose only safe typed proof links and clearly identify an empty proof set', () => {
+  const rendered = classification.proofControls({ proofs: [
+    { kind: 'image', label: 'Bill 1', url: '/api/expenses/photo/bill-1.jpg' },
+    { kind: 'image', label: 'Remote image', url: 'https://files.example/evidence.jpg' },
+    { kind: 'image', label: 'Unsafe script', url: 'javascript:alert(1)' },
+    { kind: 'image', label: 'Unsafe HTTP', url: 'http://files.example/evidence.jpg' },
+    { kind: 'image', label: 'Unsafe credentials', url: 'https://user:secret@files.example/evidence.jpg' },
+    { kind: 'image', label: 'Unsafe backslash', url: '/api/expenses\\evil.jpg' },
+    { kind: 'image', label: 'Unsafe control', url: '/api/expenses/evil\n.jpg' }
+  ] });
+  assert.match(rendered, /class="classification-proof-link has-thumb"/);
+  assert.match(rendered, /Bill 1/);
+  assert.match(rendered, /Remote image/);
+  assert.equal((rendered.match(/<img /g) || []).length, 1, 'remote HTTPS evidence is click-only and never rendered as an image');
+  assert.match(rendered, /target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"/);
+  assert.match(rendered, /<img[^>]+loading="lazy" decoding="async" referrerpolicy="no-referrer"/);
+  assert.doesNotMatch(rendered, /Unsafe|javascript:|http:\/\/|user:secret|\\evil|evil\n/);
+  assert.match(classification.proofControls({ proofs: [] }), /No proof attached/);
+  assert.equal(classification.safeProofUrl('//evil.example/file'), '');
+  assert.equal(classification.safeProofUrl('http://files.example/proof.jpg'), '');
+  assert.equal(classification.safeProofUrl('https://user:secret@files.example/proof.jpg'), '');
+  assert.equal(classification.safeProofUrl('/proof\\bad.jpg'), '');
+  assert.equal(classification.safeProofUrl('/proof\u0007bad.jpg'), '');
+  assert.equal(classification.safeProofUrl('\nhttps://files.example/proof.jpg'), '');
 });
 
 test('classification field guards default safely and honor backend field restrictions', () => {
@@ -95,7 +127,8 @@ function controllerHarness(harnessOptions = {}) {
     categories: [{ entity: 'SANKI', name: 'Props Expense', group: 'Marketing', type: 'variable', count: 1, total: 1200 }],
     expenses: [], pagination: { page: 1, pages: 1, total: 0 }
   };
-  const row = { id: 'EX-9', recordId: 'EX-9', sourceType: 'expense', date: '2026-11-10', entity: 'SANKI', category: 'Props Expense', vendor: 'Studio Store', narration: 'Bed sheet', amount: 1200, account: 'Axis 3448', paymentMethod: 'UPI', reference: 'EX-00009', proofCount: 1, reconciled: true, editable: true, editableFields: ['entity', 'category', 'vendor', 'narration'], fieldLocks: {}, readOnlyReason: '', revision: 3, fingerprint: 'row-fingerprint' };
+  if (harnessOptions.vendorChoices) summary.vendorChoices = harnessOptions.vendorChoices;
+  const row = { id: 'EX-9', recordId: 'EX-9', sourceType: 'expense', date: '2026-11-10', entity: 'SANKI', category: 'Props Expense', categoryGroup: 'Marketing', categoryType: 'variable', vendor: 'Studio Store', narration: 'Bed sheet', amount: 1200, account: 'Axis 3448', paymentMethod: 'UPI', reference: 'EX-00009', proofs: [{ kind: 'image', label: 'Bill photo', url: '/api/expenses/photo/bill-1.jpg' }], proofCount: 1, reconciled: true, editable: true, editableFields: ['entity', 'category', 'vendor', 'narration'], fieldLocks: {}, readOnlyReason: '', revision: 3, fingerprint: 'row-fingerprint' };
   async function request(url, requestOptions = {}) {
     const body = requestOptions.body ? JSON.parse(requestOptions.body) : null;
     calls.push({ url, method: requestOptions.method || 'GET', body });
@@ -119,14 +152,29 @@ test('single inline correction sends only source-aware labels and updates the ro
   h.app.state.details = { expenses: [h.row], pagination: { page: 1, pages: 1, total: 1 } };
   h.app.openEditor('expense:EX-9');
   assert.equal(h.nodes.classificationEditDialog.hidden, false);
-  assert.match(h.nodes.classificationTable.innerHTML, /classification-inline-editor-row/);
+  assert.match(h.nodes.classificationTable.innerHTML, /data-expense-id="expense:EX-9" class="classification-editing-row"><td colspan="7"/);
+  assert.doesNotMatch(h.nodes.classificationTable.innerHTML, /classification-inline-editor-row/);
+  assert.doesNotMatch(h.nodes.classificationTable.innerHTML, /classification-edit-summary/);
   assert.match(h.nodes.classificationTable.innerHTML, /data-classification-editor-host/);
+  assert.equal((h.nodes.classificationTable.innerHTML.match(/data-expense-id="expense:EX-9"/g) || []).length, 1, 'the selected expense is one transformed row, not a row plus editor duplicate');
+  assert.equal(h.nodes.classificationEditDate.textContent, '2026-11-10');
+  assert.equal(h.nodes.classificationEditReference.textContent, 'EX-00009');
+  assert.equal(h.nodes.classificationEditVendor.value, 'Studio Store');
+  assert.equal(h.nodes.classificationEditNarration.value, 'Bed sheet');
+  assert.equal(h.nodes.classificationEditEntity.value, 'SANKI');
+  assert.equal(h.nodes.classificationEditCategory.value, 'Props Expense');
+  assert.equal(h.nodes.classificationCategoryMeta.textContent, 'Group: Marketing · Type: variable');
+  assert.equal(h.nodes.classificationEditAccount.textContent, 'Axis 3448');
+  assert.equal(h.nodes.classificationEditPaymentMethod.textContent, 'UPI');
+  assert.equal(h.nodes.classificationEditReconciliation.textContent, 'Reconciled');
+  assert.equal(h.nodes.classificationEditAmount.textContent, '₹1,200.00');
+  assert.match(h.nodes.classificationEditProofs.innerHTML, /Bill photo/);
   assert.doesNotMatch(script, /classificationEditDialog'\)\.showModal\(/);
   assert.doesNotMatch(script, /classificationEditDialog'\)\.close\(/);
   h.nodes.classificationCloseEdit.onclick();
   assert.equal(h.nodes.classificationEditDialog.hidden, true);
   assert.equal(h.app.state.editing, null);
-  assert.doesNotMatch(h.nodes.classificationTable.innerHTML, /classification-inline-editor-row/);
+  assert.doesNotMatch(h.nodes.classificationTable.innerHTML, /classification-editing-row/);
   h.app.openEditor('expense:EX-9');
   h.nodes.classificationEditVendor.value = 'Studio Props Store';
   h.nodes.classificationEditReason.value = 'Correct reporting classification';
@@ -138,6 +186,44 @@ test('single inline correction sends only source-aware labels and updates the ro
   assert.equal(h.calls.filter(call => call.method === 'GET').length, 1);
   assert.equal(h.nodes.classificationEditDialog.hidden, true);
   assert.match(h.nodes.classificationTable.innerHTML, /Studio Props Store/);
+});
+
+test('vendor editor is a searchable existing-vendor combobox and cannot silently create a vendor', async () => {
+  const h = controllerHarness({ vendorChoices: { SANKI: ['Studio Store', 'Studio Props Store', 'Zepto'], PERSONAL: ['Home Vendor'] } });
+  await h.app.init();
+  h.app.state.loadedVendors.SANKI = ['Arbitrary Loaded Vendor'];
+  h.app.state.open = { key: classification.keyOf('SANKI', 'Props Expense'), summary: h.app.state.categories[0] };
+  h.app.state.details = { expenses: [h.row], pagination: { page: 1, pages: 1, total: 1 } };
+  h.app.openEditor('expense:EX-9');
+  assert.match(h.nodes.classificationVendorChoices.innerHTML, /Studio Props Store/);
+  assert.match(h.nodes.classificationVendorChoices.innerHTML, /Zepto/);
+  assert.doesNotMatch(h.nodes.classificationVendorChoices.innerHTML, /Arbitrary Loaded Vendor/, 'authoritative choices are never widened by loaded row text');
+
+  h.nodes.classificationEditVendor.value = 'Brand New Vendor';
+  h.nodes.classificationEditReason.value = 'Correct vendor';
+  assert.equal(await h.app.saveEditor(), false);
+  assert.match(h.nodes.classificationEditMessage.textContent, /Select an existing vendor from the searchable list/);
+  assert.equal(h.calls.some(call => call.method === 'PATCH'), false);
+
+  h.nodes.classificationEditVendor.value = 'studio props store';
+  assert.equal(await h.app.saveEditor(), true);
+  const write = h.calls.find(call => call.method === 'PATCH');
+  assert.equal(write.body.vendor, 'Studio Props Store', 'canonical existing vendor name is submitted');
+});
+
+test('authoritative vendor selection is revalidated when the entity changes', async () => {
+  const h = controllerHarness({ vendorChoices: { SANKI: ['Studio Store'], PERSONAL: ['Home Vendor'] } });
+  await h.app.init();
+  h.app.state.details = { expenses: [h.row], pagination: { page: 1, pages: 1, total: 1 } };
+  h.app.openEditor('expense:EX-9');
+  h.nodes.classificationEditEntity.value = 'PERSONAL';
+  h.nodes.classificationEditEntity.onchange();
+  h.nodes.classificationEditCategory.value = 'Food';
+  h.nodes.classificationEditVendor.value = 'Studio Store';
+  h.nodes.classificationEditReason.value = 'Move to correct entity';
+  assert.equal(await h.app.saveEditor(), false);
+  assert.match(h.nodes.classificationEditMessage.textContent, /Select an existing vendor from the searchable list/);
+  assert.equal(h.calls.some(call => call.method === 'PATCH'), false);
 });
 
 test('unclassified rows keep an explicit placeholder and vendor-only correction does not invent a category', async () => {
@@ -164,9 +250,11 @@ test('changing entity requires an explicit destination category instead of selec
   await h.app.init();
   h.app.state.details = { expenses: [h.row], pagination: { page: 1, pages: 1, total: 1 } };
   h.app.openEditor('expense:EX-9');
+  assert.equal(h.nodes.classificationCategoryMeta.textContent, 'Group: Marketing · Type: variable');
   h.nodes.classificationEditEntity.value = 'PERSONAL';
   h.nodes.classificationEditEntity.onchange();
   assert.equal(h.nodes.classificationEditCategory.value, '');
+  assert.equal(h.nodes.classificationCategoryMeta.textContent, 'Choose a category to see its group and type.');
   assert.match(h.nodes.classificationEditCategory.innerHTML, /Select category/);
   assert.doesNotMatch(h.nodes.classificationEditCategory.innerHTML, /value="Food" selected/);
 
@@ -176,6 +264,8 @@ test('changing entity requires an explicit destination category instead of selec
   assert.equal(h.calls.some(call => call.method === 'PATCH'), false);
 
   h.nodes.classificationEditCategory.value = 'Food';
+  h.nodes.classificationEditCategory.onchange();
+  assert.equal(h.nodes.classificationCategoryMeta.textContent, 'Group: Living · Type: variable');
   assert.equal(await h.app.saveEditor(), true);
   const write = h.calls.find(call => call.method === 'PATCH');
   assert.equal(write.body.entity, 'PERSONAL');

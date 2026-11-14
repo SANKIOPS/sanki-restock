@@ -39,9 +39,14 @@ function fixture() {
   const routes = new Map(), router = {};
   for (const method of ['get','patch','post']) router[method] = (path, handler) => routes.set(method.toUpperCase() + ' ' + path, handler);
   const catalogs = {
-    SANKI:[{name:'Fittings',group:'Operations',type:'variable'},{name:'Props Expense',group:'Marketing',type:'marketing'}],
+    SANKI:[{name:'Accessories',group:'Operations',type:'variable'},{name:'Fittings',group:'Operations',type:'variable'},{name:'Props Expense',group:'Marketing',type:'marketing'}],
     SAMAST:[{name:'Props Expense',group:'Marketing',type:'marketing'}],
     PERSONAL:[{name:'Home Expense',group:'Personal',type:'variable'},{name:'Props Expense',group:'Personal',type:'variable'}]
+  };
+  const vendorCatalogs = {
+    SANKI:['Studio Store','Old Vendor','studio store',' Alias Vendor ','Correct Bank Vendor','Correct Legacy Vendor','Identified Vendor','Meta Ads Vendor'],
+    SAMAST:['Samast Supplier'],
+    PERSONAL:['Private Vendor','Correct Vendor','Canonical Vendor']
   };
   const deps = {
     loadStore:() => clone(persisted),
@@ -53,13 +58,7 @@ function fixture() {
     canViewExpense:(req,expense) => expense.nature !== 'PERSONAL' || req.user.roles.includes('owner') || req.user.permissions.personalAccounting === true,
     canAccessExpense:(req,expense) => !expense.ownerOnly || req.user.roles.includes('owner') || (expense.nature === 'PERSONAL' && req.user.permissions.personalAccounting === true),
     pickableLedgers:(_store,nature) => clone(catalogs[nature] || []),
-    registerVendorForNature:(store,nature,name) => {
-      const canonical = String(name || '').trim() === 'Alias Vendor' ? 'Canonical Vendor' : String(name || '').trim();
-      store.vendorsByNature = store.vendorsByNature || {};
-      store.vendorsByNature[nature] = store.vendorsByNature[nature] || {};
-      store.vendorsByNature[nature][canonical.toLocaleLowerCase()] = {name:canonical};
-      return canonical;
-    },
+    vendorChoicesForNature:(_store,nature) => clone(vendorCatalogs[nature] || []),
     audit:(store,req,action,subjectType,subjectId,data) => {
       store.auditSeq = (store.auditSeq || 0) + 1;
       store.auditLog = store.auditLog || [];
@@ -94,6 +93,10 @@ test('classification review summarizes valid and reconciliation-created expenses
     ['expense','EX-100',1200],['reconciliation_expense','BRE-001',75]
   ]);
   assert.equal(response.body.expenses[0].proofCount,2);
+  assert.deepEqual(response.body.expenses[0].proofs,[
+    {kind:'bill',label:'Bill 1',url:'/proof/bill.jpg'},
+    {kind:'personal_payment',label:'Personal payment 1',url:'/proof/pay.jpg'}
+  ]);
   assert.equal(response.body.expenses[0].reference,'BANK-100');
   assert.equal(response.body.expenses[0].reconciled,true);
   assert.deepEqual(response.body.expenses[0].editableFields,['category','vendor','narration']);
@@ -104,11 +107,40 @@ test('classification review summarizes valid and reconciliation-created expenses
   assert.deepEqual([props.count,props.total,props.valid],[2,1275,true]);
   assert.equal(response.body.categories.some(category => category.entity === 'PERSONAL'),false);
   assert.equal(response.headers['cache-control'],'no-store');
+  assert.deepEqual(response.body.vendorChoices,{SANKI:['Alias Vendor','Correct Bank Vendor','Correct Legacy Vendor','Identified Vendor','Meta Ads Vendor','Old Vendor','Studio Store'],SAMAST:['Samast Supplier']},'vendor choices include only permitted entity masters, sorted and deduplicated');
+  assert.deepEqual(response.body.categories.map(category => category.name),['Fittings','Props Expense','Unclassified','Accessories'],'categories with activity are alphabetical before alphabetical zero-value categories');
 
   const searched = app.invoke('GET','/api/expenses/classification-review',{query:{entities:'SANKI',search:'Old Vendor'}});
   assert.deepEqual(searched.body.categories.map(category => [category.name,category.count,category.total]),[['Props Expense',1,1200]],'summary search narrows category totals');
   const unclassified = app.invoke('GET','/api/expenses/classification-review',{query:{entities:'SANKI',category:'Unclassified'}});
   assert.deepEqual(unclassified.body.expenses.map(expense => expense.recordId),['EX-UNCLASSIFIED']);
+  assert.deepEqual(unclassified.body.vendorChoices,{SANKI:['Alias Vendor','Correct Bank Vendor','Correct Legacy Vendor','Identified Vendor','Meta Ads Vendor','Old Vendor','Studio Store'],SAMAST:['Samast Supplier'],PERSONAL:['Canonical Vendor','Correct Vendor','Private Vendor']},'category detail responses carry the same permitted vendor masters');
+});
+
+test('classification evidence exposes safe labeled proof links once and ignores text or unsafe URLs', () => {
+  const app = fixture();
+  app.mutateStore(store => {
+    const expense = store.expenses['EX-100'];
+    expense.billPhotos = ['/proof/bill.jpg','javascript:alert(1)','//evil.example/bill.jpg','/proof\\bill.jpg','/proof/control\u0007.jpg','\n/proof/trimmed-control.jpg'];
+    expense.qrPhoto = 'https://files.example.test/vendor-qr.png';
+    expense.paymentProofs = ['/proof/company-payment.pdf','http://files.example.test/plain-http.pdf','https://user:secret@files.example.test/credential.pdf'];
+    expense.proofs = ['/proof/reconciliation.jpg'];
+    expense.exceptionEvidence = 'Uploaded bank statement';
+    expense.payments[0].proofs = ['/proof/company-payment.pdf','data:text/plain,unsafe'];
+    expense.reimbursementPayments = [{proofs:['/proof/reimbursement.jpg']}];
+  });
+  const response = app.invoke('GET','/api/expenses/classification-review',{query:{entities:'SANKI',category:'Props Expense',search:'Old Vendor'}});
+  assert.equal(response.status,200);
+  assert.deepEqual(response.body.expenses[0].proofs,[
+    {kind:'bill',label:'Bill 1',url:'/proof/bill.jpg'},
+    {kind:'vendor_qr',label:'QR 1',url:'https://files.example.test/vendor-qr.png'},
+    {kind:'personal_payment',label:'Personal payment 1',url:'/proof/pay.jpg'},
+    {kind:'payment',label:'Payment 1',url:'/proof/company-payment.pdf'},
+    {kind:'reconciliation',label:'Reconciliation 1',url:'/proof/reconciliation.jpg'},
+    {kind:'reimbursement',label:'Reimbursement 1',url:'/proof/reimbursement.jpg'}
+  ]);
+  assert.equal(response.body.expenses[0].proofCount,response.body.expenses[0].proofs.length);
+  assert.equal(response.body.expenses[0].proofs.some(proof => /javascript:|data:|evil|http:|user:secret|\\|\u0007|Uploaded bank statement/.test(proof.url)),false);
 });
 
 test('PERSONAL classification review requires the existing personal-accounting grant', () => {
@@ -118,6 +150,8 @@ test('PERSONAL classification review requires the existing personal-accounting g
   const allowed = app.invoke('GET','/api/expenses/classification-review',{role:'admin',permissions:{personalAccounting:true},query:{entities:'PERSONAL',category:'Home Expense'}});
   assert.equal(allowed.status,200);
   assert.equal(allowed.body.expenses[0].recordId,'EX-PRIVATE');
+  assert.deepEqual(Object.keys(allowed.body.vendorChoices),['SANKI','SAMAST','PERSONAL']);
+  assert.deepEqual(allowed.body.vendorChoices.PERSONAL,['Canonical Vendor','Correct Vendor','Private Vendor']);
   const claimant = app.invoke('GET','/api/expenses/classification-review',{role:'claimant',username:'arshpreet'});
   assert.equal(claimant.status,403);
 });
@@ -195,13 +229,34 @@ test('entity changes are blocked for reconciled, paid and hotel-tagged rows whil
   assert.equal(app.saves,0);
 });
 
-test('entity changes register the existing vendor in the target entity and audit canonicalization', () => {
+test('entity changes select an existing target vendor case-insensitively without creating a vendor', () => {
   const app = fixture();
-  const response = app.invoke('PATCH','/api/expenses/classification-review/:id',{pattern:'/api/expenses/classification-review/:id',params:{id:'EX-MOVE'},permissions:{personalAccounting:true},role:'admin',body:{sourceType:'expense',...app.token('EX-MOVE'),entity:'PERSONAL',category:'Props Expense',reason:'Move unposted draft to its correct entity'}});
+  const response = app.invoke('PATCH','/api/expenses/classification-review/:id',{pattern:'/api/expenses/classification-review/:id',params:{id:'EX-MOVE'},permissions:{personalAccounting:true},role:'admin',body:{sourceType:'expense',...app.token('EX-MOVE'),entity:'PERSONAL',category:'Props Expense',vendor:'canonical vendor',reason:'Move unposted draft to its correct entity'}});
   assert.equal(response.status,200,JSON.stringify(response.body));
   assert.equal(app.store.expenses['EX-MOVE'].vendor,'Canonical Vendor');
-  assert.equal(app.store.vendorsByNature.PERSONAL['canonical vendor'].name,'Canonical Vendor');
+  assert.equal(app.store.vendorsByNature,undefined,'classification review never creates a vendor master record');
   assert.ok(response.body.changes.some(change => change.field === 'vendor' && change.before === 'Alias Vendor' && change.after === 'Canonical Vendor'));
+});
+
+test('forged vendor and entity-change requests cannot create or copy unregistered vendors', () => {
+  const app = fixture(), before = app.store;
+  const forgedVendor = app.invoke('PATCH','/api/expenses/classification-review/:id',{
+    pattern:'/api/expenses/classification-review/:id',params:{id:'EX-DRAFT'},
+    body:{sourceType:'expense',...app.token('EX-DRAFT'),vendor:'Forged Vendor',reason:'Attempt to create vendor from review'}
+  });
+  assert.equal(forgedVendor.status,400);
+  assert.match(forgedVendor.body.error,/existing vendor/i);
+  assert.deepEqual(app.store,before);
+  assert.equal(app.saves,0);
+
+  const forgedEntityMove = app.invoke('PATCH','/api/expenses/classification-review/:id',{
+    role:'admin',permissions:{personalAccounting:true},pattern:'/api/expenses/classification-review/:id',params:{id:'EX-DRAFT'},
+    body:{sourceType:'expense',...app.token('EX-DRAFT'),entity:'PERSONAL',category:'Props Expense',reason:'Attempt to copy an unregistered vendor to another entity'}
+  });
+  assert.equal(forgedEntityMove.status,400);
+  assert.match(forgedEntityMove.body.error,/existing vendor/i);
+  assert.deepEqual(app.store,before);
+  assert.equal(app.saves,0);
 });
 
 test('bulk classification updates mixed source types atomically and rolls back every row on validation failure', () => {

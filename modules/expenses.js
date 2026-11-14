@@ -2287,7 +2287,11 @@ expenseClassificationReview.register(router,{
   canManageCategoriesAndVendors,
   claimantOnly:claimantPolicy.claimantOnly,
   approvalNatures,canManagePersonalAccounting,canViewExpense,canAccessExpense:canManageRestrictedExpense,
-  pickableLedgers,registerVendorForNature,audit
+  pickableLedgers,
+  vendorChoicesForNature:(store,nature)=>{
+    return Object.values(vendorMasterForNature(store,nature)).map(vendor=>vendor&&vendor.name).filter(Boolean);
+  },
+  audit
 });
 function canSelectOwnerPersonalTransferAccounts(req){return isOwner(req)||(rolesOfReq(req).includes('admin')&&isPrashant(req));}
 function ownerPersonalTransferClassification(fromNature,toNature){
