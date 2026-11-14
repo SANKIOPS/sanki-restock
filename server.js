@@ -2888,7 +2888,7 @@ app.listen(PORT, async () => {
   // Load caches from disk
   loadCache();
   loadVelCache();
-  if(process.env.RAILWAY_ENVIRONMENT_ID||process.env.NODE_ENV==='production')require('./modules/content-production').router.startSheetSync();
+  require('./modules/content-production').router.startSheetSync();
 
   // Stagger initial provider work in production. Webhooks keep current orders
   // flowing while the server becomes available immediately for accounting.
