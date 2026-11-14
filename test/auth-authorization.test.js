@@ -276,3 +276,5 @@ test('Prashant sees only the requested operational workspace even with an Admin 
   assert.equal(apiAllowedForUser(p,'/api/marketing/meta','GET'),false);
   assert.equal(apiAllowedForUser(p,'/api/admin/users','GET'),false);
 });
+
+test('Content-team-only users have just Content & Posting, without Dashboard or Manage',()=>{const u=user('content_team');assert.equal(userCanAccessPath(u,'/content-production.html'),true);for(const p of ['/dashboard.html','/manage.html','/expenses.html','/inventory.html'])assert.equal(userCanAccessPath(u,p),false,p);assert.deepEqual(allowedPagesForUser(u),['/content-production.html']);assert.deepEqual(visibleFor(u).map(m=>m.key),['content-production']);assert.equal(userCanAccessPath(user('owner'),'/dashboard.html'),true);});

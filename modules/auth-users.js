@@ -243,6 +243,7 @@ function hasUserPermission(user, permission) {
 function landingFor(role) { return ROLE_HOME[role] || '/dashboard.html'; }
 function allowedPagesFor(role) { const a = getRolePages()[role]; return a === '*' ? '*' : (a || []); }
 function roleCanAccessPath(role, p) {
+  if(role==='content_team')return p==='/content-production.html';
   // The launcher is the shared front door — every authenticated role may
   // open it (it filters its own contents by role via /api/modules).
   if (p === '/dashboard.html') return true;
@@ -254,6 +255,7 @@ function roleCanAccessPath(role, p) {
 // Union access across all of a user's roles.
 function isPrashant(user) { return String(user && user.username || '').trim().toLowerCase() === PRASHANT_USER; }
 function userCanAccessPath(user, p) {
+  if(rolesOf(user).length===1&&rolesOf(user)[0]==='content_team')return p==='/content-production.html';
   if (p === '/manage.html') {
     // This is only a filtered navigation hub, never a grant to its linked
     // pages or APIs. Do not add it to role-page grants or Prashant's fixed
@@ -272,6 +274,7 @@ function userCanAccessPath(user, p) {
   return rolesOf(user).some(r => roleCanAccessPath(r, p));
 }
 function allowedPagesForUser(user) {
+  if(rolesOf(user).length===1&&rolesOf(user)[0]==='content_team')return ['/content-production.html'];
   if (isPrashant(user)) return PRASHANT_PAGES.slice();
   const roles = rolesOf(user);
   if (roles.some(r => getRolePages()[r] === '*')) return '*';

@@ -31,9 +31,11 @@
   var HOME_ITEM = { icon: '🏠', text: 'Dashboard', href: '/dashboard.html' };
 
   // Build the sidebar sections from the /api/modules payload.
-  function navFromModules(data) {
+  function navFromModules(data,me) {
+    var contentOnly=me&&(me.roles||[me.role]).length===1&&(me.roles||[me.role])[0]==='content_team';
     var mods = (data && data.modules) || [];
     var order = (data && data.sectionOrder) || [];
+    if(contentOnly)return [{label:'Marketing',items:[{icon:'▤',text:'Content & Posting',href:'/content-production.html'}]}];
     var nav = [{ label: 'Main', items: [HOME_ITEM] }];
     var groups = {};
     mods.forEach(function (m) { (groups[m.section] = groups[m.section] || []).push(m); });
@@ -128,7 +130,7 @@
   aside.id = 'sanki-shared-sidebar';
   // Optimistic first paint: just the Dashboard home link; real modules fill
   // in once /api/modules responds, so the menu never looks broken.
-  aside.innerHTML = render([{ label: 'Main', items: [HOME_ITEM] }], null);
+  aside.innerHTML = render([], null);
 
   function wireLogout() {
     var btn = document.getElementById('ss-logout-btn');
@@ -155,7 +157,7 @@
   ]).then(function (out) {
     var me = out[0], mods = out[1];
     if (!me || !me.success) return;      // not logged in — leave optimistic render
-    aside.innerHTML = render(navFromModules(mods), me);
+    aside.innerHTML = render(navFromModules(mods,me), me);
     wireLogout();
     if ((me.roles || [me.role]).includes('owner') && !document.querySelector('script[data-rental-notifications]')) {
       var rentalScript = document.createElement('script');
