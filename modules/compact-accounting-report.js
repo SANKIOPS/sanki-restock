@@ -129,7 +129,7 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
     warnings.push(...report.warnings.filter(w=>['expense','salary','source'].includes(w.scope)).map(w=>w.reference+': '+w.message));
     const profitRentReceipts=[];
     for(const r of list(s.receipts).filter(r=>active(r)&&!r.historicalOpening&&match(r)&&inRange(r,from,to))){
-      const receiptDraft=r.bankReconciliationDraft||r.reconciliationDraft||r.bankReconciliationEvidence?.draftId;
+      const receiptDraft=r.bankReconciliationDraft||(entity==='SAMAST'?(r.reconciliationDraft||r.bankReconciliationEvidence?.draftId):'');
       if(receiptDraft&&s.bankReconciliationDrafts?.[receiptDraft]){warnings.push(r.id+': Pending reconciliation receipt excluded.');continue;}
       if(loans.isLoan(r)||r.expenseRefundId||r.refundRecoveryExpenseId||/security|deposit|contribution|exchange|refund/i.test(r.receiptType||''))continue;
       if(!incomeTypes.has(r.receiptType)){warnings.push(r.id+': Receipt type needs review before inclusion in income.');continue;}
