@@ -88,6 +88,17 @@ test('bank read is pure, bounded and refreshes only for its relevant accounting 
     assert.equal(repeatedLedger.status, 200, JSON.stringify(repeatedLedger.body));
     assert.equal(storeReads, 1, 'an identical ledger GET reuses the completed projection and edit evidence');
 
+    const balances = await invoke('/api/expenses/balances', { nature, from: dateFor(0), to: dateFor(204) });
+    assert.equal(balances.status, 200, JSON.stringify(balances.body));
+    assert.equal(balances.body.success, true);
+    assert.ok(balances.body.accounts.some(row => row.name === account));
+    assert.equal(storeReads, 1, 'account summaries reuse the same snapshot instead of reopening the full accounting store');
+
+    const repeatedBalances = await invoke('/api/expenses/balances', { nature, from: dateFor(0), to: dateFor(204) });
+    assert.equal(repeatedBalances.status, 200, JSON.stringify(repeatedBalances.body));
+    assert.equal(repeatedBalances.body.success, true);
+    assert.equal(storeReads, 1, 'an identical account-summary GET reuses its completed projection');
+
     fs.writeFileSync(process.env.ORDERS_PATH, JSON.stringify({ orders: { SYNTHETIC: { id:'SYNTHETIC', createdAt:dateFor(204), total:1 } } }));
     fs.writeFileSync(process.env.VELOCITY_REMITTANCE_PATH, JSON.stringify({ entries: [{ date:dateFor(204), amount:1, reference:'SYNTHETIC-VELOCITY' }] }));
     const personalAfterSalesChange = await invoke('/api/expenses/bank-statements', { nature, account });
