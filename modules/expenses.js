@@ -6686,6 +6686,33 @@ router.get('/api/expenses/bank-statements',(req,res)=>{
   res.json({success:true,account,nature,imports,transactions,transactionCount,lastReconciliation:book.lastReconciliation||null,updatedThrough:book.reconciledThrough||'',closingBalance:book.lastReconciliation&&(book.lastReconciliation.companyAdjustedClosingBalance??book.lastReconciliation.closingBalance)||0,actualClosingBalance:book.lastReconciliation&&book.lastReconciliation.closingBalance||0,draftOptions,draft:draft?draftReconciliation(s,draft,{readOnly:true,precomputedMovements}):null});
 });
 router.get('/api/expenses/bank-statements/history/:id',(req,res)=>{const s=loadStore(),account=String(req.query.account||''),nature=normalizedNature(req.query.nature);if(!canAccessBankReconciliation(req,s,nature,account))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation history.'});const book=(s.bankStatements||{})[bankStatementBookKey(nature,account)]||{},record=(book.imports||[]).find(item=>item.id===String(req.params.id||''));if(!record)return res.status(404).json({success:false,error:'Finalized reconciliation period not found.'});res.json({success:true,record:Object.assign({},record,{historyLoaded:true})});});
+function auditedFinalizedTransferRecovery(s,record,row,account){
+  const bank=row&&row.bank;if(!bank)return null;
+  const amount=roundMoney(num(bank.debit)+num(bank.credit)),incoming=num(bank.credit)>0,reference=reconciliationReference(bank.reference);
+  const candidates=(s.auditLog||[]).filter(event=>{
+    if(event.action!=='BANK_CONFIRMED_TRANSFER_CREATED'||event.subjectType!=='transfer'||!event.after)return false;
+    const transfer=event.after;
+    if(String(transfer.reconciliationDraft||'')!==String(record.draftId||'')||String(transfer.bankRowId||'')!==String(row.id||''))return false;
+    if(String(transfer.date||'')!==String(bank.date||'')||Math.abs(num(transfer.amount)-amount)>.005)return false;
+    if(reference&&reconciliationReference(transfer.bankReference)!==reference)return false;
+    return incoming?canonicalAccountName(transfer.toAccount)===canonicalAccountName(account):canonicalAccountName(transfer.fromAccount)===canonicalAccountName(account);
+  });
+  if(candidates.length!==1)return null;
+  const event=candidates[0],transfer=JSON.parse(JSON.stringify(event.after)),id=String(transfer.id||event.subjectId||'');
+  if(!/^TR-\d+$/.test(id)||id!==String(event.subjectId||''))return null;
+  const later=(s.auditLog||[]).filter(item=>item.subjectType==='transfer'&&item.subjectId===id&&String(item.at||'')>String(event.at||''));
+  if(later.some(item=>/DELET|EXCLUD|REVERSE|VOID/.test(String(item.action||'').toUpperCase())))return null;
+  const existing=(s.transfers||[]).filter(item=>item.id===id||String(item.reconciliationDraft||'')===String(record.draftId||'')&&String(item.bankRowId||'')===String(row.id||''));
+  if(existing.length>1)return null;
+  return{event,transfer:existing[0]||transfer,missing:!existing.length};
+}
+function latestRecheckRollback(s,record){
+  const event=(s.auditLog||[]).slice().reverse().find(item=>item.action==='FINALIZED_SHARED_BANK_BALANCE_RECHECKED'&&item.subjectId===record.id&&item.before&&item.after);
+  if(!event)return null;
+  const same=(left,right)=>left==null&&right==null||Math.abs(num(left)-num(right))<.005;
+  if(!same(record.ledgerClosingBalance,event.after.ledgerClosingBalance)||!same(record.balanceDifference,event.after.balanceDifference)||!!record.balanceReconciled!==!!event.after.balanceReconciled)return null;
+  return event.before;
+}
 router.post('/api/expenses/bank-statements/recheck-finalized-balance',(req,res)=>{
   if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can recheck a finalized bank balance.'});
   const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),account=canonicalAccountName(b.account),recordId=String(b.recordId||'');
@@ -6698,16 +6725,34 @@ router.post('/api/expenses/bank-statements/recheck-finalized-balance',(req,res)=
     : book.lastReconciliation&&String(book.lastReconciliation.draftId||'')===String(record.draftId||'')
       ? num(book.lastReconciliation.closingBalance) : NaN;
   if(!Number.isFinite(statementClosing))return res.status(409).json({success:false,error:'The retained statement has no verified closing balance. Its original evidence must be reviewed; no status was changed.'});
+  const historyRows=[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]),recovered=[];
+  for(const row of historyRows){
+    if(!row||!row.bank||(row.linkedRecordIds||[]).length||row.ledger&&row.ledger.id||/excluded|timing difference|failed payment/i.test(String(row.decision||'')))continue;
+    const recovery=auditedFinalizedTransferRecovery(s,record,row,account);if(!recovery)continue;
+    const before={linkedRecordIds:(row.linkedRecordIds||[]).slice(),ledger:row.ledger||null,decision:row.decision||'',reason:row.reason||''};
+    if(recovery.missing){s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(recovery.transfer);}
+    const movement=appBankMovements(s,account,nature,{raw:true}).find(item=>item.id===recovery.transfer.id);
+    if(!movement){if(recovery.missing)s.transfers=s.transfers.filter(item=>item!==recovery.transfer);continue;}
+    row.linkedRecordIds=[recovery.transfer.id];row.ledger=Object.assign({},movement);row.decision='Restored bank-confirmed transfer';row.corrected=true;row.resolvedBy=req.user.username;row.resolvedAt=new Date().toISOString();
+    row.correctionHistory=Array.isArray(row.correctionHistory)?row.correctionHistory:[];row.correctionHistory.push({before,after:{linkedRecordIds:[recovery.transfer.id],ledger:Object.assign({},movement)},reason:'Restored the exact finalized transfer from its immutable creation audit after its live record went missing.',by:req.user.username,at:row.resolvedAt});
+    recovered.push(recovery.transfer.id);
+    audit(s,req,'FINALIZED_SHARED_BANK_TRANSFER_RESTORED_FROM_AUDIT','transfer',recovery.transfer.id,{nature:normalizedNature(recovery.transfer.nature),account,before:recovery.missing?null:{transferPresent:true},after:recovery.transfer,note:'Restored exact bank-confirmed transfer and finalized history link from '+recovery.event.id+'.'});
+  }
+  const unresolvedRows=historyRows.filter(row=>row&&row.bank&&!(row.linkedRecordIds||[]).length&&!(row.ledger&&row.ledger.id)&&!/excluded|timing difference|failed payment/i.test(String(row.decision||''))).map(row=>({rowId:row.id,date:row.bank.date,reference:row.bank.reference||'',description:row.bank.description||'',debit:num(row.bank.debit),credit:num(row.bank.credit),reason:row.reason||''}));
+  if(unresolvedRows.length)return res.status(409).json({success:false,error:'The finalized statement still contains '+unresolvedRows.length+' bank transaction(s) without a ledger connection. Correct those exact rows before rechecking the balance; no balance was changed.',unresolvedRows,recoveredTransfers:recovered});
   let ledgerClosing;
-  try{ledgerClosing=sharedPhysicalBankView(s,account,String(record.to||''),{excludeRecordId:record.id}).balance;}
-  catch(error){return res.status(409).json({success:false,error:error.message||'The physical 7883 balance could not be calculated safely.'});}
   const before={ledgerClosingBalance:record.ledgerClosingBalance,balanceDifference:record.balanceDifference,balanceReconciled:record.balanceReconciled,closingBalanceDeferred:record.closingBalanceDeferred};
+  const rollback=recovered.length?latestRecheckRollback(s,record):null;
+  if(rollback)ledgerClosing=num(rollback.ledgerClosingBalance);
+  else if(recovered.length&&Number.isFinite(Number(record.carryForwardNet)))ledgerClosing=roundMoney(statementClosing+num(record.carryForwardNet));
+  else try{ledgerClosing=sharedPhysicalBankView(s,account,String(record.to||''),{excludeRecordId:record.id}).balance;}
+  catch(error){return res.status(409).json({success:false,error:error.message||'The physical 7883 balance could not be calculated safely.'});}
   const difference=roundMoney(statementClosing-ledgerClosing),reconciled=Math.abs(difference)<.01;
   Object.assign(record,{ledgerClosingBalance:ledgerClosing,balanceDifference:difference,balanceReconciled:reconciled,reconciled,closingBalanceDeferred:!reconciled,balanceRecheckedAt:new Date().toISOString(),balanceRecheckedBy:req.user.username});
   if(book.lastReconciliation&&String(book.lastReconciliation.draftId||'')===String(record.draftId||''))Object.assign(book.lastReconciliation,{ledgerClosingBalance:ledgerClosing,balanceDifference:difference,balanceReconciled:reconciled,reconciled,closingBalanceDeferred:!reconciled,balanceRecheckedAt:record.balanceRecheckedAt,balanceRecheckedBy:req.user.username});
   const after={statementClosingBalance:statementClosing,ledgerClosingBalance:ledgerClosing,balanceDifference:difference,balanceReconciled:reconciled,closingBalanceDeferred:!reconciled};
-  audit(s,req,'FINALIZED_SHARED_BANK_BALANCE_RECHECKED','bank_reconciliation',record.id,{nature:'SAMAST',account,before,after,note:'Recalculated from verified physical opening/closing evidence and posted 7883 movements; no adjustment was created.'});
-  saveStore(s);res.json({success:true,recordId:record.id,...after});
+  audit(s,req,'FINALIZED_SHARED_BANK_BALANCE_RECHECKED','bank_reconciliation',record.id,{nature:'SAMAST',account,before,after,note:(recovered.length?'Restored '+recovered.join(', ')+' from immutable bank-confirmed audit evidence; ':'')+'Recalculated from verified physical opening/closing evidence and posted 7883 movements; no adjustment was created.'});
+  saveStore(s);res.json({success:true,recordId:record.id,recoveredTransfers:recovered,...after});
 });
 function finalizedStoredBankTransaction(book,row){
   const stored=Object.values(book&&book.transactions||{}),transactionId=String(row&&row.bank&&row.bank.transactionId||'');let matches=transactionId?stored.filter(value=>String(value&&value.id||'')===transactionId):[];
