@@ -151,6 +151,24 @@ test('all existing-ledger linking paths reject another active draft claim before
   if(baseline)fs.writeFileSync(file,baseline);else fs.rmSync(file,{force:true});
 });
 
+test('Owner can safely recheck a finalized pending 7883 balance without creating an adjustment',()=>{
+  const file=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(file)?fs.readFileSync(file,'utf8'):null;
+  try{
+    const s=baseline?JSON.parse(baseline):{},account='IndusInd Bank 7883',recordId='BST-7883-RECHECK';
+    Object.assign(s,{expenses:{},receipts:[],transfers:[],vendorAdvances:[],bankTruthMovements:[],reconciliationExpenses:[],bankDateOverrides:{},bankMovementAuthority:{},bankReconciliationDrafts:{}});
+    s.adjustments=[{id:'ADJ-7883-CREDIT',nature:'SANKI',account,amount:50,date:'2026-11-13',note:'Verified receipt'}];
+    s.physicalBankOpeningBalances={[account]:100};s.openingBalanceDatesByNature={SAMAST:{[account]:'2026-08-22'},PERSONAL:{[account]:'2026-08-22'}};
+    s.bankStatements={[account]:{transactions:{},imports:[{id:recordId,draftId:'BRD-7883-RECHECK',from:'2026-11-13',to:'2026-11-13',statementSummary:{openingBalance:100,closingBalance:150,totalDebits:0,totalCredits:50,validated:true},ledgerClosingBalance:100,balanceDifference:50,balanceReconciled:false,closingBalanceDeferred:true}],reconciledThrough:'2026-11-13',lastReconciliation:{draftId:'BRD-7883-RECHECK',through:'2026-11-13',closingBalance:150,ledgerClosingBalance:100,balanceDifference:50,balanceReconciled:false,closingBalanceDeferred:true}}};
+    fs.writeFileSync(file,JSON.stringify(s));
+    const denied=invoke('POST','/api/expenses/bank-statements/recheck-finalized-balance',{role:'admin',body:{nature:'SAMAST',account,recordId}});assert.equal(denied.status,403);
+    const result=invoke('POST','/api/expenses/bank-statements/recheck-finalized-balance',{role:'owner',body:{nature:'SAMAST',account,recordId}});
+    assert.equal(result.status,200,JSON.stringify(result.body));assert.equal(result.body.balanceDifference,0);assert.equal(result.body.balanceReconciled,true);
+    const saved=JSON.parse(fs.readFileSync(file,'utf8')),record=saved.bankStatements[account].imports[0];
+    assert.equal(record.ledgerClosingBalance,150);assert.equal(record.closingBalanceDeferred,false);assert.equal(saved.adjustments.length,1);
+    assert.ok(saved.auditLog.some(entry=>entry.action==='FINALIZED_SHARED_BANK_BALANCE_RECHECKED'&&entry.subjectId===recordId));
+  }finally{if(baseline)fs.writeFileSync(file,baseline);else fs.rmSync(file,{force:true});}
+});
+
 test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });

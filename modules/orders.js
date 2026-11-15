@@ -104,6 +104,38 @@ async function shopifyFetchAll(startUrl) {
   return all;
 }
 
+// Shopify occasionally throttles or times out one order's transaction endpoint.
+// A single failure must not discard the other orders returned by the main order
+// page: doing so can hide an otherwise valid POS cash sale from Counter Cash.
+async function mapWithConcurrency(items, limit, worker) {
+  const queue = Array.from(items || []), results = new Array(queue.length);
+  let cursor = 0;
+  async function next() {
+    while (cursor < queue.length) {
+      const index = cursor++;
+      results[index] = await worker(queue[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit || 1), queue.length) }, next));
+  return results;
+}
+
+async function enrichOrdersWithTransactions(raw, store, fetchAll = shopifyFetchAll) {
+  const errors = [];
+  await mapWithConcurrency(raw, 6, async order => {
+    const previous = store.orders[String(order.id)] || null;
+    try {
+      order._paymentTransactions = await fetchAll(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${order.id}/transactions.json?limit=250`);
+    } catch (error) {
+      order._paymentTransactionsUnavailable = true;
+      order._previousPaymentTransactions = previous && Array.isArray(previous.paymentTransactions)
+        ? previous.paymentTransactions : [];
+      errors.push({ orderId: String(order.id), message: String(error && error.message || 'Transaction details unavailable').slice(0, 300) });
+    }
+  });
+  return errors;
+}
+
 // ── Normalisation: raw Shopify order → lean ledger record ────────
 function channelOf(sourceName) {
   const s = String(sourceName || '').toLowerCase();
@@ -222,8 +254,11 @@ function normalizeOrder(o, previous = {}) {
     deliveryComplete,
     shipments: fulfillments.filter(f => f.status !== 'cancelled').map(f => ({ id: String(f.id), awb: f.tracking_number || '', courier: f.tracking_company || '', trackingUrl: f.tracking_url || '', status: f.shipment_status || 'Tracking update pending', weight: null })),
     paymentGateways: o.payment_gateway_names || [],
-    paymentTransactions: normalizePaymentTransactions(o._paymentTransactions),
-    paymentTransactionSchemaVersion: 2,
+    paymentTransactions: o._paymentTransactionsUnavailable
+      ? (Array.isArray(o._previousPaymentTransactions) ? o._previousPaymentTransactions : (previous.paymentTransactions || []))
+      : normalizePaymentTransactions(o._paymentTransactions),
+    paymentTransactionSchemaVersion: o._paymentTransactionsUnavailable
+      ? (previous.paymentTransactionSchemaVersion || 0) : 2,
     couponCodes: (o.discount_codes || []).map(d => d.code).filter(Boolean)
   };
 }
@@ -266,17 +301,21 @@ async function runSync(opts = {}) {
     // Orders expose only gateway names. The transaction endpoint is the source
     // of truth for split tenders and gateway-specific refunds, so cache those
     // components with every imported/updated order.
-    await Promise.all(raw.map(async order => {
-      order._paymentTransactions = await shopifyFetchAll(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${order.id}/transactions.json?limit=250`);
-    }));
+    const transactionErrors = await enrichOrdersWithTransactions(raw, store);
     let imported = 0;
     raw.forEach(o => { store.orders[String(o.id)] = normalizeOrder(o, store.orders[String(o.id)]); imported++; });
     const boundary=accountingStartAt(),missingPaymentDetails=Object.values(store.orders).filter(order=>String(order.createdAt||'')>=boundary&&order.paymentTransactionSchemaVersion!==2);
-    await Promise.all(missingPaymentDetails.map(async order => {
-      const transactions=await shopifyFetchAll(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${order.id}/transactions.json?limit=250`);
-      order.paymentTransactions=normalizePaymentTransactions(transactions);
-      order.paymentTransactionSchemaVersion=2;
-    }));
+    await mapWithConcurrency(missingPaymentDetails, 6, async order => {
+      try {
+        const transactions=await shopifyFetchAll(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${order.id}/transactions.json?limit=250`);
+        order.paymentTransactions=normalizePaymentTransactions(transactions);
+        order.paymentTransactionSchemaVersion=2;
+      } catch (error) {
+        if (!transactionErrors.some(item => item.orderId === String(order.id))) {
+          transactionErrors.push({ orderId: String(order.id), message: String(error && error.message || 'Transaction details unavailable').slice(0, 300) });
+        }
+      }
+    });
 
     // Recompute meta.
     const ids = Object.keys(store.orders);
@@ -288,11 +327,13 @@ async function runSync(opts = {}) {
       oldestAt: oldest,
       lastImported: imported,
       paymentDetailsBackfilled: missingPaymentDetails.length,
+      paymentTransactionErrors: transactionErrors.length,
+      paymentTransactionErrorOrders: transactionErrors.slice(0, 25),
       accountingOrderBackfillVersion: ACCOUNTING_ORDER_BACKFILL_VERSION,
       mode: isBackfill ? 'backfill' : 'incremental'
     };
     saveStore(store);
-    return { imported, total: ids.length, oldestAt: oldest, mode: store.sync.mode };
+    return { imported, total: ids.length, oldestAt: oldest, mode: store.sync.mode, paymentTransactionErrors: transactionErrors.length };
   } finally { _syncing = false; }
 }
 
@@ -471,8 +512,31 @@ async function syncFinance() {
     return {success:true,checked:rows.length,reportedSettled:rows.filter(r=>r.utr).length,bankVerified:false};
   }finally{financeRefreshing=false;}
 }
+async function syncVelocityEvidence(options={}) {
+  const finance=options.finance||syncFinance,payouts=options.payouts||syncVelocityPayouts;
+  const payoutConfigured=options.payoutConfigured==null
+    ? !!(process.env.VELOCITY_MCP_ACCESS_TOKEN&&process.env.VELOCITY_MCP_UID)
+    : !!options.payoutConfigured;
+  const result={success:true},errors=[];
+  try{Object.assign(result,await finance());}catch(error){errors.push({source:'finance',error:error.message});}
+  if(payoutConfigured){
+    try{result.payouts=await payouts();}catch(error){errors.push({source:'payouts',error:error.message});}
+  }
+  if(errors.length)result.errors=errors;
+  if(!result.checked&&!result.payouts)Object.assign(result,{success:false,error:errors.map(item=>item.error).join(' · ')||'Velocity sync is unavailable.'});
+  return result;
+}
 router.post('/api/orders-ledger/velocity-finance/sync', async(req,res)=>{
-  try{const result=await syncFinance();if(process.env.VELOCITY_MCP_ACCESS_TOKEN&&process.env.VELOCITY_MCP_UID)result.payouts=await syncVelocityPayouts();res.json(result);}catch(e){res.status(502).json({success:false,error:e.message});}
+  const result=await syncVelocityEvidence();
+  if(!result.success)return res.status(502).json(result);
+  res.json(result);
+});
+
+// Independent payout refresh: provider-finance credentials or AWB failures
+// must not block bank-verifiable Velocity COD settlement evidence.
+router.post('/api/orders-ledger/velocity-payouts/sync', async(req,res)=>{
+  try{res.json(Object.assign({success:true},await syncVelocityPayouts()));}
+  catch(error){res.status(502).json({success:false,error:error.message});}
 });
 
 function syncVelocityPayouts(){return require('./velocity-payout-sync').sync({file:path.join(path.dirname(ORDERS_PATH),'velocity_payout_evidence.json'),write:atomicWrite});}
@@ -574,4 +638,4 @@ function startAutoSync() {
   setInterval(tick, every);
 }
 
-module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance, syncVelocityPayouts, syncLogistics, syncGoKwik, startGoKwikSync, refreshAccountingCustomerEvidence };
+module.exports = { router, startAutoSync, runSync, normalizeOrder, enrichOrdersWithTransactions, syncVelocityEvidence, syncFinance, syncVelocityPayouts, syncLogistics, syncGoKwik, startGoKwikSync, refreshAccountingCustomerEvidence };

@@ -5227,8 +5227,11 @@ router.get('/api/expenses/bank-reconciliation-evidence', (req, res) => {
   const out=require('./bank-reconciliation-evidence').snapshot(s,{nature,account,bookKey:bankStatementBookKey(nature,account),movementId:String(req.query.movementId||''),draftId:String(req.query.draftId||''),rowId:String(req.query.rowId||'')});
   return res.status(out.error?out.status||400:200).json(out.error?{success:false,error:out.error}:out);
 });
-function sharedPhysicalBankView(s,account,to){
-  const book=(s.bankStatements||{})[bankStatementBookKey('SAMAST',account)]||{};
+function sharedPhysicalBankView(s,account,to,options={}){
+  const sourceBook=(s.bankStatements||{})[bankStatementBookKey('SAMAST',account)]||{};
+  const excludeRecordId=String(options.excludeRecordId||''),imports=excludeRecordId?(sourceBook.imports||[]).filter(record=>String(record&&record.id||'')!==excludeRecordId):(sourceBook.imports||[]);
+  const excludingLast=excludeRecordId&&sourceBook.lastReconciliation&&imports.every(record=>String(record&&record.draftId||'')!==String(sourceBook.lastReconciliation.draftId||''));
+  const book=excludeRecordId?{...sourceBook,imports,lastReconciliation:excludingLast?null:sourceBook.lastReconciliation,reconciledThrough:imports.map(record=>String(record&&record.to||'')).filter(Boolean).sort().at(-1)||''}:sourceBook;
   const raw=appBankMovements(s,account,'SAMAST',{physical:true,raw:true});
   const rows=bankMovementAuthority.project(s,account,'SAMAST',raw);
   const saved=(s.physicalBankOpeningBalances||{})[account];
@@ -6683,6 +6686,29 @@ router.get('/api/expenses/bank-statements',(req,res)=>{
   res.json({success:true,account,nature,imports,transactions,transactionCount,lastReconciliation:book.lastReconciliation||null,updatedThrough:book.reconciledThrough||'',closingBalance:book.lastReconciliation&&(book.lastReconciliation.companyAdjustedClosingBalance??book.lastReconciliation.closingBalance)||0,actualClosingBalance:book.lastReconciliation&&book.lastReconciliation.closingBalance||0,draftOptions,draft:draft?draftReconciliation(s,draft,{readOnly:true,precomputedMovements}):null});
 });
 router.get('/api/expenses/bank-statements/history/:id',(req,res)=>{const s=loadStore(),account=String(req.query.account||''),nature=normalizedNature(req.query.nature);if(!canAccessBankReconciliation(req,s,nature,account))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation history.'});const book=(s.bankStatements||{})[bankStatementBookKey(nature,account)]||{},record=(book.imports||[]).find(item=>item.id===String(req.params.id||''));if(!record)return res.status(404).json({success:false,error:'Finalized reconciliation period not found.'});res.json({success:true,record:Object.assign({},record,{historyLoaded:true})});});
+router.post('/api/expenses/bank-statements/recheck-finalized-balance',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can recheck a finalized bank balance.'});
+  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),account=canonicalAccountName(b.account),recordId=String(b.recordId||'');
+  if(!isSharedBankReconciliationAccount(account))return res.status(400).json({success:false,error:'This recheck is available only for the shared physical 7883 account.'});
+  if(!canAccessBankReconciliation(req,s,nature,account))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation.'});
+  const book=(s.bankStatements||{})[bankStatementBookKey(nature,account)],record=book&&(book.imports||[]).find(item=>String(item.id||'')===recordId);
+  if(!record)return res.status(404).json({success:false,error:'Finalized reconciliation period not found.'});
+  const statementClosing=record.statementSummary&&record.statementSummary.closingBalance!=null
+    ? num(record.statementSummary.closingBalance)
+    : book.lastReconciliation&&String(book.lastReconciliation.draftId||'')===String(record.draftId||'')
+      ? num(book.lastReconciliation.closingBalance) : NaN;
+  if(!Number.isFinite(statementClosing))return res.status(409).json({success:false,error:'The retained statement has no verified closing balance. Its original evidence must be reviewed; no status was changed.'});
+  let ledgerClosing;
+  try{ledgerClosing=sharedPhysicalBankView(s,account,String(record.to||''),{excludeRecordId:record.id}).balance;}
+  catch(error){return res.status(409).json({success:false,error:error.message||'The physical 7883 balance could not be calculated safely.'});}
+  const before={ledgerClosingBalance:record.ledgerClosingBalance,balanceDifference:record.balanceDifference,balanceReconciled:record.balanceReconciled,closingBalanceDeferred:record.closingBalanceDeferred};
+  const difference=roundMoney(statementClosing-ledgerClosing),reconciled=Math.abs(difference)<.01;
+  Object.assign(record,{ledgerClosingBalance:ledgerClosing,balanceDifference:difference,balanceReconciled:reconciled,reconciled,closingBalanceDeferred:!reconciled,balanceRecheckedAt:new Date().toISOString(),balanceRecheckedBy:req.user.username});
+  if(book.lastReconciliation&&String(book.lastReconciliation.draftId||'')===String(record.draftId||''))Object.assign(book.lastReconciliation,{ledgerClosingBalance:ledgerClosing,balanceDifference:difference,balanceReconciled:reconciled,reconciled,closingBalanceDeferred:!reconciled,balanceRecheckedAt:record.balanceRecheckedAt,balanceRecheckedBy:req.user.username});
+  const after={statementClosingBalance:statementClosing,ledgerClosingBalance:ledgerClosing,balanceDifference:difference,balanceReconciled:reconciled,closingBalanceDeferred:!reconciled};
+  audit(s,req,'FINALIZED_SHARED_BANK_BALANCE_RECHECKED','bank_reconciliation',record.id,{nature:'SAMAST',account,before,after,note:'Recalculated from verified physical opening/closing evidence and posted 7883 movements; no adjustment was created.'});
+  saveStore(s);res.json({success:true,recordId:record.id,...after});
+});
 function finalizedStoredBankTransaction(book,row){
   const stored=Object.values(book&&book.transactions||{}),transactionId=String(row&&row.bank&&row.bank.transactionId||'');let matches=transactionId?stored.filter(value=>String(value&&value.id||'')===transactionId):[];
   if(matches.length>1)return{error:'The finalized bank transaction ID points to more than one stored row. Resolve the duplicate history before correcting provenance.'};

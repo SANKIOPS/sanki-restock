@@ -2933,8 +2933,8 @@ app.listen(PORT, async () => {
 
   const syncVelocityPayouts=()=>{if(!process.env.VELOCITY_MCP_ACCESS_TOKEN||!process.env.VELOCITY_MCP_UID)return;require('./modules/orders').syncVelocityPayouts().then(r=>console.log('[velocity-payouts] Synced '+r.batches+' batches; '+r.allocationIssues+' allocation issues')).catch(e=>console.error('[velocity-payouts] '+e.message));};
   if(providerPollersEnabled){
-    setInterval(syncVelocityPayouts, interval('VELOCITY_PAYOUT_SYNC_MINUTES', production ? 360 : 60));
-    setTimeout(syncVelocityPayouts, startupDelay('VELOCITY_PAYOUT_STARTUP_MINUTES', production ? 40 : 0.67));
+    setInterval(syncVelocityPayouts, interval('VELOCITY_PAYOUT_SYNC_MINUTES', 60));
+    setTimeout(syncVelocityPayouts, startupDelay('VELOCITY_PAYOUT_STARTUP_MINUTES', production ? 1 : 0.67));
   }
 
   // Self-ping every 14 min to keep Render free tier alive
