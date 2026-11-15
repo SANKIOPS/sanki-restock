@@ -30,12 +30,13 @@ function createStore(options={}){
  const file=options.file||process.env.CONTENT_PRODUCTION_PATH||path.join(dir(),'content-production.json');
  const catalog=options.products||products,adData=options.meta||meta,bookings=options.shoots||shoots,today=options.today||day;
  const users=options.userSummary||userSummary;
- function load(){const s=read(file,null);if(!s)return {version:1,revision:0,items:[],publications:[],settings:{start:today(),days:7,buffer:3,editLead:1,shootLead:2,accounts:ACCOUNTS.map(account=>({account,daily:0,shooter:'',editor:'',publisher:''}))},history:[]};if(s.version!==1||!Number.isInteger(s.revision)||!Array.isArray(s.items)||!Array.isArray(s.publications)||!Array.isArray(s.history)||!s.settings)fail('Unsupported content data. Existing data was preserved.',500);return s;}
+ function load(){const s=read(file,null);if(!s)return {version:1,revision:0,items:[],publications:[],settings:{start:today(),days:7,buffer:3,editLead:1,shootLead:2,accounts:ACCOUNTS.map(account=>({account,daily:0,shooter:'',editor:'',publisher:''}))},history:[]};if(s.version!==1||!Number.isInteger(s.revision)||!Array.isArray(s.items)||!Array.isArray(s.publications)||!Array.isArray(s.history)||!s.settings)fail('Unsupported content data. Existing data was preserved.',500);s.items=s.items.map(workflow.withFinalStatus);return s;}
  function change(revision,actor,fn){fs.mkdirSync(path.dirname(file),{recursive:true});let lock;try{lock=fs.openSync(file+'.lock','wx',0o600);}catch{fail('Another content save is in progress. Retry shortly.',409);}try{const s=load();if(revision!==s.revision)fail('Content changed. Refresh before saving.',409);const result=fn(s);s.revision++;s.history.unshift({at:new Date().toISOString(),actor,action:result.action,id:result.id||''});s.history=s.history.slice(0,2000);const temp=file+'.tmp-'+crypto.randomUUID();try{fs.writeFileSync(temp,JSON.stringify(s),{mode:0o600});fs.renameSync(temp,file);}finally{if(fs.existsSync(temp))fs.unlinkSync(temp);}return result;}finally{fs.closeSync(lock);fs.unlinkSync(file+'.lock');}}
  function person(v){v=text(v,100);if(v&&!allowed(users(v)))fail('Select a user with Content team access: '+v);return v;}
  function assigned(i,s,key){return i[key]?[i[key]]:s.settings.accounts.filter(a=>i.accounts.includes(a.account)).map(a=>a[key]).filter(Boolean);}
  function normalize(b,previous,s){
   const x={...previous,id:previous?.id||crypto.randomUUID(),title:text(b.title,200),accounts:b.accounts,type:workflow.videoType(b.type),productIds:b.productIds,model:workflow.personName(text(b.model,120)),shootDate:date(b.shootDate),editedDate:date(b.editedDate??previous?.editedDate??previous?.source?.editedDate),shotBy:workflow.personName(text(b.shotBy??previous?.shotBy??previous?.source?.shooter,120)),editedBy:workflow.personName(text(b.editedBy??previous?.editedBy??previous?.source?.editor,120)),dueDate:date(b.dueDate),shootStatus:b.shootStatus,editStatus:b.editStatus,shooter:person(b.shooter),editor:person(b.editor),publisher:person(b.publisher),rawUrl:url(b.rawUrl),finalUrl:url(b.finalUrl),notes:text(b.notes,3000),adIds:b.adIds||[],shootId:text(b.shootId,100),adCreative:!!b.adCreative};
+  if(x.finalUrl){x.editStatus='done';x.shootStatus='shot';}
   if(!x.title)fail('Give this content a name.');
   if(!Array.isArray(x.accounts)||x.accounts.some(a=>!ACCOUNTS.includes(a)))fail('Choose valid posting accounts.');x.accounts=[...new Set(x.accounts)];
   if((!TYPES.includes(x.type)&&!(previous&&!x.type))||!['planned','shot'].includes(x.shootStatus)||!['pending','editing','done'].includes(x.editStatus))fail('Choose a valid video type and status.');
@@ -50,7 +51,7 @@ function createStore(options={}){
   return x;
  }
  function save(b,u,id){if(!editor(u))fail('Content team access required to edit content.',403);return change(b.revision,u.username,s=>{const old=id?s.items.find(i=>i.id===id):null;if(id&&!old)fail('Content not found.',404);
-   const payload={...old,...b};if(payload.editStatus==='done'&&old?.editStatus!=='done'&&!payload.editedDate)payload.editedDate=today();if(!finances(u))payload.adIds=old?.adIds||[];
+   const payload={...old,...b};if(((payload.finalUrl&&!old?.finalUrl)||(payload.editStatus==='done'&&old?.editStatus!=='done'))&&!payload.editedDate)payload.editedDate=today();if(!finances(u))payload.adIds=old?.adIds||[];
    const item=normalize(payload,old,s);if(item.editStatus==='editing'&&old?.editStatus!=='editing')item.editingStartedAt=new Date().toISOString();if(item.editStatus==='done'&&old?.editStatus!=='done')item.editingCompletedAt=new Date().toISOString();if(Object.prototype.hasOwnProperty.call(b,'type'))item.typeOverride=true;if(Object.prototype.hasOwnProperty.call(b,'postingStatus')){if(!['posted','not_posted'].includes(b.postingStatus))fail('Choose Posted or Not posted.');item.postingOverride=b.postingStatus;}item.updatedAt=new Date().toISOString();item.updatedBy=u.username;item.createdAt=old?.createdAt||item.updatedAt;if(old)Object.assign(old,item);else s.items.push(item);return {action:old?'update':'create',id:item.id};});}
  function plan(s){
   const output=[],start=s.settings.start>today()?s.settings.start:today(),used=new Map(),latest={};
@@ -92,8 +93,8 @@ function createStore(options={}){
   return change(revision,u.username,s=>{
    const now=new Date().toISOString();
    for(const {entry,old,patch} of entries){
-    if(old){const target=s.items.find(i=>i.id===old.id);Object.assign(target,patch,{updatedAt:now,updatedBy:u.username});target.notes=String(target.notes||'').replace(/^Source posting status:.*$/gm,'').trim();}
-    else s.items.push({...entry,...patch,id:crypto.randomUUID(),createdAt:now,updatedAt:now,updatedBy:u.username});
+    if(old){const target=s.items.find(i=>i.id===old.id);Object.assign(target,patch,{updatedAt:now,updatedBy:u.username});Object.assign(target,workflow.withFinalStatus(target));target.notes=String(target.notes||'').replace(/^Source posting status:.*$/gm,'').trim();}
+    else s.items.push({...workflow.withFinalStatus({...entry,...patch}),id:crypto.randomUUID(),createdAt:now,updatedAt:now,updatedBy:u.username});
    }
    return {action:'import',...report};
   });
