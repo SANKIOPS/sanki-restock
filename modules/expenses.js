@@ -4579,6 +4579,19 @@ router.get('/api/expenses/balances', (req, res) => {
   // this route into quadratic work and left Personal Ledgers on "Loading…".
   const ledgerAccountNames=ledgerAccountsForNature(s,nature),ledgerAccountKeys=new Set(ledgerAccountNames.map(name=>String(name).toLowerCase()));
   const accountIsInBook=account=>ledgerAccountKeys.has(String(account||'').toLowerCase());
+  // Build slow file-backed projections once for the whole card request. They
+  // are reused for the selected period, the closing period and every account.
+  const balanceProjection={
+    expenses:Object.values(s.expenses||{}),
+    loanRepayments:expenseLoans.repayments(s),
+    salaryAdvances:salaryAdvanceEntries(),
+    salaryPayments:salaryPaymentEntries(),
+    incentivePayments:nature==='SANKI'?incentivePaymentEntries():[],
+    procurements:nature==='SANKI'?procurementPayables(s,true):[],
+    sales:nature==='SANKI'?salesLedgerEntries(s).filter(includeAutomaticSale):[],
+    paytmOutflows:nature==='SANKI'?paytmClearingSettlementOutflows(s):[],
+    velocityBatches:nature==='SANKI'?velocitySettlementBatches(s):[]
+  };
   const openingDateMap=nature==='SANKI'?(s.openingBalanceDates||{}):(((s.openingBalanceDatesByNature||{})[nature])||{});
   const afterAuthoritativeOpening=(account,date)=>{
     const openingDate=String(openingDateMap[account]||'');
@@ -4587,7 +4600,7 @@ router.get('/api/expenses/balances', (req, res) => {
   function totalsFor(inRange) {
     const paidOut = {}, collected = {}, adj = {}, transferIn = {}, transferOut = {}, bankTruthIn = {}, bankTruthOut = {};
     const posted=(account,date)=>inRange(date)&&cashEntryIsVisible(account,date)&&afterAuthoritativeOpening(account,date);
-    Object.values(s.expenses).forEach(e => {
+    balanceProjection.expenses.forEach(e => {
       const a = e.account || '(unspecified)';
       (e.payments || []).filter(p => !p.accountingExcluded && (paymentIsPosted(e)||p.provisional) && posted(p.account||a,accountMovementDate(s,p.account||a,nature,e.id+'/'+p.id,p.date))).forEach(p => {
         const paymentAccount = p.account || a;
@@ -4611,30 +4624,30 @@ router.get('/api/expenses/balances', (req, res) => {
       }
     });
     (s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&accountVendorPaymentInScope(x.nature,nature,x.account)&&posted(x.account,x.date)).forEach(x=>{paidOut[x.account]=(paidOut[x.account]||0)+num(x.amount);});
-    if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x=>posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); }));
+    if (nature === 'SANKI') balanceProjection.procurements.forEach(p => (p.payments || []).filter(x=>posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); }));
     // A linked advance is still outstanding against the employee, but its bank
     // movement is represented by the internal transfer. Do not debit the source
     // account a second time here.
-    salaryAdvanceEntries().filter(x=>x.payingNature===nature&&!x.fundingTransferId&&posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
-    salaryPaymentEntries().filter(x=>x.payingNature===nature&&posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
+    balanceProjection.salaryAdvances.filter(x=>x.payingNature===nature&&!x.fundingTransferId&&posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
+    balanceProjection.salaryPayments.filter(x=>x.payingNature===nature&&posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
     if (nature === 'SANKI') {
-      incentivePaymentEntries().filter(x=>posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
+      balanceProjection.incentivePayments.filter(x=>posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
     }
     (s.adjustments || []).filter(x => !x.accountingExcluded&&accountVendorChargeInScope(x,nature) && posted(x.account,x.date)).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
     Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>posted(c.account,c.date)).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
     (s.receipts || []).filter(x=>!x.accountingExcluded&&!x.historicalOpening&&normalizedNature(x.nature)===nature&&posted(x.account,x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
-    expenseLoans.repayments(s).filter(x=>normalizedNature(x.nature)===nature&&posted(x.account,x.date)).forEach(x=>{paidOut[x.account]=(paidOut[x.account]||0)+num(x.amount);});
+    balanceProjection.loanRepayments.filter(x=>normalizedNature(x.nature)===nature&&posted(x.account,x.date)).forEach(x=>{paidOut[x.account]=(paidOut[x.account]||0)+num(x.amount);});
     if(nature==='SANKI')personalFundingRows(s).forEach(f=>{
       if(posted(f.account,f.date))collected[f.account]=(collected[f.account]||0)+num(f.amount);
       (f.repayments||[]).forEach(p=>{if(posted(p.account,p.date))paidOut[p.account]=(paidOut[p.account]||0)+num(p.amount);});
     });
     (s.salesRefunds||[]).filter(x=>normalizedNature(x.nature)===nature&&posted(x.refundAccount,x.date)).forEach(x=>{paidOut[x.refundAccount]=(paidOut[x.refundAccount]||0)+num(x.amount);});
-    if(nature==='SANKI') salesLedgerEntries(s).filter(includeAutomaticSale).filter(x=>posted(x.account,x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
-    if(nature==='SANKI') paytmClearingSettlementOutflows(s).forEach(x=>{if(!posted(PAYTM_CLEARING_ACCOUNT,x.date))return;transferOut[PAYTM_CLEARING_ACCOUNT]=(transferOut[PAYTM_CLEARING_ACCOUNT]||0)+num(x.net);paidOut[PAYTM_CLEARING_ACCOUNT]=(paidOut[PAYTM_CLEARING_ACCOUNT]||0)+num(x.fees);});
+    if(nature==='SANKI') balanceProjection.sales.filter(x=>posted(x.account,x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
+    if(nature==='SANKI') balanceProjection.paytmOutflows.forEach(x=>{if(!posted(PAYTM_CLEARING_ACCOUNT,x.date))return;transferOut[PAYTM_CLEARING_ACCOUNT]=(transferOut[PAYTM_CLEARING_ACCOUNT]||0)+num(x.net);paidOut[PAYTM_CLEARING_ACCOUNT]=(paidOut[PAYTM_CLEARING_ACCOUNT]||0)+num(x.fees);});
     if(nature==='SANKI'){
       (s.paytmSettlements||[]).filter(x=>posted(x.bankAccount,x.date)).forEach(x=>{collected[x.bankAccount]=(collected[x.bankAccount]||0)+num(x.netAmount);});
       (s.paytmPayoutPostings||[]).filter(x=>!detailedPaytmSettlementIsCoveredByLegacy(s,x)&&posted(DEFAULT_SALES_BANK,x.date)).forEach(x=>{collected[DEFAULT_SALES_BANK]=(collected[DEFAULT_SALES_BANK]||0)+num(x.net);});
-      velocitySettlementBatches(s).filter(x=>x.source==='velocity_mcp').forEach(x=>{if(!x.manualTransferId){if(posted(DEFAULT_SALES_BANK,x.date))collected[DEFAULT_SALES_BANK]=(collected[DEFAULT_SALES_BANK]||0)+x.netAmount;if(posted(VELOCITY_CLEARING_ACCOUNT,x.date))transferOut[VELOCITY_CLEARING_ACCOUNT]=(transferOut[VELOCITY_CLEARING_ACCOUNT]||0)+x.netAmount;}if(x.walletOffset){if(posted(VELOCITY_CLEARING_ACCOUNT,x.date))transferOut[VELOCITY_CLEARING_ACCOUNT]=(transferOut[VELOCITY_CLEARING_ACCOUNT]||0)+x.walletOffset;if(posted('Velocity Shipping Wallet',x.date))transferIn['Velocity Shipping Wallet']=(transferIn['Velocity Shipping Wallet']||0)+x.walletOffset;}});
+      balanceProjection.velocityBatches.filter(x=>x.source==='velocity_mcp').forEach(x=>{if(!x.manualTransferId){if(posted(DEFAULT_SALES_BANK,x.date))collected[DEFAULT_SALES_BANK]=(collected[DEFAULT_SALES_BANK]||0)+x.netAmount;if(posted(VELOCITY_CLEARING_ACCOUNT,x.date))transferOut[VELOCITY_CLEARING_ACCOUNT]=(transferOut[VELOCITY_CLEARING_ACCOUNT]||0)+x.netAmount;}if(x.walletOffset){if(posted(VELOCITY_CLEARING_ACCOUNT,x.date))transferOut[VELOCITY_CLEARING_ACCOUNT]=(transferOut[VELOCITY_CLEARING_ACCOUNT]||0)+x.walletOffset;if(posted('Velocity Shipping Wallet',x.date))transferIn['Velocity Shipping Wallet']=(transferIn['Velocity Shipping Wallet']||0)+x.walletOffset;}});
     }
     (s.transfers || []).filter(x => !x.accountingExcluded&&inRange(x.date)).forEach(x => {
       if(normalizedNature(x.fromNature||x.nature)===nature&&cashEntryIsVisible(x.fromAccount,x.date)&&afterAuthoritativeOpening(x.fromAccount,x.date)) transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + transferDebitAmount(x);
@@ -4654,7 +4667,7 @@ router.get('/api/expenses/balances', (req, res) => {
   const accounts = visibleAccountsForReq(req,ledgerAccountNames).filter(name=>accountBelongsInLedgerBook(nature,name)).map(name => {
     const opening = num(openingMap[name]);
     const spent = round0(period.paidOut[name] || 0),topups=round0(period.adj[name]||0),transferredIn=round0(period.transferIn[name]||0),transferredOut=round0(period.transferOut[name]||0),received=round0(period.collected[name]||0),excludedBankIn=roundMoney(period.bankTruthIn[name]||0),excludedBankOut=roundMoney(period.bankTruthOut[name]||0);
-    const applyBankTruth=!usesCompanyAdjustedBankTruth(nature,name),calculatedBalance=opening+num(closing.adj[name])+num(closing.collected[name])+num(closing.transferIn[name])-num(closing.transferOut[name])-num(closing.paidOut[name])+(applyBankTruth?num(closing.bankTruthIn[name])-num(closing.bankTruthOut[name]):0),statementBalance=isBankLedgerName(name)?recordedAccountBalance(s,nature,name,to):calculatedBalance,holds=(s.restrictedFunds||[]).filter(x=>x.active!==false&&normalizedNature(x.nature)===nature&&x.account===name&&(!to||String(x.effectiveDate||'')<=to)),restrictedAmount=isSharedBankReconciliationAccount(name)?0:holds.reduce((sum,x)=>sum+num(x.amount),0),periodRestricted=holds.filter(x=>(!from||String(x.effectiveDate||'')>=from)&&(!to||String(x.effectiveDate||'')<=to)).reduce((sum,x)=>sum+num(x.amount),0),closingBalance=statementBalance-restrictedAmount;
+    const applyBankTruth=!usesCompanyAdjustedBankTruth(nature,name),calculatedBalance=opening+num(closing.adj[name])+num(closing.collected[name])+num(closing.transferIn[name])-num(closing.transferOut[name])-num(closing.paidOut[name])+(applyBankTruth?num(closing.bankTruthIn[name])-num(closing.bankTruthOut[name]):0),statementBalance=isBankLedgerName(name)?recordedAccountBalance(s,nature,name,to,balanceProjection):calculatedBalance,holds=(s.restrictedFunds||[]).filter(x=>x.active!==false&&normalizedNature(x.nature)===nature&&x.account===name&&(!to||String(x.effectiveDate||'')<=to)),restrictedAmount=isSharedBankReconciliationAccount(name)?0:holds.reduce((sum,x)=>sum+num(x.amount),0),periodRestricted=holds.filter(x=>(!from||String(x.effectiveDate||'')>=from)&&(!to||String(x.effectiveDate||'')<=to)).reduce((sum,x)=>sum+num(x.amount),0),closingBalance=statementBalance-restrictedAmount;
     const issues = reconciliationIssues(s, nature, name,to),cashVerification=nature==='SANKI'&&name===DEFAULT_COUNTER_CASH?latestApprovedCashReconciliation(s,to):null;
     const exact=isBankLedgerName(name)||name===gokwikAccounting.CLEARING,money=v=>exact?Math.round(num(v)*100)/100:round0(v);return { name, physicalBalance:isSharedBankReconciliationAccount(name), opening: money(opening), topups, received, transferredIn, transferredOut, spent, excludedBankIn:money(excludedBankIn), excludedBankOut:money(excludedBankOut), periodNet:money(topups+received+transferredIn-transferredOut-spent+(applyBankTruth?excludedBankIn-excludedBankOut:0)-periodRestricted), statementBalance:money(statementBalance), restrictedAmount:money(restrictedAmount), restrictedFunds:holds, balance:money(closingBalance), closingAsOf:to||'today', reconciled:issues.some(issue=>issue.code==='store_credit_source_changed')?false:cashVerification?true:issues.length===0, reconciledThrough:cashVerification&&cashVerification.verifiedThrough||'', reconciledBy:cashVerification&&(cashVerification.approvedBy||cashVerification.requestedBy)||'', reconciliationIssues:cashVerification?issues.filter(issue=>issue.code==='store_credit_source_changed'):issues, recordWarnings:issues };
   });
@@ -8011,7 +8024,10 @@ function bankAuthorityScopedStore(s,nature,account,rows){
   return {...s,bankMovementAuthority:records};
 }
 function bankAuthorityBalanceDelta(s,nature,account,asOf){
-  if(!Object.keys(s.bankMovementAuthority||{}).length)return 0;
+  const authorityRows=Object.values(s.bankMovementAuthority||{}),physical=canonicalAccountName(account).toLowerCase();
+  // Authority evidence is account-specific. One authority row elsewhere in
+  // the store must not trigger a full bank projection for every visible card.
+  if(!authorityRows.some(record=>record&&canonicalAccountName(record.account).toLowerCase()===physical))return 0;
   const advanceReferences=new Set((s.vendorAdvances||[]).map(row=>row.paymentReference).filter(Boolean));
   const raw=appBankMovements(s,account,nature,{raw:true}),excluded=new Set(raw.filter(row=>row.bankTruth&&usesCompanyAdjustedBankTruth(nature,account)).map(row=>row.id));
   const rows=raw.filter(row=>!excluded.has(row.id)&&(bankAuthorityExpenseMovement(s,row.id)||!row.entity||normalizedNature(row.entity)===normalizedNature(nature)||advanceReferences.has(row.id)&&accountVendorPaymentInScope(row.entity,nature,account))).map(row=>({...row,date:!advanceReferences.has(row.id)&&(/^EX-[^/]+\/(?:PAY|REIM)-|^RB-/.test(row.id))?row.date:row.originalDate||row.date}));
@@ -8019,26 +8035,28 @@ function bankAuthorityBalanceDelta(s,nature,account,asOf){
   if(!Object.keys(scoped.bankMovementAuthority).length)return 0;
   return bankMovementAuthority.delta(scoped,account,nature,{to:asOf,sourceRows:rows});
 }
-function recordedAccountBalance(s,nature,account,asOf){
+function recordedAccountBalance(s,nature,account,asOf,projection){
   if(isSharedBankReconciliationAccount(account))return sharedPhysicalBankView(s,account,asOf).balance;
+  projection=projection||{};
+  const expenses=projection.expenses||Object.values(s.expenses||{}),loanRepayments=projection.loanRepayments||expenseLoans.repayments(s),salaryAdvances=projection.salaryAdvances||salaryAdvanceEntries(),salaryPayments=projection.salaryPayments||salaryPaymentEntries(),incentivePayments=projection.incentivePayments||(nature==='SANKI'?incentivePaymentEntries():[]),procurements=projection.procurements||(nature==='SANKI'?procurementPayables(s,true):[]),sales=projection.sales||(nature==='SANKI'?salesLedgerEntries(s).filter(includeAutomaticSale):[]),paytmOutflows=projection.paytmOutflows||(nature==='SANKI'?paytmClearingSettlementOutflows(s):[]),velocityBatches=projection.velocityBatches||(nature==='SANKI'?velocitySettlementBatches(s):[]);
   const on=d=>(!asOf||!d||String(d).slice(0,10)<=asOf)&&cashEntryIsVisible(account,d),openingMap=nature==='SANKI'?(s.openingBalances||{}):(((s.openingBalancesByNature||{})[nature])||{}),grossPaymentBatches=new Set((s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&x.account===account&&accountVendorPaymentInScope(x.nature,nature,x.account)&&x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>x.batchPaymentId));let total=num(openingMap[account]);
   (s.adjustments||[]).filter(x=>!x.accountingExcluded&&accountVendorChargeInScope(x,nature)&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
   (s.receipts||[]).filter(x=>!x.accountingExcluded&&!x.historicalOpening&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
-  expenseLoans.repayments(s).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));
+  loanRepayments.filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));
   if(nature==='SANKI')personalFundingRows(s).forEach(f=>{if(f.account===account&&on(f.date))total+=num(f.amount);(f.repayments||[]).filter(p=>p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
   (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=transferDebitAmount(x);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account&&transferCreditsCompanyFunds(x,nature,account))total+=transferCreditAmount(x);});
   (s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&accountVendorPaymentInScope(x.nature,nature,x.account)&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.grossPaymentAmount)||num(x.amount));
-  Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&!grossPaymentBatches.has(p.batchPaymentId)&&(paymentIsPosted(e)||p.provisional)&&(p.account||e.account)===account&&on(accountMovementDate(s,account,nature,e.id+'/'+p.id,p.date))).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>transferReimbursements.postsMovement(p)&&p.account===account&&on(accountMovementDate(s,account,nature,p.batchId||e.id+'/'+p.id,p.date))).forEach(p=>total-=num(p.amount));});
-  Object.values(s.expenses||{}).forEach(e=>{const personalAccount=ledgerConnections.claimantAccount(e);if(personalAccount===account)(e.reimbursementPayments||[]).filter(p=>transferReimbursements.postsMovement(p)&&on(accountMovementDate(s,account,nature,p.batchId||e.id+'/'+p.id+'/RECEIVED',p.date))).forEach(p=>total+=num(p.amount));});
+  expenses.forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&!grossPaymentBatches.has(p.batchPaymentId)&&(paymentIsPosted(e)||p.provisional)&&(p.account||e.account)===account&&on(accountMovementDate(s,account,nature,e.id+'/'+p.id,p.date))).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>transferReimbursements.postsMovement(p)&&p.account===account&&on(accountMovementDate(s,account,nature,p.batchId||e.id+'/'+p.id,p.date))).forEach(p=>total-=num(p.amount));});
+  expenses.forEach(e=>{const personalAccount=ledgerConnections.claimantAccount(e);if(personalAccount===account)(e.reimbursementPayments||[]).filter(p=>transferReimbursements.postsMovement(p)&&on(accountMovementDate(s,account,nature,p.batchId||e.id+'/'+p.id+'/RECEIVED',p.date))).forEach(p=>total+=num(p.amount));});
   (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)&&!usesCompanyAdjustedBankTruth(nature,account)).forEach(x=>total+=num(x.credit)-num(x.debit));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account&&on(c.date)).forEach(c=>total+=num(c.amount)));
   (s.salesRefunds||[]).filter(x=>normalizedNature(x.nature)===nature&&x.refundAccount===account&&on(x.date)).forEach(x=>total-=num(x.amount));
-  salaryPaymentEntries().filter(x=>x.payingNature===nature&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));
-  if(nature==='SANKI'){salesLedgerEntries(s).filter(includeAutomaticSale).filter(x=>x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount)));incentivePaymentEntries().filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));}
-  if(nature==='SANKI'&&account===DEFAULT_SALES_BANK){velocitySettlementBatches(s).filter(x=>!x.manualTransferId&&on(x.date)).forEach(x=>total+=num(x.netAmount));(s.paytmPayoutPostings||[]).filter(x=>!detailedPaytmSettlementIsCoveredByLegacy(s,x)&&on(x.date)).forEach(x=>total+=num(x.net));}
+  salaryPayments.filter(x=>x.payingNature===nature&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));
+  if(nature==='SANKI'){sales.filter(x=>x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));procurements.forEach(p=>(p.payments||[]).filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount)));incentivePayments.filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));}
+  if(nature==='SANKI'&&account===DEFAULT_SALES_BANK){velocityBatches.filter(x=>!x.manualTransferId&&on(x.date)).forEach(x=>total+=num(x.netAmount));(s.paytmPayoutPostings||[]).filter(x=>!detailedPaytmSettlementIsCoveredByLegacy(s,x)&&on(x.date)).forEach(x=>total+=num(x.net));}
   if(nature==='SANKI'&&account!==PAYTM_CLEARING_ACCOUNT)(s.paytmSettlements||[]).filter(x=>x.bankAccount===account&&on(x.date)).forEach(x=>total+=num(x.netAmount));
-  if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT)paytmClearingSettlementOutflows(s).filter(x=>on(x.date)).forEach(x=>total-=num(x.net)+num(x.fees));
-  salaryAdvanceEntries().filter(x=>x.payingNature===nature&&!x.fundingTransferId&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));
+  if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT)paytmOutflows.filter(x=>on(x.date)).forEach(x=>total-=num(x.net)+num(x.fees));
+  salaryAdvances.filter(x=>x.payingNature===nature&&!x.fundingTransferId&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));
   total+=bankAuthorityBalanceDelta(s,nature,account,asOf);
   return isBankLedgerName(account)?roundMoney(total):round0(total);
 }
