@@ -1,0 +1,22 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {build}=require('../modules/compact-accounting-report');
+const options={entity:'SAMAST',from:'2026-09-01',to:'2026-10-15',today:'2026-11-15'};
+function sources(){return {expenses:{expenses:{},receipts:[],transfers:[],rentals:{tenancies:[],deposits:[],allocations:[]}},orders:{orders:{}},purchases:{pos:{}},samastSalary:{employees:{},salaryPayments:[]},salary:{},incentives:{payments:[]},manualSales:{sales:[]},shopifyCosts:{items:[]},feeds:[]};}
+const cost=(id,nature,amount,ledger,date='2026-09-10')=>({id,nature,amount,ledger,date,status:'paid',payments:[{id:'P1',date,amount,account:'IndusInd Bank 7883'}]});
+test('Samast monthly profit splits confirmed rent rates, excludes personal spending and non-rent receipts without source changes',()=>{
+ const src=sources(),s=src.expenses;s.receipts=[{id:'R1',nature:'SAMAST',receiptType:'rental_income',date:'2026-09-05',amount:108000},{id:'R2',nature:'SAMAST',receiptType:'rental_income',date:'2026-10-05',amount:54000},...['rental_security_deposit','loan_received','other_income'].map((receiptType,i)=>({id:'X'+i,nature:'SAMAST',receiptType,date:'2026-09-05',amount:10000}))];
+ s.expenses.E=cost('E','SAMAST',20000,'Repairs');s.expenses.P=cost('P','PERSONAL',9000,'Food');s.expenses.S=cost('S','SAMAST',5000,'Salary');s.expenses.G=cost('G','SAMAST',18000,'GST payment');s.expenses.U={...cost('U','SAMAST',500,'Repairs'),status:'pending',payments:[]};
+ const before=JSON.stringify(src),r=build(src,options).samastProfit;
+ assert.deepEqual(r.months.map(m=>[m.month,m.baseRent,m.expense,m.salary,m.profit,m.gst,m.tds,m.received]),[['2026-09',100000,20000,5000,75000,18000,10000,108000],['2026-10',50000,0,0,50000,9000,5000,54000]]);
+ assert.equal(r.months[1].partial,true);assert.equal(r.totals.profit,125000);assert.equal(JSON.stringify(src),before);
+});
+test('salary linked to an expense is separated once, standalone payroll also appears with proof',()=>{
+ const src=sources();src.expenses.expenses.S=cost('S','SAMAST',5000,'Staff costs');src.samastSalary.salaryPayments=[{id:'SAL1',date:'2026-09-10',amount:5000,linkedLedgerEntryId:'S/P1'},{id:'SAL2',date:'2026-10-10',amount:6000,employeeName:'Guard',proofs:['/proof.png']}];
+ const r=build(src,options).samastProfit;assert.equal(r.totals.salary,11000);assert.equal(r.totals.expense,0);assert.equal(r.entries.filter(e=>e.profitKind==='salary').length,2);assert.equal(r.entries.find(e=>e.id.startsWith('SAL2')).proof,'/proof.png');
+});
+test('draft rental receipts excluded and rounded component split preserves bank amount exactly; empty months retained',()=>{
+ const src=sources();src.expenses.bankReconciliationDrafts={D:{}};src.expenses.receipts=[{id:'P',nature:'SAMAST',receiptType:'rental_income',amount:108000,date:'2026-09-01',bankReconciliationEvidence:{draftId:'D'}},{id:'R',nature:'SAMAST',receiptType:'rental_income',amount:100,date:'2026-10-02'}];
+ const r=build(src,options).samastProfit;assert.equal(r.entries.length,1);assert.equal(r.months[0].baseRent,0);const e=r.entries[0];assert.equal(Math.round((e.baseRent+e.gst-e.tds)*100),10000);assert.equal(e.received,100);
+ assert.equal(build(sources(),{...options,entity:'PERSONAL'}).samastProfit,undefined);
+});
