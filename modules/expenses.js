@@ -3083,6 +3083,7 @@ function canEditExpenseMetadata(req,e) {
 function decoratedEditableExpense(s,req,e,blockedReferences) {
   const refs=blockedReferences||unpayBlockedReferences(s),lock=expenseFinancialLock(s,e,{blockedReferences:refs});
   return expenseRefunds.decorateExpense(s,Object.assign({},e,{
+    ...require('./expense-duplicate-links').decorate(s,req,e,canManageRestrictedExpense),
     canEditMetadata:!!s.expenses[e.id]&&canEditExpenseMetadata(req,e),
     canManageExpense:canApprove(req)&&canApproveExpenseNature(req,e),
     financialFieldsLocked:lock.locked,financialLockReason:lock.reason,
@@ -8474,6 +8475,7 @@ const sourceCorrectionPolicy = {
     return bankAuthorityTransaction.commit(DATA_DIR,entries);
   }
 };
+require('./expense-duplicate-links').register(router,{isOwner,canAccess:canManageRestrictedExpense,read:sourceCorrectionPolicy.read,audit:sourceCorrectionPolicy.audit,commit:sourceCorrectionPolicy.commit,movements:(s,account,nature)=>appBankMovements(s,account,nature,{physical:isSharedBankReconciliationAccount(account),raw:true})});
 const expenseRefundDeps = {
   correctionPolicy:sourceCorrectionPolicy,
   loadStore,saveStore,audit,isAdmin,isOwner,canAccessExpense:canManageRestrictedExpense,natures:approvalNatures,nature:normalizedNature,
