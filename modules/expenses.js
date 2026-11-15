@@ -8584,6 +8584,7 @@ router.use((error,req,res,next)=>{
   if(res.headersSent)return next(error);
   if(error&&error.code==='LIMIT_FILE_SIZE')return res.status(413).json({success:false,error:'This image is larger than 30 MB. Choose a smaller image or screenshot.'});
   if(req.path==='/api/expenses/upload'&&error&&error.message)return res.status(400).json({success:false,error:error.message});
+  if(req.method==='GET'&&req.path==='/api/expenses/balances'&&isOwner(req))return res.status(500).json({success:false,code:'BALANCE_READ_FAILED',error:'Account ledgers could not be calculated.',diagnostic:String(error&&error.message||error||'Unknown balance error').slice(0,500)});
   res.status(500).json({success:false,error:'The accounting change could not be saved safely. Please retry once; if it continues, contact support.'});
 });
 
