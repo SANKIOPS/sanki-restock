@@ -8480,7 +8480,14 @@ const sourceCorrectionPolicy = {
     return bankAuthorityTransaction.commit(DATA_DIR,entries);
   }
 };
-require('./expense-duplicate-links').register(router,{isOwner,canAccess:canManageRestrictedExpense,read:sourceCorrectionPolicy.read,audit:sourceCorrectionPolicy.audit,commit:sourceCorrectionPolicy.commit,movements:(s,account,nature)=>appBankMovements(s,account,nature,{physical:isSharedBankReconciliationAccount(account),raw:true})});
+function commitPendingDuplicateLinks(snapshot,s){
+  const current=readLedgerEditSnapshot();
+  if(current.raw!==snapshot.raw||JSON.stringify(current.externalRaw)!==JSON.stringify(snapshot.externalRaw))throw new Error('The accounting evidence changed after preview. Refresh and review again; nothing was saved.');
+  require('./source-correction-guards').assertPreserved(JSON.parse(snapshot.raw),s,['expenses','auditLog','auditSeq']);
+  const result=bankAuthorityTransaction.commit(DATA_DIR,[{fileName:'expenses.json',before:snapshot.raw,after:JSON.stringify(s)}]);
+  invalidateAccountingReadCache();return result;
+}
+require('./expense-duplicate-links').register(router,{isOwner,canAccess:canManageRestrictedExpense,read:sourceCorrectionPolicy.read,audit:sourceCorrectionPolicy.audit,commit:commitPendingDuplicateLinks,movements:(s,account,nature)=>appBankMovements(s,account,nature,{physical:isSharedBankReconciliationAccount(account),raw:true})});
 const expenseRefundDeps = {
   correctionPolicy:sourceCorrectionPolicy,
   loadStore,saveStore,audit,isAdmin,isOwner,canAccessExpense:canManageRestrictedExpense,natures:approvalNatures,nature:normalizedNature,

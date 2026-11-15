@@ -34,7 +34,8 @@ function plan(snapshot,input,req,deps){
   for(const e of [source,target])for(const p of [...list(e.payments),...list(e.reimbursementPayments)])if(p.account)accounts.set(p.account,e.nature||'SANKI');
   changes.push({sourceId:source.id,targetId:target.id,amount:source.amount,sourceEntity:source.nature,targetEntity:target.nature,proofsRetained:!!source.billPhoto||list(source.billPhotos).length>0,personalPaymentRetained:originalPayments.length>0});
  }
- const movements=Object.fromEntries([...accounts].sort().map(([account,nature])=>[account,deps.movements(s,account,nature)]));
+ const movementStore=clone(s);
+ const movements=Object.fromEntries([...accounts].sort().map(([account,nature])=>[account,deps.movements(movementStore,account,nature)]));
  return {changes,alreadyLinked,reason,accounts:[...accounts].sort(),movementHash:hash(movements),protectedHash:hash(Object.fromEntries(Object.entries(s).filter(([key])=>!['expenses','auditLog','auditSeq'].includes(key)))),fingerprint:hash(snapshot.raw+'\n'+JSON.stringify({pairs,reason})),canonicalHash:hash(pairs.map(p=>s.expenses[p.targetId]))};
 }
 function apply(snapshot,input,req,deps){
@@ -47,7 +48,8 @@ function apply(snapshot,input,req,deps){
  const changed=new Set(prepared.changes.map(c=>c.sourceId));
  for(const [id,e]of Object.entries(snapshot.store.expenses||{}))if(hash(changed.has(id)?financialRecord(e):e)!==hash(changed.has(id)?financialRecord(after.expenses[id]):after.expenses[id]))fail('An expense financial field changed. Nothing was saved.');
  if(Object.keys(after.expenses).length!==Object.keys(snapshot.store.expenses).length)fail('Expense count changed. Nothing was saved.');
- const movements=Object.fromEntries(prepared.accounts.map(([account,nature])=>[account,deps.movements(after,account,nature)]));
+ const movementStore=clone(after);
+ const movements=Object.fromEntries(prepared.accounts.map(([account,nature])=>[account,deps.movements(movementStore,account,nature)]));
  if(hash(movements)!==prepared.movementHash)fail('This closure would change account movements. Use the source correction workflow; nothing was saved.');
  if(prepared.changes.length)deps.commit(snapshot,after);
  return {success:true,linked:prepared.changes,alreadyLinked:prepared.alreadyLinked,integrity:{existingPaidEntriesUnchanged:true,expenseCountUnchanged:true,paymentsUnchanged:true,reconciliationsUnchanged:true,accountMovementsUnchanged:true},protectedHash:prepared.protectedHash,movementHash:prepared.movementHash};

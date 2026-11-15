@@ -28,3 +28,4 @@ test('related original proofs respect access and preview/apply are Owner-only',(
  const r=run(fixture());assert.throws(()=>plan(r.snapshot,body,{user:{role:'admin'}},r.deps),/Only the Owner/);assert.throws(()=>run(fixture(),body,{canAccess:()=>false}),/restricted/);
  const routes=[];register({post:(path,fn)=>routes.push({path,fn})},r.deps);for(const route of routes){let status;route.fn({user:{role:'admin'},body},{status:n=>({json:b=>{status=n;}})});assert.equal(status,403);}
 });
+test('legacy movement normalizers operate on detached copies, never leak unrelated fields into a correction',()=>{const s=fixture(),before=clone(s);const r=run(s,body,{movements:view=>{view.procurementAccounting={derived:true};return [];}});assert.deepEqual(s,before);const {saved}=r.commit();assert.equal(saved.procurementAccounting,undefined);assert.deepEqual(s,before);});
