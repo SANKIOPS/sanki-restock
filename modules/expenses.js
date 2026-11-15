@@ -166,7 +166,7 @@ function accountingReadAuthorizationKey(req){
 // accounting sources. Reuse an identical read until any source file changes;
 // every accounting save publishes a new generation explicitly below.
 function accountingReadCacheMiddleware(req,res,next){
-  if(req.method!=='GET'||!['/api/expenses/bank-statements','/api/expenses/account-ledger'].includes(req.path))return next();
+  if(req.method!=='GET'||!['/api/expenses/bank-statements','/api/expenses/account-ledger','/api/expenses/balances'].includes(req.path))return next();
   const snapshot=currentAccountingReadSnapshot(req.query&&req.query.nature);req.accountingReadSnapshot=snapshot;
   // The snapshot generation already represents all file fingerprints. Do not
   // stat every accounting source a second time while constructing this key.
@@ -3083,6 +3083,7 @@ function canEditExpenseMetadata(req,e) {
 function decoratedEditableExpense(s,req,e,blockedReferences) {
   const refs=blockedReferences||unpayBlockedReferences(s),lock=expenseFinancialLock(s,e,{blockedReferences:refs});
   return expenseRefunds.decorateExpense(s,Object.assign({},e,{
+    ...require('./expense-duplicate-links').decorate(s,req,e,canManageRestrictedExpense),
     canEditMetadata:!!s.expenses[e.id]&&canEditExpenseMetadata(req,e),
     canManageExpense:canApprove(req)&&canApproveExpenseNature(req,e),
     financialFieldsLocked:lock.locked,financialLockReason:lock.reason,
@@ -4569,10 +4570,15 @@ router.post('/api/expenses/vendors/manage/delete', (req, res) => {
 // balance = opening + adjustments + transfers in − transfers out − payments.
 router.get('/api/expenses/balances', (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
-  const s = loadStore();
   const nature = req.query.nature ? normalizedNature(req.query.nature) : approvalNatures(req)[0];
+  const s = (req.accountingReadSnapshot || currentAccountingReadSnapshot(nature)).store;
   const from=String(req.query.from||''),to=String(req.query.to||'');
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
+  // Resolve the ledger book once. Previously this helper was called inside
+  // every payment loop; because it scans every expense, a large ledger turned
+  // this route into quadratic work and left Personal Ledgers on "Loading…".
+  const ledgerAccountNames=ledgerAccountsForNature(s,nature),ledgerAccountKeys=new Set(ledgerAccountNames.map(name=>String(name).toLowerCase()));
+  const accountIsInBook=account=>ledgerAccountKeys.has(String(account||'').toLowerCase());
   const openingDateMap=nature==='SANKI'?(s.openingBalanceDates||{}):(((s.openingBalanceDatesByNature||{})[nature])||{});
   const afterAuthoritativeOpening=(account,date)=>{
     const openingDate=String(openingDateMap[account]||'');
@@ -4585,12 +4591,12 @@ router.get('/api/expenses/balances', (req, res) => {
       const a = e.account || '(unspecified)';
       (e.payments || []).filter(p => !p.accountingExcluded && (paymentIsPosted(e)||p.provisional) && posted(p.account||a,accountMovementDate(s,p.account||a,nature,e.id+'/'+p.id,p.date))).forEach(p => {
         const paymentAccount = p.account || a;
-        if(!ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(paymentAccount).toLowerCase()))return;
+        if(!accountIsInBook(paymentAccount))return;
         paidOut[paymentAccount] = (paidOut[paymentAccount] || 0) + num(p.amount);
       });
       (e.reimbursementPayments || []).filter(p=>transferReimbursements.postsMovement(p)&&posted(p.account,accountMovementDate(s,p.account,nature,p.batchId||e.id+'/'+p.id,p.date))).forEach(p => {
         const ra = p.account || '(unspecified)';
-        if(!ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(ra).toLowerCase()))return;
+        if(!accountIsInBook(ra))return;
         paidOut[ra] = (paidOut[ra] || 0) + num(p.amount);
       });
       // A reimbursement is an outflow from the company account and an equal
@@ -4598,7 +4604,7 @@ router.get('/api/expenses/balances', (req, res) => {
       // expense. Without this credit, a fully reimbursed claimant incorrectly
       // remains negative forever in the Money Trail.
       const personalAccount=ledgerConnections.claimantAccount(e);
-      if(personalAccount&&ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(personalAccount).toLowerCase())){
+      if(personalAccount&&accountIsInBook(personalAccount)){
         (e.reimbursementPayments||[]).filter(p=>transferReimbursements.postsMovement(p)&&posted(personalAccount,accountMovementDate(s,personalAccount,nature,p.batchId||e.id+'/'+p.id+'/RECEIVED',p.date))).forEach(p=>{
           collected[personalAccount]=(collected[personalAccount]||0)+num(p.amount);
         });
@@ -4645,7 +4651,7 @@ router.get('/api/expenses/balances', (req, res) => {
   // the selected period still exists. It is calculated cumulatively as of To.
   const closing=totalsFor(d=>!to||String(d||'')<=to);
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
-  const accounts = visibleAccountsForReq(req,ledgerAccountsForNature(s, nature)).filter(name=>accountBelongsInLedgerBook(nature,name)).map(name => {
+  const accounts = visibleAccountsForReq(req,ledgerAccountNames).filter(name=>accountBelongsInLedgerBook(nature,name)).map(name => {
     const opening = num(openingMap[name]);
     const spent = round0(period.paidOut[name] || 0),topups=round0(period.adj[name]||0),transferredIn=round0(period.transferIn[name]||0),transferredOut=round0(period.transferOut[name]||0),received=round0(period.collected[name]||0),excludedBankIn=roundMoney(period.bankTruthIn[name]||0),excludedBankOut=roundMoney(period.bankTruthOut[name]||0);
     const applyBankTruth=!usesCompanyAdjustedBankTruth(nature,name),calculatedBalance=opening+num(closing.adj[name])+num(closing.collected[name])+num(closing.transferIn[name])-num(closing.transferOut[name])-num(closing.paidOut[name])+(applyBankTruth?num(closing.bankTruthIn[name])-num(closing.bankTruthOut[name]):0),statementBalance=isBankLedgerName(name)?recordedAccountBalance(s,nature,name,to):calculatedBalance,holds=(s.restrictedFunds||[]).filter(x=>x.active!==false&&normalizedNature(x.nature)===nature&&x.account===name&&(!to||String(x.effectiveDate||'')<=to)),restrictedAmount=isSharedBankReconciliationAccount(name)?0:holds.reduce((sum,x)=>sum+num(x.amount),0),periodRestricted=holds.filter(x=>(!from||String(x.effectiveDate||'')>=from)&&(!to||String(x.effectiveDate||'')<=to)).reduce((sum,x)=>sum+num(x.amount),0),closingBalance=statementBalance-restrictedAmount;
@@ -8474,6 +8480,14 @@ const sourceCorrectionPolicy = {
     return bankAuthorityTransaction.commit(DATA_DIR,entries);
   }
 };
+function commitPendingDuplicateLinks(snapshot,s){
+  const current=readLedgerEditSnapshot();
+  if(current.raw!==snapshot.raw||JSON.stringify(current.externalRaw)!==JSON.stringify(snapshot.externalRaw))throw new Error('The accounting evidence changed after preview. Refresh and review again; nothing was saved.');
+  require('./source-correction-guards').assertPreserved(JSON.parse(snapshot.raw),s,['expenses','auditLog','auditSeq']);
+  const result=bankAuthorityTransaction.commit(DATA_DIR,[{fileName:'expenses.json',before:snapshot.raw,after:JSON.stringify(s)}]);
+  invalidateAccountingReadCache();return result;
+}
+require('./expense-duplicate-links').register(router,{isOwner,canAccess:canManageRestrictedExpense,read:sourceCorrectionPolicy.read,audit:sourceCorrectionPolicy.audit,commit:commitPendingDuplicateLinks,movements:(s,account,nature)=>appBankMovements(s,account,nature,{physical:isSharedBankReconciliationAccount(account),raw:true})});
 const expenseRefundDeps = {
   correctionPolicy:sourceCorrectionPolicy,
   loadStore,saveStore,audit,isAdmin,isOwner,canAccessExpense:canManageRestrictedExpense,natures:approvalNatures,nature:normalizedNature,

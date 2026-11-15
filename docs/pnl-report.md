@@ -239,3 +239,20 @@ GST separates charged tax from tax reversed on returns and exposes report tax
 rates. Discounts and returns have separate tables. Order references open the
 retained report item details. These changes are read-only; total accounting and
 Results tax/cost policies are unchanged.
+
+## Confirmed duplicate submissions
+
+Owner-only `/expense-duplicate-links.html` previews and closes redundant pending
+submissions against fully paid existing expense IDs. The pending copy becomes
+rejected with `duplicateOf` and an audited resolution; its proofs and original
+payment arrays remain intact. Kept expenses are never rewritten. Reports expose
+linked original bill proofs as a read-only attachment view.
+
+Apply requires the exact preview fingerprint, sufficient existing payment
+records, an unapproved source, matching bill amount and nearby bill dates. It
+rejects sources linked to bank/card/refund/advance workflows, staged payments,
+chains/cycles and independent company payments. A paid-personally pending copy
+is allowed only when its single retained personal payment agrees with the kept
+copy's account, date, amount and claimant. All protected store collections,
+kept expenses, payment objects and account movement projections must remain
+identical before the atomic commit. The workflow does not notify submitters.
