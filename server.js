@@ -2889,7 +2889,16 @@ app.listen(PORT, async () => {
   // back to Shopify.
   try {
     if(providerPollersEnabled){require('./modules/orders').startAutoSync();require('./modules/orders').startGoKwikSync();}
-    else console.log('[sync] background provider polling disabled; webhooks and manual sync remain active');
+    else {
+      console.log('[sync] background provider polling disabled; running one bounded Shopify recovery after startup');
+      // Production keeps recurring provider scans disabled so reconciliation
+      // stays responsive. Still run one bounded, read-only Shopify recovery per
+      // deploy: this self-heals an order missed by an earlier webhook/importer
+      // (for example POS Cash order #2951) without adding permanent polling.
+      setTimeout(() => require('./modules/orders').runSync()
+        .then(result => console.log(`[orders] startup recovery: +${Number(result && result.imported || 0)}, total ${Number(result && result.total || 0)}`))
+        .catch(error => console.error('[orders] startup recovery failed:', error.message)), 30 * 1000);
+    }
   }
   catch (e) { console.error('[orders] auto-sync start error:', e.message); }
 
