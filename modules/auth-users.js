@@ -113,25 +113,25 @@ const ROLES = [
 ];
 const ROLE_IDS = ROLES.map(r => r.id);
 
-// Everyone now lands on the clean launcher; it self-filters the tiles a
-// role may see via /api/modules. (The old per-role landing pages are all
-// still reachable — they're just not the front door anymore.)
+// Stock Search is the shared front door on phone and desktop. The user's
+// other pages remain role-gated; this only makes catalogue lookup universally
+// available after sign-in.
 const ROLE_HOME = {
-  content_team: '/content-production.html',
-  admin:       '/dashboard.html',
-  owner:       '/owner.html',
-  inventory:   '/dashboard.html',
-  sales:       '/dashboard.html',
-  procurement: '/dashboard.html',
-  accounting:  '/dashboard.html',
-  model_calendar: '/model-calendar.html',
-  samast_accounting: '/expenses.html',
-  personal_claimant: '/expenses.html',
-  claimant:    '/expenses.html',
-  revenue:     '/dashboard.html',
-  warehouse:   '/dashboard.html',
+  content_team: '/rack-locations.html',
+  admin:       '/rack-locations.html',
+  owner:       '/rack-locations.html',
+  inventory:   '/rack-locations.html',
+  sales:       '/rack-locations.html',
+  procurement: '/rack-locations.html',
+  accounting:  '/rack-locations.html',
+  model_calendar: '/rack-locations.html',
+  samast_accounting: '/rack-locations.html',
+  personal_claimant: '/rack-locations.html',
+  claimant:    '/rack-locations.html',
+  revenue:     '/rack-locations.html',
+  warehouse:   '/rack-locations.html',
   stocksearch: '/rack-locations.html',
-  special_access: '/dashboard.html'
+  special_access: '/rack-locations.html'
 };
 // '*' = all pages. Otherwise an allow-list of exact page paths. This is the
 // DEFAULT (seed) map — the admin can override it per role (persisted in the
@@ -240,7 +240,7 @@ function hasUserPermission(user, permission) {
   return normalizeUserPermissions(user)[permission] === true;
 }
 
-function landingFor(role) { return ROLE_HOME[role] || '/dashboard.html'; }
+function landingFor(role) { return ROLE_HOME[role] || '/rack-locations.html'; }
 function allowedPagesFor(role) { const a = getRolePages()[role]; return a === '*' ? '*' : (a || []); }
 function roleCanAccessPath(role, p) {
   if(role==='content_team')return p==='/content-production.html';
@@ -255,6 +255,7 @@ function roleCanAccessPath(role, p) {
 // Union access across all of a user's roles.
 function isPrashant(user) { return String(user && user.username || '').trim().toLowerCase() === PRASHANT_USER; }
 function userCanAccessPath(user, p) {
+  if (p === '/rack-locations.html') return true;
   if(rolesOf(user).length===1&&rolesOf(user)[0]==='content_team')return p==='/content-production.html';
   if (p === '/manage.html') {
     // This is only a filtered navigation hub, never a grant to its linked
@@ -274,11 +275,12 @@ function userCanAccessPath(user, p) {
   return rolesOf(user).some(r => roleCanAccessPath(r, p));
 }
 function allowedPagesForUser(user) {
-  if(rolesOf(user).length===1&&rolesOf(user)[0]==='content_team')return ['/content-production.html'];
-  if (isPrashant(user)) return PRASHANT_PAGES.slice();
+  if(rolesOf(user).length===1&&rolesOf(user)[0]==='content_team')return ['/rack-locations.html','/content-production.html'];
+  if (isPrashant(user)) return Array.from(new Set(['/rack-locations.html'].concat(PRASHANT_PAGES)));
   const roles = rolesOf(user);
   if (roles.some(r => getRolePages()[r] === '*')) return '*';
   const set = new Set();
+  set.add('/rack-locations.html');
   roles.forEach(r => { const a = getRolePages()[r]; if (Array.isArray(a)) a.forEach(x => set.add(x)); });
   return Array.from(set);
 }

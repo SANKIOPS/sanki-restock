@@ -154,6 +154,9 @@ function apiAllowedForUser(user, p, method='GET') {
   if (p === '/api/marketing/meta' || p.startsWith('/api/marketing/meta/')) {
     return rolesOf(user).includes('owner') || hasUserPermission(user, 'metaAds');
   }
+  // Stock Search is the authenticated landing page for every user. Catalogue
+  // refresh and rack edits remain Owner-only below.
+  if (p === '/api/stock-search') return method === 'GET';
   if (isPrashant(user)) {
     const allowed = [
       '/api/auth/me', '/api/modules',
@@ -277,9 +280,9 @@ function gate(req, res, next) {
   // departments. Assets remain shared, but direct page navigation is gated.
   if (isPrashant(user)) {
     if (isAssetPath(p)) return next();
-    if (p === '/') return res.redirect(302, '/inventory.html');
+    if (p === '/') return res.redirect(302, landingFor(user.role));
     if (userCanAccessPath(user, p)) return next();
-    return res.redirect(302, '/inventory.html');
+    return res.redirect(302, landingFor(user.role));
   }
 
   // ── Page/navigation gating by role (admin sees everything) ──
