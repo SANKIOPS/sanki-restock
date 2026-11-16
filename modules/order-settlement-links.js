@@ -4,14 +4,26 @@ const ref=v=>String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
 function bankEvidence(accounting, reference, expected, options={}){
  const target=ref(reference);if(target.length<8)return null;
  const found=[];
- for(const [bookKey,book] of Object.entries(accounting.bankStatements||{}))for(const row of Object.values(book.transactions||{})){
-  if(options.account&&String(book.account||bookKey).replace(/^SANKI\|/,'')!==options.account)continue;
-  if(options.date&&(!row.date||String(row.date).slice(0,10)<options.date||String(row.date).slice(0,10)>new Date(Date.parse(options.date)+14*86400000).toISOString().slice(0,10)))continue;
+ const inspect=(bookKey,book,row,meta={})=>{
+  if(options.account&&String(book.account||bookKey).replace(/^SANKI\|/,'')!==options.account)return;
+  if(options.date&&(!row.date||String(row.date).slice(0,10)<options.date||String(row.date).slice(0,10)>new Date(Date.parse(options.date)+14*86400000).toISOString().slice(0,10)))return;
   const texts=[row.reference,row.description,row.narration,row.utr].filter(Boolean).map(String);
   const exact=texts.some(text=>ref(text)===target||text.toUpperCase().split(/[^A-Z0-9]+/).includes(target));
-  if(exact&&money(row.credit)===money(expected)&&Number(row.credit)>0)found.push({account:book.account||bookKey,date:row.date,reference,amount:Number(row.credit),transactionId:row.id});
+  if(!exact||money(row.credit)!==money(expected)||!(Number(row.credit)>0))return;
+  const account=book.account||bookKey,date=String(row.date||'').slice(0,10),signature=[account,date,money(row.credit),target].join('|');
+  found.push({account,date:row.date,reference,amount:Number(row.credit),transactionId:row.id||meta.rowId,signature,...meta});
+ };
+ for(const [bookKey,book] of Object.entries(accounting.bankStatements||{}))for(const row of Object.values(book.transactions||{}))inspect(bookKey,book,row);
+ if(options.includeDrafts)for(const [draftKey,draft] of Object.entries(accounting.bankReconciliationDrafts||{})){
+  if(draft.summary&&draft.summary.validated===false)continue;
+  (draft.transactions||[]).forEach((row,index)=>{const rowId='bank-'+index;if((draft.resolutions||{})[rowId])return;inspect(draft.account||draftKey,draft,row,{draftId:draft.id||draftKey,rowId,pending:true});});
  }
- return found.length===1?found[0]:null;
+ if(found.length===1)return found[0];
+ // An overlapping preview can contain the same immutable row as one finalized
+ // statement. Prefer that single finalized item, but never collapse two exact
+ // finalized bank rows (which must remain ambiguous).
+ const finalized=found.filter(item=>!item.pending);
+ return finalized.length===1&&found.every(item=>item.signature===finalized[0].signature)?finalized[0]:null;
 }
 function attachSettlementLinks(orders,accounting,online,finance){
  const groups=new Map();

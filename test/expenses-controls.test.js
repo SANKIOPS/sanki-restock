@@ -151,6 +151,59 @@ test('all existing-ledger linking paths reject another active draft claim before
   if(baseline)fs.writeFileSync(file,baseline);else fs.rmSync(file,{force:true});
 });
 
+test('Owner can safely recheck a finalized pending 7883 balance without creating an adjustment',()=>{
+  const file=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(file)?fs.readFileSync(file,'utf8'):null;
+  try{
+    const s=baseline?JSON.parse(baseline):{},account='IndusInd Bank 7883',recordId='BST-7883-RECHECK';
+    Object.assign(s,{expenses:{},receipts:[],transfers:[],vendorAdvances:[],bankTruthMovements:[],reconciliationExpenses:[],bankDateOverrides:{},bankMovementAuthority:{},bankReconciliationDrafts:{}});
+    s.adjustments=[{id:'ADJ-7883-CREDIT',nature:'SANKI',account,amount:50,date:'2026-11-13',note:'Verified receipt'}];
+    s.physicalBankOpeningBalances={[account]:100};s.openingBalanceDatesByNature={SAMAST:{[account]:'2026-08-22'},PERSONAL:{[account]:'2026-08-22'}};
+    s.bankStatements={[account]:{transactions:{},imports:[{id:recordId,draftId:'BRD-7883-RECHECK',from:'2026-11-13',to:'2026-11-13',statementSummary:{openingBalance:100,closingBalance:150,totalDebits:0,totalCredits:50,validated:true},ledgerClosingBalance:100,balanceDifference:50,balanceReconciled:false,closingBalanceDeferred:true}],reconciledThrough:'2026-11-13',lastReconciliation:{draftId:'BRD-7883-RECHECK',through:'2026-11-13',closingBalance:150,ledgerClosingBalance:100,balanceDifference:50,balanceReconciled:false,closingBalanceDeferred:true}}};
+    fs.writeFileSync(file,JSON.stringify(s));
+    const denied=invoke('POST','/api/expenses/bank-statements/recheck-finalized-balance',{role:'admin',body:{nature:'SAMAST',account,recordId}});assert.equal(denied.status,403);
+    const result=invoke('POST','/api/expenses/bank-statements/recheck-finalized-balance',{role:'owner',body:{nature:'SAMAST',account,recordId}});
+    assert.equal(result.status,200,JSON.stringify(result.body));assert.equal(result.body.balanceDifference,0);assert.equal(result.body.balanceReconciled,true);
+    const saved=JSON.parse(fs.readFileSync(file,'utf8')),record=saved.bankStatements[account].imports[0];
+    assert.equal(record.ledgerClosingBalance,150);assert.equal(record.closingBalanceDeferred,false);assert.equal(saved.adjustments.length,1);
+    assert.ok(saved.auditLog.some(entry=>entry.action==='FINALIZED_SHARED_BANK_BALANCE_RECHECKED'&&entry.subjectId===recordId));
+  }finally{if(baseline)fs.writeFileSync(file,baseline);else fs.rmSync(file,{force:true});}
+});
+
+test('7883 recheck restores one exact missing finalized transfer from immutable audit evidence',()=>{
+  const file=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(file)?fs.readFileSync(file,'utf8'):null;
+  try{
+    const s=baseline?JSON.parse(baseline):{},account='IndusInd Bank 7883',recordId='BST-1794656332236',draftId='BRD-1794655146835-4d51d4',transferId='TR-00265',date='2026-11-13',createdAt='2026-11-14T11:38:00.000Z',recheckedAt='2026-11-15T12:00:00.000Z';
+    const transfer={id:transferId,nature:'PERSONAL',fromNature:'PERSONAL',toNature:'PERSONAL',classification:'internal_transfer',fromAccount:account,toAccount:'Namita 5464',amount:70000,date,proof:'',bankStatementEvidence:true,bankReference:'319100955023',note:'Transfer for Home Expenses',bankRowId:'bank-0',reconciliationDraft:draftId,createdBy:'gaganlambasanki',createdAt};
+    const row={id:'bank-0',bank:{date,description:'UPI/319100955023/DR /NAMI/HDFC/1988@ok hdfcbank',reference:'319100955023',debit:70000,credit:0,balance:49909.35},ledger:null,linkedRecordIds:[],decision:'Created bank-confirmed internal transfer',reason:'Transfer for Home Expenses'};
+    Object.assign(s,{expenses:{},receipts:[],transfers:[],vendorAdvances:[],bankTruthMovements:[],reconciliationExpenses:[],bankDateOverrides:{},bankMovementAuthority:{},bankReconciliationDrafts:{},adjustments:[]});
+    s.bankStatements={[account]:{transactions:{},imports:[{id:recordId,draftId,from:date,to:date,statementSummary:{openingBalance:119909.35,closingBalance:49909.35,totalDebits:70000,totalCredits:0,validated:true},reconciliationRows:[row],carryForwardNet:-7241,ledgerClosingBalance:134533.40,balanceDifference:-84624.05,balanceReconciled:false,closingBalanceDeferred:true}],reconciledThrough:date,lastReconciliation:{draftId,through:date,closingBalance:49909.35,ledgerClosingBalance:134533.40,balanceDifference:-84624.05,balanceReconciled:false,closingBalanceDeferred:true}}};
+    s.auditLog=[
+      {id:'AUD-006172',at:createdAt,action:'BANK_CONFIRMED_TRANSFER_CREATED',subjectType:'transfer',subjectId:transferId,after:transfer},
+      {id:'AUD-006173',at:recheckedAt,action:'FINALIZED_SHARED_BANK_BALANCE_RECHECKED',subjectType:'bank_reconciliation',subjectId:recordId,before:{ledgerClosingBalance:42668.35,balanceDifference:7241,balanceReconciled:false,closingBalanceDeferred:true},after:{statementClosingBalance:49909.35,ledgerClosingBalance:134533.40,balanceDifference:-84624.05,balanceReconciled:false,closingBalanceDeferred:true}}
+    ];
+    fs.writeFileSync(file,JSON.stringify(s));
+    const result=invoke('POST','/api/expenses/bank-statements/recheck-finalized-balance',{role:'owner',body:{nature:'SAMAST',account,recordId}});
+    assert.equal(result.status,200,JSON.stringify(result.body));assert.deepEqual(result.body.recoveredTransfers,[transferId]);assert.equal(result.body.ledgerClosingBalance,42668.35);assert.equal(result.body.balanceDifference,7241);assert.equal(result.body.balanceReconciled,false);
+    const saved=JSON.parse(fs.readFileSync(file,'utf8')),record=saved.bankStatements[account].imports[0],savedRow=record.reconciliationRows[0],restored=saved.transfers.find(item=>item.id===transferId);
+    assert.ok(restored);assert.equal(restored.fromAccount,account);assert.equal(restored.toAccount,'Namita 5464');assert.equal(restored.amount,70000);assert.deepEqual(savedRow.linkedRecordIds,[transferId]);assert.equal(savedRow.ledger.id,transferId);assert.equal(savedRow.decision,'Restored bank-confirmed transfer');
+    assert.equal(record.ledgerClosingBalance,42668.35);assert.equal(record.balanceDifference,7241);assert.equal(saved.bankStatements[account].lastReconciliation.ledgerClosingBalance,42668.35);assert.equal(saved.adjustments.length,0);
+    assert.ok(saved.auditLog.some(entry=>entry.action==='FINALIZED_SHARED_BANK_TRANSFER_RESTORED_FROM_AUDIT'&&entry.subjectId===transferId));
+  }finally{if(baseline)fs.writeFileSync(file,baseline);else fs.rmSync(file,{force:true});}
+});
+
+test('7883 recheck refuses an unlinked finalized bank row without unique immutable evidence',()=>{
+  const file=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(file)?fs.readFileSync(file,'utf8'):null;
+  try{
+    const s=baseline?JSON.parse(baseline):{},account='IndusInd Bank 7883',recordId='BST-7883-AMBIGUOUS',draftId='BRD-7883-AMBIGUOUS',date='2026-11-13';
+    Object.assign(s,{expenses:{},receipts:[],transfers:[],vendorAdvances:[],bankTruthMovements:[],reconciliationExpenses:[],bankDateOverrides:{},bankMovementAuthority:{},bankReconciliationDrafts:{},adjustments:[],auditLog:[]});
+    s.bankStatements={[account]:{transactions:{},imports:[{id:recordId,draftId,from:date,to:date,statementSummary:{openingBalance:1000,closingBalance:500,totalDebits:500,totalCredits:0,validated:true},reconciliationRows:[{id:'bank-0',bank:{date,description:'Unknown transfer',reference:'123456789012',debit:500,credit:0,balance:500},ledger:null,linkedRecordIds:[],decision:'Reviewed'}],ledgerClosingBalance:500,balanceDifference:0,balanceReconciled:false,closingBalanceDeferred:true}],lastReconciliation:{draftId,through:date,closingBalance:500,ledgerClosingBalance:500,balanceDifference:0,balanceReconciled:false,closingBalanceDeferred:true}}};
+    fs.writeFileSync(file,JSON.stringify(s));
+    const result=invoke('POST','/api/expenses/bank-statements/recheck-finalized-balance',{role:'owner',body:{nature:'SAMAST',account,recordId}});
+    assert.equal(result.status,409);assert.match(result.body.error,/without a ledger connection/i);assert.equal(result.body.unresolvedRows.length,1);
+    const saved=JSON.parse(fs.readFileSync(file,'utf8')),record=saved.bankStatements[account].imports[0];assert.equal(record.ledgerClosingBalance,500);assert.equal(record.balanceDifference,0);assert.equal(saved.transfers.length,0);assert.equal(saved.auditLog.some(entry=>entry.action==='FINALIZED_SHARED_BANK_BALANCE_RECHECKED'||entry.action==='FINALIZED_SHARED_BANK_TRANSFER_RESTORED_FROM_AUDIT'),false);
+  }finally{if(baseline)fs.writeFileSync(file,baseline);else fs.rmSync(file,{force:true});}
+});
+
 test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -2303,7 +2356,17 @@ test('Prashant can record Counter Cash into Axis 3448 directly from bank reconci
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
-test('Velocity is a clearing ledger and White Wizard credits request remittance evidence',()=>{const config=invoke('GET','/api/expenses/config',{role:'owner'}).body,html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.ok(config.ledgerAccountsByNature.SANKI.includes('Velocity'));assert.equal(config.bankAccountsByNature.SANKI.includes('Velocity'),false);assert.match(html,/Upload Velocity remittance/);assert.match(html,/uploadVelocityRemittanceForBank/);});
+test('Velocity is a clearing ledger and White Wizard credits request remittance evidence',()=>{const config=invoke('GET','/api/expenses/config',{role:'owner'}).body,html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.ok(config.ledgerAccountsByNature.SANKI.includes('Velocity'));assert.ok(config.transferAccountsByNature.SANKI.includes('Velocity'));assert.equal(config.bankAccountsByNature.SANKI.includes('Velocity'),false);assert.match(html,/Upload Velocity remittance/);assert.match(html,/uploadVelocityRemittanceForBank/);});
+
+test('White Wizard bank credit offers and records a verified VC settlement fallback',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Record VC settlement/);assert.match(html,/openVelocityBankSettlement/);
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),draftId='BRD-VELOCITY-BANK-FALLBACK',date='2098-06-03',reference='IN20981549999999';
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[draftId]={id:draftId,account:'Axis Bank 3448',nature:'SANKI',transactions:[{date,description:'NEFT/'+reference+'/WHITE WIZARD TECHNOLOGIES PRI',reference,debit:0,credit:3547,balance:3547}],summary:{from:date,to:date,openingBalance:0,closingBalance:3547,totalDebits:0,totalCredits:3547,validated:true},resolutions:{},matchingPolicy:'strict_identity_v3',temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const resolved=invoke('POST','/api/expenses/bank-statements/resolve',{role:'owner',body:{draftId,rowId:'bank-0',action:'create_internal_transfer',otherNature:'SANKI',otherAccount:'Velocity',principalAmount:3547,chargeAmount:0,reason:'VC settlement verified from Axis bank statement'}});assert.equal(resolved.status,200,JSON.stringify(resolved.body));assert.equal(resolved.body.rows.find(x=>x.id==='bank-0').resolution.velocitySettlement,true);
+  const staged=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(staged.bankReconciliationDrafts[draftId].resolutions['bank-0'].velocitySettlement,true);retainFinalizedFixtureRows(staged.bankReconciliationDrafts[draftId]);applyFinalizedInternalTransfers(staged.bankReconciliationDrafts[draftId],'owner-user');
+  const after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),transfer=after.transfers.find(x=>x.reconciliationDraft===draftId);assert.equal(transfer.fromAccount,'Velocity');assert.equal(transfer.toAccount,'Axis Bank 3448');assert.equal(transfer.amount,3547);assert.equal(transfer.bankReference,reference);
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
 
 test('Velocity COD settlement creates one linked transfer into Axis 3448',()=>{const made=invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Velocity',toAccount:'Axis Bank 3448',amount:12345,date:'2098-04-01',proof:'/api/expenses/photo/velocity.jpg',note:'White Wizard Technologies COD settlement'}});assert.equal(made.status,200,JSON.stringify(made.body));const velocity=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Velocity',from:'2098-04-01',to:'2098-04-01'}}).body.entries.find(x=>x.id===made.body.transfer.id),axis=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448',from:'2098-04-01',to:'2098-04-01'}}).body.entries.find(x=>x.id===made.body.transfer.id);assert.equal(velocity.debit,12345);assert.equal(axis.credit,12345);assert.equal(velocity.id,axis.id);});
 

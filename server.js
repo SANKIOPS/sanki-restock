@@ -661,6 +661,14 @@ app.post('/api/webhooks/shopify', (req, res) => {
     saveCache();
     console.log(`[webhook/shopify] ${topic} — ${order.name || order.id}`);
 
+    // The legacy operational cache above is not the accounting sales spine.
+    // Refresh the read-only orders ledger as well so a paid POS Cash order
+    // reaches Counter Cash immediately instead of waiting for the next poll.
+    if (['orders/create','orders/updated','orders/fulfilled'].includes(topic)) {
+      setTimeout(() => require('./modules/orders').runSync()
+        .catch(error => console.error('[orders] webhook accounting sync error:', error.message)), 1000);
+    }
+
     // Trigger Velocity sync if a new AWB arrived
     if (['fulfillments/create','fulfillments/update','orders/fulfilled'].includes(topic)) {
       setTimeout(() => syncVelocityShipments(), 3000);
@@ -2881,7 +2889,16 @@ app.listen(PORT, async () => {
   // back to Shopify.
   try {
     if(providerPollersEnabled){require('./modules/orders').startAutoSync();require('./modules/orders').startGoKwikSync();}
-    else console.log('[sync] background provider polling disabled; webhooks and manual sync remain active');
+    else {
+      console.log('[sync] background provider polling disabled; running one bounded Shopify recovery after startup');
+      // Production keeps recurring provider scans disabled so reconciliation
+      // stays responsive. Still run one bounded, read-only Shopify recovery per
+      // deploy: this self-heals an order missed by an earlier webhook/importer
+      // (for example POS Cash order #2951) without adding permanent polling.
+      setTimeout(() => require('./modules/orders').runSync()
+        .then(result => console.log(`[orders] startup recovery: +${Number(result && result.imported || 0)}, total ${Number(result && result.total || 0)}`))
+        .catch(error => console.error('[orders] startup recovery failed:', error.message)), 30 * 1000);
+    }
   }
   catch (e) { console.error('[orders] auto-sync start error:', e.message); }
 
@@ -2933,8 +2950,8 @@ app.listen(PORT, async () => {
 
   const syncVelocityPayouts=()=>{if(!process.env.VELOCITY_MCP_ACCESS_TOKEN||!process.env.VELOCITY_MCP_UID)return;require('./modules/orders').syncVelocityPayouts().then(r=>console.log('[velocity-payouts] Synced '+r.batches+' batches; '+r.allocationIssues+' allocation issues')).catch(e=>console.error('[velocity-payouts] '+e.message));};
   if(providerPollersEnabled){
-    setInterval(syncVelocityPayouts, interval('VELOCITY_PAYOUT_SYNC_MINUTES', production ? 360 : 60));
-    setTimeout(syncVelocityPayouts, startupDelay('VELOCITY_PAYOUT_STARTUP_MINUTES', production ? 40 : 0.67));
+    setInterval(syncVelocityPayouts, interval('VELOCITY_PAYOUT_SYNC_MINUTES', 60));
+    setTimeout(syncVelocityPayouts, startupDelay('VELOCITY_PAYOUT_STARTUP_MINUTES', production ? 1 : 0.67));
   }
 
   // Self-ping every 14 min to keep Render free tier alive

@@ -107,7 +107,7 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
   const otherMovements=[];for(const e of list(s.expenses).filter(r=>active(r)&&match(r)&&balanceCost.test(r.ledger||r.category||''))){for(const p of list(e.payments).filter(p=>active(p)&&inRange(p,from,to))){otherMovements.push({id:e.id+'/'+p.id,date:p.date,category:e.ledger||e.category,description:e.particulars||e.vendor||'',account:p.account||e.account||'',amount:money(p.amount)});}}
   for(const r of otherMovements){const evidence=confirmedRepayments.get(r.id);if(evidence){r.treatment='Confirmed credit-card repayment';r.statementId=evidence.statementId;r.cardId=evidence.cardId;}}
   const reviewCosts=otherMovements.filter(r=>!confirmedRepayments.has(r.id)&&/credit[ -]?card|card repayment|\bemi\b|loan repayment/i.test(r.category));for(const r of reviewCosts)warnings.push(r.id+': '+r.category+' needs repayment/interest review. Excluded from costs; original bank payment remains unchanged.');
-  let income=0,expenses=0,cogs=0,result=null,basis,resultLabel,unitEconomics;
+  let income=0,expenses=0,cogs=0,result=null,basis,resultLabel,unitEconomics,samastProfit;
   if(entity==='SANKI'){
     const report=buildReport({...sources,expenses:{...s,expenses:Object.fromEntries(Object.entries(s.expenses||{}).filter(([,r])=>!balanceCost.test(r.ledger||r.category||'')))}},{from,to,start:START,channel:'All'});
     unitEconomics=require('./sanki-unit-economics').build(report,{blocked:reviewCosts.length>0,books:s});
@@ -127,12 +127,16 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
     const report=buildReport({...sources,expenses:virtual,orders:{orders:{},dispatch:{}},manualSales:{sales:[]},purchases:{pos:{}},salary:salary||{},incentives:{payments:[]},lineCorrections:{},shopifyCosts:{items:[]}},{from,to,start:START,channel:'All'});
     for(const r of report.transactions.filter(r=>r.expenses)){expenses+=r.expenses;add('expense',r,r.expenses);}
     warnings.push(...report.warnings.filter(w=>['expense','salary','source'].includes(w.scope)).map(w=>w.reference+': '+w.message));
+    const profitRentReceipts=[];
     for(const r of list(s.receipts).filter(r=>active(r)&&!r.historicalOpening&&match(r)&&inRange(r,from,to))){
-      if(r.bankReconciliationDraft&&s.bankReconciliationDrafts?.[r.bankReconciliationDraft]){warnings.push(r.id+': Pending reconciliation receipt excluded.');continue;}
+      const receiptDraft=r.bankReconciliationDraft||(entity==='SAMAST'?(r.reconciliationDraft||r.bankReconciliationEvidence?.draftId):'');
+      if(receiptDraft&&s.bankReconciliationDrafts?.[receiptDraft]){warnings.push(r.id+': Pending reconciliation receipt excluded.');continue;}
       if(loans.isLoan(r)||r.expenseRefundId||r.refundRecoveryExpenseId||/security|deposit|contribution|exchange|refund/i.test(r.receiptType||''))continue;
       if(!incomeTypes.has(r.receiptType)){warnings.push(r.id+': Receipt type needs review before inclusion in income.');continue;}
+      if(r.receiptType==='rental_income')profitRentReceipts.push(r);
       income+=Number(r.amount)||0;add('income',{...r,category:r.category||r.receiptType},r.amount);
     }
+    if(entity==='SAMAST')samastProfit=require('./samast-profit').build(s,{from,to,receipts:profitRentReceipts,costs:report.transactions.filter(r=>r.expenses),salary:salary||{}});
     result=money(income-expenses);resultLabel='Cash surplus / deficit';
     basis='Recorded income received minus approved paid costs. Transfers, loan principal and refundable security are excluded. This is a cash management view, not earned or tax-adjusted profit.';
     if(entity==='SAMAST')warnings.push('Rental receipts are bank amounts and may include GST, TDS effects or advance rent. Cash surplus is not net rental profit.');
@@ -158,6 +162,6 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
   for(const e of list(s.expenses).filter(r=>active(r)&&match(r))){for(const p of list(e.payments).filter(p=>active(p)&&!p.provisional&&inRange(p,from,to))){const account=p.account||e.account;if(!account)continue;usage[account]=money((usage[account]||0)+Number(p.amount||0));}}
   for(const feed of sources.feeds||[])if(feed.required&&feed.status!=='ready')warnings.push(feed.name+' is '+feed.status+'. Report may be incomplete.');
   if(reviewCosts.length)result=null;
-  return {success:true,entity,from,to,basis,resultLabel,otherMovements,...(unitEconomics?{unitEconomics}:{}),totals:{income:income==null?null:money(income),expenses:money(expenses),costOfSales:money(cogs),result:result==null?null:money(result)},accounts,transactions:require('./report-expense-entries').enrichMany(s,rows).sort((a,b)=>b.date.localeCompare(a.date)),transfers,paidFrom:Object.entries(usage).map(([account,amount])=>({account,amount})),obligations:{loans:loanRows,security,securityKnown:entity!=='SAMAST'||!!s.rentals,loanTotal:money(loanRows.reduce((n,r)=>n+r.outstanding,0)),securityTotal:money(security.reduce((n,r)=>n+r.amount,0))},warnings:[...new Set(warnings)],note:'Account balances cover all money held in those accounts, including borrowed money and deposits. Shared bank money is not allocated to an entity by this report. Personal spending by paying account does not prove that rental income funded it. Transfers are shown once and are not additional expenses. No automatic debts are created.'};
+  return {success:true,entity,from,to,basis,resultLabel,otherMovements,...(unitEconomics?{unitEconomics}:{}),...(samastProfit?{samastProfit}:{}),totals:{income:income==null?null:money(income),expenses:money(expenses),costOfSales:money(cogs),result:result==null?null:money(result)},accounts,transactions:require('./report-expense-entries').enrichMany(s,rows).sort((a,b)=>b.date.localeCompare(a.date)),transfers,paidFrom:Object.entries(usage).map(([account,amount])=>({account,amount})),obligations:{loans:loanRows,security,securityKnown:entity!=='SAMAST'||!!s.rentals,loanTotal:money(loanRows.reduce((n,r)=>n+r.outstanding,0)),securityTotal:money(security.reduce((n,r)=>n+r.amount,0))},warnings:[...new Set(warnings)],note:'Account balances cover all money held in those accounts, including borrowed money and deposits. Shared bank money is not allocated to an entity by this report. Personal spending by paying account does not prove that rental income funded it. Transfers are shown once and are not additional expenses. No automatic debts are created.'};
 }
 module.exports={build,START};
