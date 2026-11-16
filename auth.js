@@ -33,7 +33,7 @@ const path   = require('path');
 // and enforces which pages each role may open. Basic-auth + x-api-key are
 // kept as admin fallbacks so scripts/automation and the bootstrap admin
 // never get locked out.
-const { verifySession, userCanAccessPath, rolesOf, landingFor, isPrashant, hasUserPermission } = require('./modules/auth-users');
+const { verifySession, userCanAccessPath, rolesOf, landingForUser, isPrashant, hasUserPermission } = require('./modules/auth-users');
 
 // Static asset extensions any logged-in user may fetch regardless of role
 // (JS/CSS/images the shared pages need). Page/navigation requests are gated.
@@ -154,9 +154,6 @@ function apiAllowedForUser(user, p, method='GET') {
   if (p === '/api/marketing/meta' || p.startsWith('/api/marketing/meta/')) {
     return rolesOf(user).includes('owner') || hasUserPermission(user, 'metaAds');
   }
-  // Stock Search is the authenticated landing page for every user. Catalogue
-  // refresh and rack edits remain Owner-only below.
-  if (p === '/api/stock-search') return method === 'GET';
   if (isPrashant(user)) {
     const allowed = [
       '/api/auth/me', '/api/modules',
@@ -251,7 +248,7 @@ function gate(req, res, next) {
   // even when another account has ordinary Admin access.
   if ((p === '/owner.html' || p === '/rentals.html' || p === '/catalogue-images.html' || p.startsWith('/api/owner/') || p.startsWith('/api/catalogue-images')) && !rolesOf(user).includes('owner') && !(isPrashant(user) && p === '/rentals.html')) {
     if (p.startsWith('/api/')) return res.status(403).json({ success: false, error: 'Owner only.' });
-    return res.redirect(302, landingFor(user.role));
+    return res.redirect(302, landingForUser(user));
   }
 
   // Never redirect a role-less account to the dashboard when the dashboard is
@@ -263,7 +260,7 @@ function gate(req, res, next) {
 
   if (p === '/meta-ads.html') {
     if (rolesOf(user).includes('owner') || hasUserPermission(user, 'metaAds')) return next();
-    return res.redirect(302, landingFor(user.role));
+    return res.redirect(302, landingForUser(user));
   }
 
   // API permissions are enforced independently of page visibility. Unknown
@@ -280,18 +277,18 @@ function gate(req, res, next) {
   // departments. Assets remain shared, but direct page navigation is gated.
   if (isPrashant(user)) {
     if (isAssetPath(p)) return next();
-    if (p === '/') return res.redirect(302, landingFor(user.role));
+    if (p === '/') return res.redirect(302, landingForUser(user));
     if (userCanAccessPath(user, p)) return next();
-    return res.redirect(302, landingFor(user.role));
+    return res.redirect(302, landingForUser(user));
   }
 
   // ── Page/navigation gating by role (admin sees everything) ──
   if (rolesOf(user).includes('admin') || rolesOf(user).includes('owner')) return next();
   if (isAssetPath(p)) return next();                 // shared JS/CSS/images
-  if (p === '/') return res.redirect(302, landingFor(user.role));
+  if (p === '/') return res.redirect(302, landingForUser(user));
   if (userCanAccessPath(user, p)) return next();     // union across all roles
   // Any other page/route this role isn't allowed → send to their home.
-  return res.redirect(302, landingFor(user.role));
+  return res.redirect(302, landingForUser(user));
 }
 
 module.exports = { gate, apiRuleFor, apiAllowedForUser };

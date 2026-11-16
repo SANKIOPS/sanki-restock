@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { apiRuleFor, apiAllowedForUser } = require('../auth');
 const { visibleFor } = require('../modules/module-registry');
-const { userCanAccessPath, allowedPagesForUser } = require('../modules/auth-users');
+const { userCanAccessPath, allowedPagesForUser, landingForUser } = require('../modules/auth-users');
 
 function user(...roles) {
   return { username: 'test-user', role: roles[0], roles };
@@ -118,10 +118,8 @@ test('warehouse retains operational access while Stylists stock search is read-o
 test('shared authenticated endpoints remain available to all roles', () => {
   assert.equal(apiAllowedForUser(user('stocksearch'), '/api/auth/me'), true);
   assert.equal(apiAllowedForUser(user('accounting'), '/api/modules'), true);
-  for (const role of ['content_team', 'claimant', 'accounting', 'model_calendar', 'sales']) {
-    assert.equal(apiAllowedForUser(user(role), '/api/stock-search', 'GET'), true, role);
-    assert.equal(userCanAccessPath(user(role), '/rack-locations.html'), true, role);
-  }
+  for (const role of ['inventory', 'warehouse', 'stocksearch']) assert.equal(apiAllowedForUser(user(role), '/api/stock-search', 'GET'), true, role);
+  for (const role of ['content_team', 'claimant', 'accounting', 'model_calendar', 'sales']) assert.equal(apiAllowedForUser(user(role), '/api/stock-search', 'GET'), false, role);
   assert.equal(apiAllowedForUser(user('claimant'), '/api/stock-search/refresh', 'GET'), false);
 });
 
@@ -260,7 +258,7 @@ test('Prashant can administer salary without gaining access to unrelated modules
 test('Prashant sees only the requested operational workspace even with an Admin role',()=>{
   const p={username:'Prashant',role:'admin',roles:['admin']};
   assert.deepEqual(visibleFor(p).map(module=>module.key),[
-    'manage','stock-search',
+    'manage',
     'inventory-dashboard','inventory-care',
     'procurement','fresh-proc','size-tracker',
     'compact-reports','pl','rentals','expenses','salary','incentives',
@@ -269,7 +267,7 @@ test('Prashant sees only the requested operational workspace even with an Admin 
   for(const page of ['/inventory.html','/inventory-care.html','/procurement.html','/fresh-procurement.html','/size-tracker.html','/pnl.html','/rentals.html','/expenses.html','/salary.html','/incentives.html','/model-calendar.html']){
     assert.equal(userCanAccessPath(p,page),true,page);
   }
-  for(const page of ['/dashboard.html','/orders.html','/seo-control.html','/meta-ads.html','/catalogue-images.html','/admin-users.html']){
+  for(const page of ['/dashboard.html','/rack-locations.html','/orders.html','/seo-control.html','/meta-ads.html','/catalogue-images.html','/admin-users.html']){
     assert.equal(userCanAccessPath(p,page),false,page);
   }
   assert.equal(apiAllowedForUser(p,'/api/expenses/list','GET'),true);
@@ -282,9 +280,13 @@ test('Prashant sees only the requested operational workspace even with an Admin 
   assert.equal(apiAllowedForUser(p,'/api/admin/users','GET'),false);
 });
 
-test('Content-team-only users land on Stock Search and otherwise retain only Content & Posting',()=>{const u=user('content_team');assert.equal(userCanAccessPath(u,'/rack-locations.html'),true);assert.equal(userCanAccessPath(u,'/content-production.html'),true);for(const p of ['/dashboard.html','/manage.html','/expenses.html','/inventory.html'])assert.equal(userCanAccessPath(u,p),false,p);assert.deepEqual(allowedPagesForUser(u),['/rack-locations.html','/content-production.html']);assert.deepEqual(visibleFor(u).map(m=>m.key),['stock-search','content-production']);assert.equal(userCanAccessPath(user('owner'),'/dashboard.html'),true);});
+test('Content-team-only users retain only Content & Posting',()=>{const u=user('content_team');assert.equal(userCanAccessPath(u,'/content-production.html'),true);for(const p of ['/rack-locations.html','/dashboard.html','/manage.html','/expenses.html','/inventory.html'])assert.equal(userCanAccessPath(u,p),false,p);assert.deepEqual(allowedPagesForUser(u),['/content-production.html']);assert.deepEqual(visibleFor(u).map(m=>m.key),['content-production']);assert.equal(userCanAccessPath(user('owner'),'/dashboard.html'),true);});
 
-test('every login role lands on Stock Search',()=>{
-  const authUsers=require('../modules/auth-users');
-  for(const role of authUsers.ROLES.map(row=>row.id)) assert.equal(authUsers.landingFor(role),'/rack-locations.html',role);
+test('Stock Search is preferred only for users who already have access',()=>{
+  for(const role of ['admin','owner','inventory','warehouse','stocksearch']) assert.equal(landingForUser(user(role)),'/rack-locations.html',role);
+  assert.equal(landingForUser(user('sales')),'/dashboard.html');
+  assert.equal(landingForUser(user('accounting')),'/dashboard.html');
+  assert.equal(landingForUser(user('claimant')),'/expenses.html');
+  assert.equal(landingForUser(user('model_calendar')),'/model-calendar.html');
+  assert.equal(landingForUser(user('content_team')),'/content-production.html');
 });

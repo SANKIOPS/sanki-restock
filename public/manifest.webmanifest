@@ -2,7 +2,7 @@
   "name": "SANKI Business OS",
   "short_name": "SANKI",
   "description": "SANKI's mobile operations workspace for orders, stock, purchases, expenses and accounting.",
-  "start_url": "/rack-locations.html",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

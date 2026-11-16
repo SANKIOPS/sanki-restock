@@ -11,7 +11,7 @@ test('PWA manifest is valid and all declared icons exist', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'));
   assert.equal(manifest.name, 'SANKI Business OS');
   assert.equal(manifest.display, 'standalone');
-  assert.equal(manifest.start_url, '/rack-locations.html');
+  assert.equal(manifest.start_url, '/');
   assert.ok(Array.isArray(manifest.icons) && manifest.icons.length >= 2);
   for (const icon of manifest.icons) {
     assert.equal(fs.existsSync(path.join(publicDir, icon.src.replace(/^\//, ''))), true, icon.src);

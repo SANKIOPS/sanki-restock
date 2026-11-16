@@ -113,25 +113,24 @@ const ROLES = [
 ];
 const ROLE_IDS = ROLES.map(r => r.id);
 
-// Stock Search is the shared front door on phone and desktop. The user's
-// other pages remain role-gated; this only makes catalogue lookup universally
-// available after sign-in.
+// Role fallback homes are used only when Stock Search is not among that
+// user's permitted pages.
 const ROLE_HOME = {
-  content_team: '/rack-locations.html',
-  admin:       '/rack-locations.html',
-  owner:       '/rack-locations.html',
-  inventory:   '/rack-locations.html',
-  sales:       '/rack-locations.html',
-  procurement: '/rack-locations.html',
-  accounting:  '/rack-locations.html',
-  model_calendar: '/rack-locations.html',
-  samast_accounting: '/rack-locations.html',
-  personal_claimant: '/rack-locations.html',
-  claimant:    '/rack-locations.html',
-  revenue:     '/rack-locations.html',
-  warehouse:   '/rack-locations.html',
+  content_team: '/content-production.html',
+  admin:       '/dashboard.html',
+  owner:       '/owner.html',
+  inventory:   '/dashboard.html',
+  sales:       '/dashboard.html',
+  procurement: '/dashboard.html',
+  accounting:  '/dashboard.html',
+  model_calendar: '/model-calendar.html',
+  samast_accounting: '/expenses.html',
+  personal_claimant: '/expenses.html',
+  claimant:    '/expenses.html',
+  revenue:     '/dashboard.html',
+  warehouse:   '/dashboard.html',
   stocksearch: '/rack-locations.html',
-  special_access: '/rack-locations.html'
+  special_access: '/dashboard.html'
 };
 // '*' = all pages. Otherwise an allow-list of exact page paths. This is the
 // DEFAULT (seed) map — the admin can override it per role (persisted in the
@@ -240,7 +239,7 @@ function hasUserPermission(user, permission) {
   return normalizeUserPermissions(user)[permission] === true;
 }
 
-function landingFor(role) { return ROLE_HOME[role] || '/rack-locations.html'; }
+function landingFor(role) { return ROLE_HOME[role] || '/dashboard.html'; }
 function allowedPagesFor(role) { const a = getRolePages()[role]; return a === '*' ? '*' : (a || []); }
 function roleCanAccessPath(role, p) {
   if(role==='content_team')return p==='/content-production.html';
@@ -255,7 +254,6 @@ function roleCanAccessPath(role, p) {
 // Union access across all of a user's roles.
 function isPrashant(user) { return String(user && user.username || '').trim().toLowerCase() === PRASHANT_USER; }
 function userCanAccessPath(user, p) {
-  if (p === '/rack-locations.html') return true;
   if(rolesOf(user).length===1&&rolesOf(user)[0]==='content_team')return p==='/content-production.html';
   if (p === '/manage.html') {
     // This is only a filtered navigation hub, never a grant to its linked
@@ -275,14 +273,24 @@ function userCanAccessPath(user, p) {
   return rolesOf(user).some(r => roleCanAccessPath(r, p));
 }
 function allowedPagesForUser(user) {
-  if(rolesOf(user).length===1&&rolesOf(user)[0]==='content_team')return ['/rack-locations.html','/content-production.html'];
-  if (isPrashant(user)) return Array.from(new Set(['/rack-locations.html'].concat(PRASHANT_PAGES)));
+  if(rolesOf(user).length===1&&rolesOf(user)[0]==='content_team')return ['/content-production.html'];
+  if (isPrashant(user)) return PRASHANT_PAGES.slice();
   const roles = rolesOf(user);
   if (roles.some(r => getRolePages()[r] === '*')) return '*';
   const set = new Set();
-  set.add('/rack-locations.html');
   roles.forEach(r => { const a = getRolePages()[r]; if (Array.isArray(a)) a.forEach(x => set.add(x)); });
   return Array.from(set);
+}
+
+// Prefer Stock Search only when this exact user is already allowed to use it.
+// Otherwise preserve the role's existing home instead of widening access.
+function landingForUser(user) {
+  if (isPrashant(user)) return '/inventory.html';
+  if (userCanAccessPath(user, '/rack-locations.html')) return '/rack-locations.html';
+  const fallback = landingFor(user && user.role);
+  if (userCanAccessPath(user, fallback)) return fallback;
+  const allowed = allowedPagesForUser(user);
+  return Array.isArray(allowed) && allowed.length ? allowed[0] : fallback;
 }
 
 // ── User store (atomic JSON on the volume) ───────────────────────
@@ -394,7 +402,7 @@ router.post('/api/auth/login', (req, res) => {
     path: '/',
     maxAge: SESSION_TTL_MS
   });
-  res.json({ success: true, username: u.username, role: primary, roles, home: landingFor(primary) });
+  res.json({ success: true, username: u.username, role: primary, roles, home: landingForUser({ ...u, role: primary, roles }) });
 });
 
 router.post('/api/auth/logout', (req, res) => {
@@ -429,7 +437,7 @@ router.post('/api/auth/reset-password', (req, res) => {
   const primary = primaryRole(roles);
   const session = signSession({ u:user.username, r:primary, exp:Date.now() + SESSION_TTL_MS });
   res.cookie(COOKIE, session, { httpOnly:true, secure:true, sameSite:'lax', path:'/', maxAge:SESSION_TTL_MS });
-  res.json({ success:true, home:landingFor(primary) });
+  res.json({ success:true, home:landingForUser({ ...user, role:primary, roles }) });
 });
 
 router.get('/api/auth/me', (req, res) => {
@@ -443,7 +451,7 @@ router.get('/api/auth/me', (req, res) => {
     roles,
     permissions: normalizeUserPermissions(user),
     isAdmin: roles.includes('admin'),
-    home: landingFor(user.role),
+    home: landingForUser(user),
     allowedPages: allowedPagesForUser(user)
   });
 });
@@ -625,7 +633,7 @@ router.post('/api/admin/users/delete', requireAdmin, (req, res) => {
 });
 
 module.exports = {
-  router, seedAdminIfEmpty, verifySession, landingFor, ROLES,
+  router, seedAdminIfEmpty, verifySession, landingFor, landingForUser, ROLES,
   roleCanAccessPath, userCanAccessPath,
   allowedPagesForUser, rolesOf, registerModules, userSummary, listContentPeople,
   PRASHANT_PAGES, isPrashant, USER_PERMISSION_CATALOG, hasUserPermission
