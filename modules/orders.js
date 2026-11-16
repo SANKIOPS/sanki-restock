@@ -47,9 +47,23 @@ const ACCOUNTING_BOUNDARY_PATH = path.join(path.dirname(ORDERS_PATH), 'accountin
 // scan. Incremental Shopify syncs only see recently updated orders, so an order
 // omitted by an older importer would otherwise remain missing forever.
 const ACCOUNTING_ORDER_BACKFILL_VERSION = 4;
+const DEFAULT_INCREMENTAL_LOOKBACK_DAYS = 14;
 function accountingStartAt() {
   try { return String(JSON.parse(fs.readFileSync(ACCOUNTING_BOUNDARY_PATH, 'utf8')).startAt || ''); }
   catch { return ''; }
+}
+
+// A sync watermark is an optimisation, not evidence that Shopify returned every
+// order. Revisit a bounded recent window on every incremental run so a transient
+// API/page failure cannot hide an older POS sale forever. If the last successful
+// sync is older than the window, retain that older point so there is no gap.
+function incrementalSyncStart(lastSyncedAt, now = Date.now(), lookbackDays = DEFAULT_INCREMENTAL_LOOKBACK_DAYS) {
+  const days = Number.isFinite(Number(lookbackDays)) && Number(lookbackDays) > 0
+    ? Number(lookbackDays) : DEFAULT_INCREMENTAL_LOOKBACK_DAYS;
+  const lookback = new Date(Number(now) - days * 86400000).toISOString();
+  const parsed = Date.parse(lastSyncedAt || '');
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() < lookback
+    ? new Date(parsed).toISOString() : lookback;
 }
 
 // Fields we pull from Shopify (keep the payload lean but complete).
@@ -286,24 +300,32 @@ async function runSync(opts = {}) {
     // poller. Manual full backfill still retrieves the entire Shopify history.
     const needsAccountingBackfill = store.sync.accountingOrderBackfillVersion !== ACCOUNTING_ORDER_BACKFILL_VERSION;
     const isBackfill = opts.full === true || Object.keys(store.orders).length === 0 || needsAccountingBackfill;
-    // Incremental syncs re-pull anything updated since a small safety margin
-    // before the last sync (catches edits/refunds/fulfilment changes).
+    // Incremental syncs re-pull a rolling window. This is intentionally wider
+    // than the poll interval: a single omitted Shopify page must self-heal.
     let url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?status=any&limit=250&fields=${ORDER_FIELDS}`;
     if (needsAccountingBackfill && opts.full !== true && Object.keys(store.orders).length > 0) {
       const boundary = accountingStartAt();
       if (boundary) url += `&created_at_min=${encodeURIComponent(boundary)}`;
     } else if (!isBackfill && store.sync.lastSyncedAt) {
-      const since = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // last 10 min margin
-      const min = store.sync.lastSyncedAt < since ? store.sync.lastSyncedAt : since;
+      const configuredDays = parseInt(process.env.ORDERS_SYNC_LOOKBACK_DAYS, 10);
+      const min = incrementalSyncStart(store.sync.lastSyncedAt, Date.now(), configuredDays);
       url += `&updated_at_min=${encodeURIComponent(min)}`;
     }
     const raw = await shopifyFetchAll(url);
     // Orders expose only gateway names. The transaction endpoint is the source
     // of truth for split tenders and gateway-specific refunds, so cache those
     // components with every imported/updated order.
-    const transactionErrors = await enrichOrdersWithTransactions(raw, store);
+    // The wide recovery window must stay cheap. Only call Shopify's per-order
+    // transaction endpoint for a new/changed order or one whose payment evidence
+    // was previously incomplete. Unchanged cached orders retain their evidence.
+    const changedRaw = raw.filter(order => {
+      const previous = store.orders[String(order.id)];
+      return !previous || previous.updatedAt !== (order.updated_at || null)
+        || previous.paymentTransactionSchemaVersion !== 2;
+    });
+    const transactionErrors = await enrichOrdersWithTransactions(changedRaw, store);
     let imported = 0;
-    raw.forEach(o => { store.orders[String(o.id)] = normalizeOrder(o, store.orders[String(o.id)]); imported++; });
+    changedRaw.forEach(o => { store.orders[String(o.id)] = normalizeOrder(o, store.orders[String(o.id)]); imported++; });
     const boundary=accountingStartAt(),missingPaymentDetails=Object.values(store.orders).filter(order=>String(order.createdAt||'')>=boundary&&order.paymentTransactionSchemaVersion!==2);
     await mapWithConcurrency(missingPaymentDetails, 6, async order => {
       try {
@@ -634,8 +656,10 @@ function startAutoSync() {
   const tick = () => runSync().then(r => {
     if (r && r.imported) console.log(`[orders] sync: +${r.imported} (${r.mode}), total ${r.total}`);
   }).catch(e => console.error('[orders] sync error:', e.message));
-  setTimeout(tick, production ? 5 * 60 * 1000 : 15 * 1000);
+  // Recover a recently missed Shopify order soon after a deploy/restart. The
+  // rolling sync is bounded and unchanged orders do not refetch transactions.
+  setTimeout(tick, production ? 30 * 1000 : 15 * 1000);
   setInterval(tick, every);
 }
 
-module.exports = { router, startAutoSync, runSync, normalizeOrder, enrichOrdersWithTransactions, syncVelocityEvidence, syncFinance, syncVelocityPayouts, syncLogistics, syncGoKwik, startGoKwikSync, refreshAccountingCustomerEvidence };
+module.exports = { router, startAutoSync, runSync, normalizeOrder, enrichOrdersWithTransactions, incrementalSyncStart, syncVelocityEvidence, syncFinance, syncVelocityPayouts, syncLogistics, syncGoKwik, startGoKwikSync, refreshAccountingCustomerEvidence };

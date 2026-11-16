@@ -31,6 +31,12 @@ test('one failed Shopify transaction-detail request does not suppress unrelated 
   assert.equal(preserved.paymentTransactionSchemaVersion,2);
 });
 
+test('incremental order sync revisits a rolling window and cannot skip order 2951 permanently', () => {
+  const now=Date.parse('2026-11-16T12:00:00.000Z');
+  assert.equal(orders.incrementalSyncStart('2026-11-16T11:59:00.000Z',now),'2026-11-02T12:00:00.000Z');
+  assert.equal(orders.incrementalSyncStart('2026-10-30T10:00:00.000Z',now),'2026-10-30T10:00:00.000Z');
+});
+
 test('Velocity payout evidence still refreshes when the separate finance feed fails', async () => {
   const result=await orders.syncVelocityEvidence({
     finance:async()=>{throw Error('finance provider unavailable');},

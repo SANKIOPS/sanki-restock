@@ -661,6 +661,14 @@ app.post('/api/webhooks/shopify', (req, res) => {
     saveCache();
     console.log(`[webhook/shopify] ${topic} — ${order.name || order.id}`);
 
+    // The legacy operational cache above is not the accounting sales spine.
+    // Refresh the read-only orders ledger as well so a paid POS Cash order
+    // reaches Counter Cash immediately instead of waiting for the next poll.
+    if (['orders/create','orders/updated','orders/fulfilled'].includes(topic)) {
+      setTimeout(() => require('./modules/orders').runSync()
+        .catch(error => console.error('[orders] webhook accounting sync error:', error.message)), 1000);
+    }
+
     // Trigger Velocity sync if a new AWB arrived
     if (['fulfillments/create','fulfillments/update','orders/fulfilled'].includes(topic)) {
       setTimeout(() => syncVelocityShipments(), 3000);

@@ -10,7 +10,11 @@ function batches(accounting,orders,sales,payouts,from='2026-08-21'){
  const result=[];
  for(const b of payouts){
   if(b.date<from||b.status!=='settled'||!b.allocationsComplete||b.credits||b.otherDeduction)continue;
-  const proof=bankEvidence(accounting,b.utr,b.net,{account:BANK,date:b.date});if(!proof)continue;
+  // A validated, unresolved current statement row is sufficient to display the
+  // provider settlement during Review / Resolve. Finalization will replace this
+  // preview evidence with the immutable bank statement row; nothing is posted
+  // merely by projecting the ledger.
+  const proof=bankEvidence(accounting,b.utr,b.net,{account:BANK,date:b.date,includeDrafts:true});if(!proof)continue;
   const linked=new Map();let valid=true;
   for(const e of b.entries||[]){const ids=byAwb.get(e.awb);if(e.type!=='credit'||ids?.size!==1){valid=false;break;}const id=[...ids][0];linked.set(id,(linked.get(id)||0)+money(e.amount));}
   if(!valid||!linked.size)continue;
