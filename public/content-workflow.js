@@ -11,7 +11,8 @@
  const contentType=i=>/gasolina/i.test(i.title||'')?'Gasolina':videoType(i.type);
  const withContentType=i=>/gasolina/i.test(i.title||'')?{...i,type:'Gasolina'}:i;
  const videoType=t=>TYPES.includes(t)?t:({'Model showcase':'Model aesthetics','Funny':'Funny video'}[t]||'');
- function isPosted(i,publications,account){
+ function isPosted(i,publications=[],account){
+  if(i.postingByAccount&&Object.keys(i.postingByAccount).length){if(!account)return i.accounts.length>0&&i.accounts.every(a=>isPosted(i,publications,a));if(Object.prototype.hasOwnProperty.call(i.postingByAccount,account))return i.postingByAccount[account]==='posted';}
   if(i.postingOverride==='not_posted')return false;
   if(i.postingOverride==='posted')return !account||!i.accounts.length||i.accounts.includes(account);
   if(publications.some(p=>p.contentId===i.id&&(!account||p.account===account)))return true;
@@ -25,7 +26,7 @@
   return i.finalUrl?'post':'file';
  }
  const isVideo=i=>!/^image|photo|carousel$/i.test(i.contentFormat||'');
- function summary(items,publications=[],includeLibrary=false,kind='video'){const videos=items.filter(i=>(includeLibrary||!['Delivery Videos','My Journey'].includes(i.source?.tab))&&!i.archived&&contentKind(i)===kind&&isShot(i)&&(kind==='story'||isVideo(i)));return {total:videos.length,posted:videos.filter(i=>stage(i,publications)==='posted').length,ready:videos.filter(i=>stage(i,publications)==='post').length,notEdited:videos.filter(i=>stage(i,publications)==='edit').length};}
+ function summary(items,publications=[],includeLibrary=false,kind='video',account=''){const videos=items.filter(i=>(includeLibrary||!['Delivery Videos','My Journey'].includes(i.source?.tab))&&!i.archived&&contentKind(i)===kind&&isShot(i)&&(kind==='story'||isVideo(i)));return {total:videos.length,posted:videos.filter(i=>account?isPosted(i,publications,account):stage(i,publications)==='posted').length,ready:videos.filter(i=>account?!!i.finalUrl&&!isPosted(i,publications,account):stage(i,publications)==='post').length,notEdited:videos.filter(i=>stage(i,publications)==='edit').length};}
  function teamActivity(items,from,to,team=[]){
   const groups=new Map(),missing={shot:[],edited:[]};
   const group=n=>{n=personName(n)||'Unassigned';if(!groups.has(n))groups.set(n,{name:n,shot:[],editing:[],edited:[],pending:[],lastUpdate:''});return groups.get(n);};team.forEach(group);
