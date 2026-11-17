@@ -3,6 +3,7 @@
  const personName=v=>String(v||'').trim().toLowerCase().replace(/(^|[\s’'-])\p{L}/gu,c=>c.toUpperCase());
  const modelKey=v=>personName(v).toLowerCase();
  function modelList(items,genders={}){const names=new Map();for(const i of items){if(i.archived)continue;const key=modelKey(i.model);if(!key||key==='all')continue;const row=names.get(key)||{key,name:personName(i.model),count:0,gender:genders[key]||''};if(isShot(i)&&isVideo(i)&&!['Delivery Videos','My Journey'].includes(i.source?.tab))row.count++;names.set(key,row);}return [...names.values()].sort((a,b)=>b.count-a.count||a.name.localeCompare(b.name));}
+ const contentKind=i=>i.contentKind==='story'?'story':'video';
  const editStatus=i=>i.finalUrl?'done':i.editStatus;
  const isShot=i=>i.shootStatus==='shot'||!!i.finalUrl;
  const withFinalStatus=i=>i.finalUrl?{...i,editStatus:'done',shootStatus:'shot'}:i;
@@ -24,12 +25,12 @@
   return i.finalUrl?'post':'file';
  }
  const isVideo=i=>!/^image|photo|carousel$/i.test(i.contentFormat||'');
- function summary(items,publications=[],includeLibrary=false){const videos=items.filter(i=>(includeLibrary||!['Delivery Videos','My Journey'].includes(i.source?.tab))&&!i.archived&&isShot(i)&&isVideo(i));return {total:videos.length,posted:videos.filter(i=>stage(i,publications)==='posted').length,ready:videos.filter(i=>stage(i,publications)==='post').length,notEdited:videos.filter(i=>stage(i,publications)==='edit').length};}
+ function summary(items,publications=[],includeLibrary=false,kind='video'){const videos=items.filter(i=>(includeLibrary||!['Delivery Videos','My Journey'].includes(i.source?.tab))&&!i.archived&&contentKind(i)===kind&&isShot(i)&&(kind==='story'||isVideo(i)));return {total:videos.length,posted:videos.filter(i=>stage(i,publications)==='posted').length,ready:videos.filter(i=>stage(i,publications)==='post').length,notEdited:videos.filter(i=>stage(i,publications)==='edit').length};}
  function teamActivity(items,from,to,team=[]){
   const groups=new Map(),missing={shot:[],edited:[]};
   const group=n=>{n=personName(n)||'Unassigned';if(!groups.has(n))groups.set(n,{name:n,shot:[],editing:[],edited:[],pending:[],lastUpdate:''});return groups.get(n);};team.forEach(group);
   const inRange=d=>!!d&&d>=from&&d<=to;
-  for(const i of items){if(i.archived||!isShot(i)||!isVideo(i)||['Delivery Videos','My Journey'].includes(i.source?.tab))continue;
+  for(const i of items){if(i.archived||!isShot(i)||(contentKind(i)!=='story'&&!isVideo(i))||['Delivery Videos','My Journey'].includes(i.source?.tab))continue;
    const shot=group(i.shotBy||i.shooter||i.source?.shooter),edit=group(i.editedBy||i.editor||i.source?.editor),editedDate=i.editedDate||i.source?.editedDate;
    if(inRange(i.shootDate))shot.shot.push(i.id);if(!i.shootDate)missing.shot.push(i.id);
    if(editStatus(i)==='editing')edit.editing.push(i.id);else if(editStatus(i)==='done'){if(inRange(editedDate))edit.edited.push(i.id);if(!editedDate)missing.edited.push(i.id);}else edit.pending.push(i.id);
@@ -37,5 +38,5 @@
   }
   return {people:[...groups.values()].sort((a,b)=>{const ai=team.map(personName).indexOf(a.name),bi=team.map(personName).indexOf(b.name);return (ai<0?999:ai)-(bi<0?999:bi)||a.name.localeCompare(b.name);}),missing};
  }
- return {contentType,withContentType,editStatus,isShot,withFinalStatus,teamActivity,personName,modelKey,modelList,isPosted,stage,isVideo,summary,TYPES,videoType};
+ return {contentKind,contentType,withContentType,editStatus,isShot,withFinalStatus,teamActivity,personName,modelKey,modelList,isPosted,stage,isVideo,summary,TYPES,videoType};
 });
