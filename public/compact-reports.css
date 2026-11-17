@@ -9,3 +9,14 @@
 #cards tr.profit-total{background:#eaf0e4;font-weight:700}#cards tr.profit-total td:first-child{color:var(--green)}.unit-summary{display:flex;gap:12px 24px;flex-wrap:wrap;padding:16px 0}.unit-summary[hidden]{display:none}.unit-summary .drill{font-size:14px}
 
 #detailRows .economics-detail-table{min-width:850px;width:100%;table-layout:auto}#detailRows .economics-detail-table td{white-space:normal;overflow-wrap:anywhere}#detailRows .economics-detail-table th{white-space:normal}#detailRows .economics-detail-table td:last-child{font-weight:600}
+
+/* One monthly workbook: keep figures aligned and retain horizontal scrolling. */
+.samast-monthly-table{min-width:1250px}
+.samast-monthly-table th,.samast-monthly-table td{white-space:nowrap;padding:12px 10px}
+.samast-monthly-table th{white-space:normal;min-width:110px}
+.samast-monthly-table th:first-child,.samast-monthly-table td:first-child{position:sticky;left:0;z-index:1;background:var(--ivory,#faf8ef);min-width:170px}
+.samast-monthly-table th:first-child{z-index:2}
+.samast-monthly-table td:nth-child(5),.samast-monthly-table td:nth-child(8){background:#eaf0e4;font-weight:700}
+.samast-monthly-table tbody tr:last-child td{font-weight:700;border-top:2px solid var(--green,#087354)}
+
+.samast-monthly-table td:first-child .drill{white-space:normal;max-width:170px}.samast-monthly-table td:not(:first-child) .drill{font-size:12px}
