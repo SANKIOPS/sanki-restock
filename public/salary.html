@@ -342,20 +342,23 @@
       var dim = d.daysInMonth, att = d.attendance||{};
       var weekShort=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'],headDays=''; for(var i=1;i<=dim;i++){var hd=new Date(state.ym+'-'+pad(i)+'T00:00:00'),hw=weekShort[hd.getDay()];headDays += '<th class="'+(hw==='Sun'?'cal-sunday':'')+'" title="'+esc(i+' '+hw+' · '+ymLabel(state.ym))+'">'+i+'<div style="font-size:8px">'+hw+'</div></th>';}
       var body = d.rows.map(function(r,index){
-        var cells='';
+        var cells='',presentDays=0,absentDays=0,halfDays=0;
         for(var day=1; day<=dim; day++){
           var dd = pad(day);
           var m = (att[r.id]||{})[dd] || '';
+          if(m==='P')presentDays+=1;
+          else if(m==='A')absentDays+=1;
+          else if(m==='H'||m==='HD')halfDays+=1;
           var isoDate=state.ym+'-'+dd,dt=new Date(isoDate+'T00:00:00'),weekday=weekShort[dt.getDay()],fullDate=dd+' '+weekday+' · '+ymLabel(state.ym),outside=(r.joiningDate&&isoDate<r.joiningDate)||(r.lastWorkingDate&&isoDate>r.lastWorkingDate),calendarClass=outside?'not-employed':(weekday==='Sun'?'cal-sunday':(r.weekOffDay===['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dt.getDay()]?'cal-weekoff':''));
           cells += '<td class="daycell '+calendarClass+' '+(m?('m-'+m):'')+'" tabindex="0" data-emp="'+r.id+'" data-name="'+esc(r.name)+'" data-day="'+dd+'" data-date="'+esc(fullDate)+'" data-disabled="'+(outside?'1':'')+'" title="'+esc(r.name+' · '+fullDate+(outside?' · outside employment period':(calendarClass==='cal-weekoff'?' · assigned weekly off':'')))+'">'+(outside?'×':(m||'·'))+'</td>';
         }
         var pdShown = r.computedPaidDays!=null ? r.computedPaidDays : '—';
-        return '<tr><td>'+(index+1)+'</td><td class="l" style="white-space:nowrap"><b>'+esc(r.name)+'</b></td>'+cells+'<td><b>'+pdShown+'</b></td></tr>';
+        return '<tr><td>'+(index+1)+'</td><td class="l" style="white-space:nowrap"><b>'+esc(r.name)+'</b></td>'+cells+'<td><b>'+presentDays+'</b></td><td><b>'+absentDays+'</b></td><td><b>'+halfDays+'</b></td><td><b>'+pdShown+'</b></td></tr>';
       }).join('');
       el('host').innerHTML =
         '<div class="card" id="attendanceCellInfo" role="status" style="position:sticky;top:0;z-index:5;background:#fff;padding:12px;margin-bottom:8px;border:1px solid #d1d5db">'+esc(state.attendanceInfo||'Click a date to choose a mark. Then click Enter to confirm it.')+'</div>'+
         '<div class="card"><table class="att">'+
-          '<thead><tr><th>S.No.</th><th class="l">Name</th>'+headDays+'<th>Paid days</th></tr></thead>'+
+          '<thead><tr><th>S.No.</th><th class="l">Name</th>'+headDays+'<th>Present days</th><th>Absent days</th><th>Half days</th><th>Paid days</th></tr></thead>'+
           '<tbody>'+body+'</tbody>'+
         '</table></div>'+
         '<div class="legend">Click a cell to choose a mark, then click Enter above the table to review and confirm (keyboard Enter also works): '+
