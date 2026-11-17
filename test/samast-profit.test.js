@@ -20,3 +20,20 @@ test('draft rental receipts excluded and rounded component split preserves bank 
  const r=build(src,options).samastProfit;assert.equal(r.entries.length,1);assert.equal(r.months[0].baseRent,0);const e=r.entries[0];assert.equal(Math.round((e.baseRent+e.gst-e.tds)*100),10000);assert.equal(e.received,100);
  assert.equal(build(sources(),{...options,entity:'PERSONAL'}).samastProfit,undefined);
 });
+test('actual GST and income tax payments are separate from profit and rent tax components; unpaid and personal tax excluded',()=>{
+ const src=sources(),s=src.expenses;
+ s.receipts=[{id:'RENT',nature:'SAMAST',receiptType:'rental_income',amount:108000,date:'2026-09-05'}];
+ s.expenses.GST=cost('GST','SAMAST',74428,'GST Fee');s.expenses.GST.particulars='GST/26100700531448 /GST';
+ s.expenses.GST2=cost('GST2','SAMAST',1000,'GST payment');s.expenses.IT=cost('IT','SAMAST',2500,'Self assessed income tax');
+ s.expenses.IT2=cost('IT2','SAMAST',500,'Self Assessed I.T.');s.expenses.FEE=cost('FEE','SAMAST',2000,'GST filing service');
+ s.expenses.P=cost('P','PERSONAL',6000,'Income Tax');s.expenses.U={...cost('U','SAMAST',9000,'Income Tax'),status:'pending',payments:[]};
+ const before=JSON.stringify(src),r=build(src,options).samastProfit;
+ assert.equal(r.totals.received,108000);assert.equal(r.totals.baseRent,100000);assert.equal(r.totals.gst,18000);assert.equal(r.totals.tds,10000);
+ assert.equal(r.totals.gstPaid,75428);assert.equal(r.totals.incomeTaxPaid,3000);assert.equal(r.totals.expense,2000);assert.equal(r.totals.profit,98000);
+ assert.equal(r.entries.filter(e=>e.profitKind==='tax').length,4);assert.equal(JSON.stringify(src),before);
+});
+test('income tax compliance fees remain operating costs, not income tax paid',()=>{
+ const {taxKind}=require('../modules/samast-profit');
+ for(const ledger of ['Income tax filing fees','Income tax professional service','GST Fee'])assert.equal(taxKind({ledger}), '');
+ assert.equal(taxKind({ledger:'GST Fee',reconciliationSource:{bankDescription:'GST/123/GST'}}),'gstPaid');
+});

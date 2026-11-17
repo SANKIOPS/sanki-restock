@@ -24,3 +24,13 @@ test('compact report reads do not migrate or write financial source and reject u
  const forbidden=await invoke('/api/expenses/compact-report',{entity:'PERSONAL',from:'2026-08-22',to:'2026-11-13'},{role:'accounting',roles:['accounting'],username:'staff',permissions:{}});assert.equal(forbidden.status,403);
  const personal=await invoke('/api/expenses/compact-report',{entity:'PERSONAL',from:'2026-08-22',to:'2026-11-13'},{role:'admin',roles:['admin'],username:'admin',permissions:{}});assert.equal(personal.status,403);
 });
+test('Samast report refresh reads latest payroll file, counts linked salaries once and never writes source or balances',async()=>{
+ const query={entity:'SAMAST',from:'2026-08-22',to:'2026-11-13'},salaryFile=path.join(dir,'salary-samast.json');
+ const raw=fs.readFileSync(file,'utf8'),empty=await invoke('/api/expenses/compact-report',query);
+ const payroll={employees:{},salaryPayments:[{id:'LIVE-SAL',date:'2026-10-15',amount:1200,employeeName:'Samast guard',account:'IndusInd Bank 7883',entity:'SAMAST'}]};
+ fs.writeFileSync(salaryFile,JSON.stringify(payroll));const paid=await invoke('/api/expenses/compact-report',query);
+ assert.equal(paid.body.samastProfit.totals.salary,1200);assert.equal(paid.body.samastProfit.totals.expense,empty.body.samastProfit.totals.expense);
+ payroll.salaryPayments[0].amount=1300;fs.writeFileSync(salaryFile,JSON.stringify(payroll));const fresh=await invoke('/api/expenses/compact-report',query);
+ assert.equal(fresh.body.samastProfit.totals.salary,1300);assert.equal(fresh.body.samastProfit.entries.filter(e=>e.profitKind==='salary').length,1);
+ assert.equal(fs.readFileSync(file,'utf8'),raw);assert.equal(fs.readFileSync(salaryFile,'utf8'),JSON.stringify(payroll));
+});

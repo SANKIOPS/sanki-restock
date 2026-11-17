@@ -120,8 +120,9 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
   }else{
     // Reuse tested paid-cost/refund allocation rules, with a report-local copy.
     // No source nature, payment, date, evidence, or ledger is saved or retagged.
-    const virtual={...s,expenses:Object.fromEntries(Object.entries(s.expenses||{}).filter(([,r])=>match(r)&&!balanceCost.test(r.ledger||r.category||'')).map(([id,r])=>[id,{...r,nature:'SANKI'}])),receipts:[],salesRefunds:[],receivables:{},
-      reconciliationExpenses:list(s.reconciliationExpenses).filter(r=>match(r)&&!balanceCost.test(r.category||r.ledger||'')).map(r=>({...r,nature:'SANKI'})),
+    const reportCost=r=>!balanceCost.test(r.ledger||r.category||'')||(entity==='SAMAST'&&require('./samast-profit').taxKind(r));
+    const virtual={...s,expenses:Object.fromEntries(Object.entries(s.expenses||{}).filter(([,r])=>match(r)&&reportCost(r)).map(([id,r])=>[id,{...r,nature:'SANKI'}])),receipts:[],salesRefunds:[],receivables:{},
+      reconciliationExpenses:list(s.reconciliationExpenses).filter(r=>match(r)&&reportCost(r)).map(r=>({...r,nature:'SANKI'})),
       vendorAdvances:list(s.vendorAdvances).filter(match).map(r=>({...r,nature:'SANKI'})),expenseRefunds:list(s.expenseRefunds).filter(match).map(r=>({...r,nature:'SANKI'})),loanRepayments:list(s.loanRepayments).filter(match).map(r=>({...r,nature:'SANKI'}))};
     const salary=entity==='SAMAST'?sources.samastSalary:{};
     const report=buildReport({...sources,expenses:virtual,orders:{orders:{},dispatch:{}},manualSales:{sales:[]},purchases:{pos:{}},salary:salary||{},incentives:{payments:[]},lineCorrections:{},shopifyCosts:{items:[]}},{from,to,start:START,channel:'All'});
