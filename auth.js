@@ -155,6 +155,7 @@ function apiAllowedForUser(user, p, method='GET') {
     return rolesOf(user).includes('owner') || hasUserPermission(user, 'metaAds');
   }
   if (isPrashant(user)) {
+    if(p==='/api/content-production'||p.startsWith('/api/content-production/'))return method==='GET'&&['/api/content-production','/api/content-production/revision','/api/content-production/catalogue','/api/content-production/delete-requests'].includes(p)||method==='POST'&&/^\/api\/content-production\/delete-requests\/[^/]+\/decision$/.test(p);
     const allowed = [
       '/api/auth/me', '/api/modules',
       '/api/inventory-care', '/api/stock-movements', '/api/inventory-costs', '/api/inventory-categorization',

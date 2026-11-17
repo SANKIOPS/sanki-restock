@@ -7,6 +7,8 @@
  const isShot=i=>i.shootStatus==='shot'||!!i.finalUrl;
  const withFinalStatus=i=>i.finalUrl?{...i,editStatus:'done',shootStatus:'shot'}:i;
  const TYPES=['Model aesthetics','UGC','Funny video','Product only','Gasolina'];
+ const contentType=i=>/gasolina/i.test(i.title||'')?'Gasolina':videoType(i.type);
+ const withContentType=i=>/gasolina/i.test(i.title||'')?{...i,type:'Gasolina'}:i;
  const videoType=t=>TYPES.includes(t)?t:({'Model showcase':'Model aesthetics','Funny':'Funny video'}[t]||'');
  function isPosted(i,publications,account){
   if(i.postingOverride==='not_posted')return false;
@@ -35,5 +37,5 @@
   }
   return {people:[...groups.values()].sort((a,b)=>{const ai=team.map(personName).indexOf(a.name),bi=team.map(personName).indexOf(b.name);return (ai<0?999:ai)-(bi<0?999:bi)||a.name.localeCompare(b.name);}),missing};
  }
- return {editStatus,isShot,withFinalStatus,teamActivity,personName,modelKey,modelList,isPosted,stage,isVideo,summary,TYPES,videoType};
+ return {contentType,withContentType,editStatus,isShot,withFinalStatus,teamActivity,personName,modelKey,modelList,isPosted,stage,isVideo,summary,TYPES,videoType};
 });

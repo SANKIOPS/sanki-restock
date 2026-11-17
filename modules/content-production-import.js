@@ -1,5 +1,5 @@
 'use strict';
-const XLSX=require('xlsx'),crypto=require('crypto');
+const XLSX=require('xlsx'),crypto=require('crypto'),workflow=require('../public/content-workflow');
 const tabs=['Femme','Homme','Fashion','UGC','Funny Videos','Delivery Videos','My Journey'];
 function parse(buffer){
  const book=XLSX.read(buffer,{type:'buffer',cellDates:false}),records=[],warnings=[],seen=new Map();let skipped=0;
@@ -23,6 +23,6 @@ function parse(buffer){
    records.push({sourceKey:'sheet-'+key,title:title||type,accounts:account?[account]:[],type,contentFormat:value(cells[journey?5:delivery?10:1]),productIds:[],model,shootDate:date(cells[journey?7:delivery?2:5]),dueDate:'',shootStatus:!!final||journey||delivery||/^done$/i.test(value(cells[3]))?'shot':'planned',editStatus,shooter:'',editor:'',publisher:'',rawUrl:raw,finalUrl:final,notes,adIds:[],shootId:'',adCreative:delivery,source:{tab:name,row:r+1,editStatus:journey?'':delivery?value(cells[11]):originalEdit,editedDate:date(cells[delivery?4:9]),editor:value(cells[delivery?3:8]),shooter:value(cells[delivery?1:4]),posted:post,productSkus:delivery?value(cells[6]):'',links:cells.flatMap((c,i)=>link(c)?[{column:i+1,label:value(c),url:link(c)}]:[])}});
   }
  }
- return {records,warnings,skipped,ignoredTabs:book.SheetNames.filter(n=>!tabs.includes(n))};
+ return {records:records.map(workflow.withContentType),warnings,skipped,ignoredTabs:book.SheetNames.filter(n=>!tabs.includes(n))};
 }
 module.exports={parse};

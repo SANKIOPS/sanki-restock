@@ -262,7 +262,7 @@ test('Prashant sees only the requested operational workspace even with an Admin 
     'inventory-dashboard','inventory-care',
     'procurement','fresh-proc','size-tracker',
     'compact-reports','pl','rentals','expenses','salary','incentives',
-    'model-calendar'
+    'model-calendar','content-production'
   ]);
   for(const page of ['/inventory.html','/inventory-care.html','/procurement.html','/fresh-procurement.html','/size-tracker.html','/pnl.html','/rentals.html','/expenses.html','/salary.html','/incentives.html','/model-calendar.html']){
     assert.equal(userCanAccessPath(p,page),true,page);
@@ -290,3 +290,5 @@ test('Stock Search is preferred only for users who already have access',()=>{
   assert.equal(landingForUser(user('model_calendar')),'/model-calendar.html');
   assert.equal(landingForUser(user('content_team')),'/content-production.html');
 });
+
+test('Prashant content access is limited to deletion review',()=>{const p={username:'prashant',roles:['admin'],role:'admin'};assert.equal(userCanAccessPath(p,'/content-production.html'),true);assert.equal(apiAllowedForUser(p,'/api/content-production/delete-requests','GET'),true);assert.equal(apiAllowedForUser(p,'/api/content-production/delete-requests/abc/decision','POST'),true);for(const [path,method] of [['/api/content-production/items','POST'],['/api/content-production/items/abc','PATCH'],['/api/content-production/settings','POST'],['/api/content-production/import','POST'],['/api/content-production/shoots','GET']])assert.equal(apiAllowedForUser(p,path,method),false,path);});

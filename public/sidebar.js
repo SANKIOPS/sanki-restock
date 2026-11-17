@@ -159,6 +159,10 @@
     if (!me || !me.success) return;      // not logged in — leave optimistic render
     aside.innerHTML = render(navFromModules(mods,me), me);
     wireLogout();
+    if (((me.roles || [me.role]).includes('owner') || String(me.username||'').toLowerCase()==='prashant') && !document.querySelector('script[data-content-deletions]')) {
+      var deletionScript=document.createElement('script');deletionScript.src='/content-deletion-notifications.js?v=20261117';deletionScript.dataset.contentDeletions='1';document.head.appendChild(deletionScript);
+    }
+
     if ((me.roles || [me.role]).includes('owner') && !document.querySelector('script[data-rental-notifications]')) {
       var rentalScript = document.createElement('script');
       rentalScript.src = '/rental-notifications.js?v=20261001';

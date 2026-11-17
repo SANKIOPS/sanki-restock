@@ -43,7 +43,7 @@ const PRASHANT_PAGES = [
   '/inventory.html', '/inventory-care.html',
   '/procurement.html', '/fresh-procurement.html', '/size-tracker.html',
   '/pnl.html', '/compact-reports.html', '/rentals.html', '/expenses.html', '/salary.html', '/incentives.html',
-  '/model-calendar.html'
+  '/model-calendar.html', '/content-production.html'
 ];
 // Per-user switches are intentionally separate from roles. Roles decide which
 // modules a person can open; these switches grant access to sensitive data
