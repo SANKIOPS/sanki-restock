@@ -90,6 +90,7 @@ test('central auth gate protects the model API',()=>{for(const role of ['owner',
 test('Model Calendar role manages bookings and views payments without expense authority',async()=>{
  const role='model_calendar',user={roles:[role]},authUsers=require('../modules/auth-users');
  assert.equal(authUsers.landingFor(role),'/model-calendar.html');
+ assert.equal(authUsers.landingForUser({username:'coordinator',role,roles:[role]}),'/model-calendar.html');
  assert.equal(authUsers.roleCanAccessPath(role,'/model-calendar.html'),true);
  assert.equal(authUsers.roleCanAccessPath(role,'/expenses.html'),false);
  assert.equal(apiAllowedForUser(user,'/api/model-calendar/bookings'),true);

@@ -118,7 +118,7 @@
         .then(function (d) {
           if (d && d.success) {
             show('Welcome, ' + d.username + '!', 'ok');
-            location.href = d.home || '/index.html';
+            location.href = d.home || '/';
           } else {
             btn.disabled = false;
             show((d && d.error) || 'Sign in failed', 'err');

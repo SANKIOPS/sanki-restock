@@ -113,9 +113,8 @@ const ROLES = [
 ];
 const ROLE_IDS = ROLES.map(r => r.id);
 
-// Everyone now lands on the clean launcher; it self-filters the tiles a
-// role may see via /api/modules. (The old per-role landing pages are all
-// still reachable — they're just not the front door anymore.)
+// Role fallback homes are used only when Stock Search is not among that
+// user's permitted pages.
 const ROLE_HOME = {
   content_team: '/content-production.html',
   admin:       '/dashboard.html',
@@ -283,6 +282,17 @@ function allowedPagesForUser(user) {
   return Array.from(set);
 }
 
+// Prefer Stock Search only when this exact user is already allowed to use it.
+// Otherwise preserve the role's existing home instead of widening access.
+function landingForUser(user) {
+  if (isPrashant(user)) return '/inventory.html';
+  if (userCanAccessPath(user, '/rack-locations.html')) return '/rack-locations.html';
+  const fallback = landingFor(user && user.role);
+  if (userCanAccessPath(user, fallback)) return fallback;
+  const allowed = allowedPagesForUser(user);
+  return Array.isArray(allowed) && allowed.length ? allowed[0] : fallback;
+}
+
 // ── User store (atomic JSON on the volume) ───────────────────────
 function atomicWrite(filePath, data) {
   const tmp = filePath + '.tmp-' + process.pid + '-' + Date.now();
@@ -392,7 +402,7 @@ router.post('/api/auth/login', (req, res) => {
     path: '/',
     maxAge: SESSION_TTL_MS
   });
-  res.json({ success: true, username: u.username, role: primary, roles, home: landingFor(primary) });
+  res.json({ success: true, username: u.username, role: primary, roles, home: landingForUser({ ...u, role: primary, roles }) });
 });
 
 router.post('/api/auth/logout', (req, res) => {
@@ -427,7 +437,7 @@ router.post('/api/auth/reset-password', (req, res) => {
   const primary = primaryRole(roles);
   const session = signSession({ u:user.username, r:primary, exp:Date.now() + SESSION_TTL_MS });
   res.cookie(COOKIE, session, { httpOnly:true, secure:true, sameSite:'lax', path:'/', maxAge:SESSION_TTL_MS });
-  res.json({ success:true, home:landingFor(primary) });
+  res.json({ success:true, home:landingForUser({ ...user, role:primary, roles }) });
 });
 
 router.get('/api/auth/me', (req, res) => {
@@ -441,7 +451,7 @@ router.get('/api/auth/me', (req, res) => {
     roles,
     permissions: normalizeUserPermissions(user),
     isAdmin: roles.includes('admin'),
-    home: landingFor(user.role),
+    home: landingForUser(user),
     allowedPages: allowedPagesForUser(user)
   });
 });
@@ -623,7 +633,7 @@ router.post('/api/admin/users/delete', requireAdmin, (req, res) => {
 });
 
 module.exports = {
-  router, seedAdminIfEmpty, verifySession, landingFor, ROLES,
+  router, seedAdminIfEmpty, verifySession, landingFor, landingForUser, ROLES,
   roleCanAccessPath, userCanAccessPath,
   allowedPagesForUser, rolesOf, registerModules, userSummary, listContentPeople,
   PRASHANT_PAGES, isPrashant, USER_PERMISSION_CATALOG, hasUserPermission
