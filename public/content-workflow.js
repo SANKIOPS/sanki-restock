@@ -6,7 +6,7 @@
  const editStatus=i=>i.finalUrl?'done':i.editStatus;
  const isShot=i=>i.shootStatus==='shot'||!!i.finalUrl;
  const withFinalStatus=i=>i.finalUrl?{...i,editStatus:'done',shootStatus:'shot'}:i;
- const TYPES=['Model aesthetics','UGC','Funny video','Product only'];
+ const TYPES=['Model aesthetics','UGC','Funny video','Product only','Gasolina'];
  const videoType=t=>TYPES.includes(t)?t:({'Model showcase':'Model aesthetics','Funny':'Funny video'}[t]||'');
  function isPosted(i,publications,account){
   if(i.postingOverride==='not_posted')return false;
