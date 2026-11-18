@@ -102,7 +102,7 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
   if(unit&&!reportingUnit)throw Object.assign(Error('Choose a valid reporting unit.'),{status:400});
   if(reportingUnit&&entity!=='PERSONAL')throw Object.assign(Error('Sewak Park Hotel reporting is available only inside PERSONAL accounting.'),{status:400});
   if(reportingUnit===hotel.UNIT)return buildHotel(sources,{entity,from,to,accounts});
-  const add=(kind,r,amount)=>rows.push({id:r.id,reference:r.reference||r.id,date:r.date,kind,entity,account:r.account||'',category:r.category||r.ledger||kind,description:r.description||r.particulars||r.source||r.vendor||'',amount:money(amount)});
+  const add=(kind,r,amount)=>rows.push({id:r.id,reference:r.reference||r.id,date:r.date,kind,sourceKind:r.kind||kind,entity,account:r.account||'',category:r.category||r.ledger||kind,description:r.description||r.particulars||r.source||r.vendor||'',amount:money(amount)});
   const confirmedRepayments=require('./confirmed-card-repayments').confirmed(sources.creditCards,s);
   const otherMovements=[];for(const e of list(s.expenses).filter(r=>active(r)&&match(r)&&balanceCost.test(r.ledger||r.category||''))){for(const p of list(e.payments).filter(p=>active(p)&&inRange(p,from,to))){otherMovements.push({id:e.id+'/'+p.id,date:p.date,category:e.ledger||e.category,description:e.particulars||e.vendor||'',account:p.account||e.account||'',amount:money(p.amount)});}}
   for(const r of otherMovements){const evidence=confirmedRepayments.get(r.id);if(evidence){r.treatment='Confirmed credit-card repayment';r.statementId=evidence.statementId;r.cardId=evidence.cardId;}}
@@ -116,7 +116,7 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
     expenses=report.totals.expenses;cogs=report.totals.cogs;result=report.totals.netProfit;
     warnings.push(...report.warnings.map(w=>w.reference+': '+w.message));
     basis=report.basis;resultLabel='Management profit';
-    for(const r of report.transactions){if(r.netSales||r.otherIncome||r.grossSales)add('income',r,r.netSales==null?0:r.netSales+r.otherIncome);if(r.expenses)add('expense',r,r.expenses);if(r.cogs)add('cost_of_sales',r,r.cogs);}
+    for(const r of report.transactions){if(r.netSales||r.otherIncome||r.grossSales)add('income',r,r.netSales==null?0:r.netSales+r.otherIncome);if(r.expenses)add('expense',r,r.expenses);if(r.cogs)add('cost_of_sales',{...r,category:'COGS'},r.cogs);}
   }else{
     // Reuse tested paid-cost/refund allocation rules, with a report-local copy.
     // No source nature, payment, date, evidence, or ledger is saved or retagged.
