@@ -50,6 +50,7 @@ const PRASHANT_PAGES = [
 // inside an allowed module. Add future switches here so the Owner gets one
 // consistent on/off panel instead of username-specific exceptions.
 const USER_PERMISSION_CATALOG = [
+  {id: 'contentPOA', label: 'Content — create & manage Daily POA', description: 'Create and assign daily content plans. Requires Content & Posting access. Default access: Owner and Janvi.'},
   {
     id: 'personalAccounting',
     label: 'Personal accounting — full access',
@@ -233,7 +234,7 @@ function rolesOf(user) {
 }
 function normalizeUserPermissions(user) {
   const source = user && user.permissions && typeof user.permissions === 'object' ? user.permissions : {};
-  return Object.fromEntries(USER_PERMISSION_IDS.map(id => [id, source[id] === true]));
+  return Object.fromEntries(USER_PERMISSION_IDS.map(id => [id, (source[id] === true || (id === 'contentPOA' && !Object.prototype.hasOwnProperty.call(source,id) && String(user?.username||'').toLowerCase() === 'janvi'))]));
 }
 function hasUserPermission(user, permission) {
   return normalizeUserPermissions(user)[permission] === true;
