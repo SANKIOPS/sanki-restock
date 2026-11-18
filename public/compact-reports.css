@@ -9,3 +9,15 @@
 #cards tr.profit-total{background:#eaf0e4;font-weight:700}#cards tr.profit-total td:first-child{color:var(--green)}.unit-summary{display:flex;gap:12px 24px;flex-wrap:wrap;padding:16px 0}.unit-summary[hidden]{display:none}.unit-summary .drill{font-size:14px}
 
 #detailRows .economics-detail-table{min-width:850px;width:100%;table-layout:auto}#detailRows .economics-detail-table td{white-space:normal;overflow-wrap:anywhere}#detailRows .economics-detail-table th{white-space:normal}#detailRows .economics-detail-table td:last-child{font-weight:600}
+
+/* Fixed-width monthly columns fit together on desktop; amounts retain paise. */
+#samastMonths{max-height:none}
+.samast-monthly-table{width:100%;min-width:0;table-layout:fixed;font-size:clamp(10px,.85vw,12px)}
+.samast-monthly-table th,.samast-monthly-table td{min-width:0;padding:9px 4px;text-align:right;font-size:inherit;white-space:nowrap}
+.samast-monthly-table th{white-space:normal;letter-spacing:0;font-size:10px;line-height:1.4}
+.samast-monthly-table th:first-child,.samast-monthly-table td:first-child{width:10%;text-align:left;white-space:normal}
+.samast-monthly-table .drill{font-size:inherit;max-width:100%;min-height:32px;text-align:inherit}
+.samast-monthly-table td:first-child .drill{white-space:normal}
+.samast-monthly-table td:nth-child(5),.samast-monthly-table td:nth-child(8){background:#eaf0e4;font-weight:700}
+.samast-monthly-table tbody tr:last-child td{font-weight:700;border-top:2px solid var(--green)}
+@media(max-width:850px){.samast-monthly-table{min-width:800px}}
