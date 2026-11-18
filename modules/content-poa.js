@@ -3,6 +3,7 @@ const crypto=require('crypto'),w=require('../public/content-workflow');
 const {rolesOf,hasUserPermission}=require('./auth-users');
 const canPlan=u=>rolesOf(u).includes('owner')||hasUserPermission(u,'contentPOA');
 const owns=u=>rolesOf(u).includes('owner');
+const canDelete=u=>owns(u)||u.username==='janvi';
 const fail=(m,status=400)=>{throw Object.assign(Error(m),{status});};
 const text=(v,n=1000)=>String(v??'').trim().slice(0,n);
 const SOP={lighting:'Check lighting before recording. Avoid unwanted shadows, flickering lights and reflections.',transitions:'Match the action across transitions. Keep transitions smooth and synchronise cuts with the music’s beat.',funny:'Use suitable sound effects and highlight facial reactions to strengthen the humour.'};
@@ -10,12 +11,12 @@ function progress(task,items,publications=[]){const rows=items.filter(i=>i.poaId
 function assigned(t,u){return [...t.shooters,t.editor,t.publisher,...Object.values(t.castLogins||{})].includes(u.username);}
 function unassigned(t){return !(t.shooters||[]).length&&!t.editor&&!t.publisher;}
 function canWork(t,u){return canPlan(u)||rolesOf(u).includes('content_team')&&(unassigned(t)||[...(t.shooters||[]),t.editor,t.publisher].includes(u.username));}
-function visible(t,u){return canWork(t,u)||assigned(t,u);}
+function visible(t,u){return (!t.deleted||canDelete(u))&&(canWork(t,u)||assigned(t,u)||canDelete(u));}
 function attach({load,change,users,catalog,baseModels=[],people=()=>[]}){
  function roster(s){const map=new Map();for(const label of ['Mili','Krishnakant','Janvi','Prashant','Shivam']){const login=users(label.toLowerCase());map.set(label.toLowerCase(),{name:label,username:login?.username||''});}for(const r of s.poaCastMembers||[])map.set(r.name.toLowerCase(),r);return [...map.values()];}
  function addCast(b,u){if(!canPlan(u))fail('POA creation permission is required.',403);const result=change(b.revision,u.username,s=>{const label=w.personName(text(b.name,120));if(!label||label.toLowerCase()==='n/a')fail('Enter a cast member name.');if(roster(s).some(r=>r.name.toLowerCase()===label.toLowerCase()))fail('This cast member is already listed.');const login=text(b.username,100);if(login&&!users(login))fail('Select an existing login.');s.poaCastMembers=s.poaCastMembers||[];s.poaCastMembers.push({name:label,username:login,createdBy:u.username});return {action:'poa_cast_add',id:label};});return {...result,castRoster:roster(load())};}
 
- function save(b,u,id){if(!id&&!canPlan(u))fail('POA creation permission is required.',403);return change(b.revision,u.username,s=>{s.poas=s.poas||[];const old=id?s.poas.find(t=>t.id===id):null;if(id&&!old)fail('POA not found.',404);if(old&&!canPlan(u)&&(!canWork(old,u)||old.archived))fail('This task is not available for you to edit.',403);if(old&&b.expectedUpdatedAt&&b.expectedUpdatedAt!==old.updatedAt)fail('This POA was changed by someone else. Close and reopen it to review the latest version.',409);const body={...old,...b};
+ function save(b,u,id){if(!id&&!canPlan(u))fail('POA creation permission is required.',403);return change(b.revision,u.username,s=>{s.poas=s.poas||[];const old=id?s.poas.find(t=>t.id===id):null;if(id&&!old)fail('POA not found.',404);if(old?.deleted)fail('Restore this POA before editing it.');if(old&&!canPlan(u)&&(!canWork(old,u)||old.archived))fail('This task is not available for you to edit.',403);if(old&&b.expectedUpdatedAt&&b.expectedUpdatedAt!==old.updatedAt)fail('This POA was changed by someone else. Close and reopen it to review the latest version.',409);const body={...old,...b};
  const date=text(body.date,10);if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date)fail('Choose a valid work date.');
  if(!Array.isArray(body.accounts)||!body.accounts.length||body.accounts.some(a=>!['Femme','Homme','Fashion'].includes(a)))fail('Select posting accounts.');
  if(!['video','story'].includes(body.contentKind)||!w.TYPES.includes(body.type))fail('Choose a format and content type.');
@@ -29,8 +30,9 @@ function attach({load,change,users,catalog,baseModels=[],people=()=>[]}){
  const now=new Date().toISOString(),t={...old,id:old?.id||crypto.randomUUID(),date,title,accounts:[...new Set(body.accounts)],contentKind:body.contentKind,type:body.type,quantity,shooters,editor,publisher,productIds,castMembers,castNotApplicable,cast:castMembers.join(', ')||'N/A',castLogins,actorProducts,scriptMode,script,...fields,instructions:text(body.instructions,4000),createdAt:old?.createdAt||now,createdBy:old?.createdBy||u.username,updatedAt:now,updatedBy:u.username,archived:old?.archived||false};
  if(progress(t,s.items,s.publications).linked>quantity)fail('Quantity cannot be less than the number of linked entries.');
  t.history=[...(old?.history||[]),{at:now,by:u.username,action:old?'updated':'created'}];if(old)Object.assign(old,t);else s.poas.push(t);return {action:old?'poa_update':'poa_create',id:t.id};});}
- function view(u){const s=load();return {tasks:(s.poas||[]).filter(t=>visible(t,u)).map(t=>({...t,poaNumber:(s.poas||[]).findIndex(p=>p.id===t.id)+1,progress:progress(t,s.items,s.publications),canEdit:!t.archived&&canWork(t,u),unassigned:unassigned(t),canRecord:!t.archived&&canWork(t,u)})),canCreate:canPlan(u),castRoster:roster(s),sops:SOP};}
+ function view(u){const s=load();return {tasks:(s.poas||[]).filter(t=>visible(t,u)).map(t=>({...t,poaNumber:(s.poas||[]).findIndex(p=>p.id===t.id)+1,progress:progress(t,s.items,s.publications),canEdit:!t.deleted&&!t.archived&&canWork(t,u),unassigned:unassigned(t),canRecord:!t.deleted&&!t.archived&&canWork(t,u)})),canCreate:canPlan(u),canDelete:canDelete(u),castRoster:roster(s),sops:SOP};}
  function archive(b,u,id){if(!canPlan(u))fail('POA creation permission is required.',403);return change(b.revision,u.username,s=>{const t=(s.poas||[]).find(t=>t.id===id);if(!t)fail('POA not found.',404);t.archived=!!b.archived;t.updatedBy=u.username;t.updatedAt=new Date().toISOString();t.history.push({at:t.updatedAt,by:u.username,action:t.archived?'cancelled':'reopened'});return {action:t.archived?'poa_cancel':'poa_reopen',id};});}
- return {save,view,archive,addCast};
+ function remove(b,u,id){if(!canDelete(u))fail('Only the owner or Janvi can delete or restore POA entries.',403);if(typeof b.deleted!=='boolean')fail('Choose delete or restore.');return change(b.revision,u.username,s=>{const t=(s.poas||[]).find(t=>t.id===id);if(!t)fail('POA not found.',404);t.deleted=b.deleted;t.updatedBy=u.username;t.updatedAt=new Date().toISOString();t.history=[...(t.history||[]),{at:t.updatedAt,by:u.username,action:t.deleted?'deleted':'restored'}];return {action:t.deleted?'poa_delete':'poa_restore',id};});}
+ return {save,view,archive,addCast,remove};
 }
 module.exports={attach,canPlan,canWork,progress,assigned,visible,SOP};
