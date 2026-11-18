@@ -21,3 +21,5 @@
 .samast-monthly-table td:nth-child(5),.samast-monthly-table td:nth-child(8){background:#eaf0e4;font-weight:700}
 .samast-monthly-table tbody tr:last-child td{font-weight:700;border-top:2px solid var(--green)}
 @media(max-width:850px){.samast-monthly-table{min-width:800px}}
+
+#expenses .drill{font-weight:600}#operatingCategorySection{margin-top:18px}#operatingCategories{max-height:none}.cost-review-notice{padding:14px 18px;background:#f4eedc;border:1px solid #d9c99b;color:var(--ink);font-size:13px}
