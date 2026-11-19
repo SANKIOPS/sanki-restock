@@ -8,7 +8,9 @@ function fixture(kind = 'dealer_commission', direction = 'payment', nature = 'SA
   const draft = { id: 'BRD-SYNTHETIC-FEE', account: fees.ACCOUNT, nature: 'SAMAST', transactions: [bank], resolutions: {}, transactionOwnership: { 'bank-0': { nature, reason: 'Existing reviewed ownership' } } };
   const register = { revision: 7, tenancies: [{ id: 'TEN-A', tenant: 'Synthetic tenant', floor: 'First', property: 'Synthetic property', securityOpening: 10000 }, { id: 'TEN-B', tenant: 'Other tenant' }], invoices: [{ id: 'RENT-A', tenancyId: 'TEN-A', bankDue: 500 }], deposits: [{ id: 'SEC-A', amount: 100 }], credits: [{ id: 'CREDIT-A', amount: 20 }], allocations: [{ id: 'RA-A', amount: 10 }], activity: [] };
   const store = { seq: 4, receiptSeq: 5, expenses: { 'EX-KEEP': { amount: 17 } }, receipts: [{ id: 'REC-KEEP', amount: 29 }], transfers: [{ id: 'TR-KEEP', amount: 12 }], rentals: register, bankReconciliationDrafts: { [draft.id]: draft }, bankStatements: {}, auditLog: [{ action: 'KEEP' }], openingBalances: { [fees.ACCOUNT]: 900 } };
-  return { store, context: { draft, row: { id: 'bank-0', status: 'missing_in_app', bank, entityTag: { nature } }, register, body: { draftId: draft.id, rowId: 'bank-0', tenancyId: 'TEN-A', kind, note: 'Verified synthetic tenant fee' }, nature, actor: 'owner-test', now: '2098-06-03T10:00:00.000Z', canApproveExpense: true } };
+  const body = { draftId: draft.id, rowId: 'bank-0', tenancyId: 'TEN-A', kind, note: 'Verified synthetic tenant fee' };
+  if(kind==='pass_through')Object.assign(body,{purposeKind:'electricity',period:'2098-06'});
+  return { store, context: { draft, row: { id: 'bank-0', status: 'missing_in_app', bank, entityTag: { nature } }, register, body, nature, actor: 'owner-test', now: '2098-06-03T10:00:00.000Z', canApproveExpense: true } };
 }
 for (const kind of Object.keys(fees.SPECS)) for (const direction of ['payment', 'receipt']) for (const nature of ['SAMAST', 'PERSONAL']) {
   test(kind + ' ' + direction + ' ' + nature + ' keeps authoritative money and tenant link separate from rent/security', () => {
@@ -25,6 +27,11 @@ for (const kind of Object.keys(fees.SPECS)) for (const direction of ['payment', 
     if (direction === 'payment') {
       assert.equal(result.expense.status, 'paid'); assert.equal(result.expense.approvedBy, 'owner-test'); assert.equal(result.expense.payments[0].amount, 1234.56); assert.equal(result.expense.payments[0].tenancyId, 'TEN-A'); assert.equal(result.expense.ledger, fees.SPECS[kind].category);
     } else assert.equal(result.receipt.receiptType, fees.SPECS[kind].receiptType);
+    if(kind==='pass_through'){
+      assert.equal(result.fee.purpose,'Electricity');assert.equal(result.fee.period,'2098-06');assert.ok(result.fee.passThroughKey);
+      assert.equal(source.tenantPassThrough,true);assert.equal(source.balanceSheetOnly,true);assert.equal(source.tenantPassThroughKey,result.fee.passThroughKey);
+      if(direction==='payment')assert.equal(result.expense.nonExpenseReimbursement,true);
+    }
     const saved = JSON.stringify(store); assert.throws(() => fees.record(store, context), /already has/); assert.equal(JSON.stringify(store), saved);
     const undone = fees.undo(store, { draft: context.draft, rowId: 'bank-0', actor: 'owner-test', now: '2098-06-03T11:00:00.000Z', reason: 'Discard synthetic review' });
     assert.equal(undone.before.source.id, source.id); assert.equal(store.rentals.fees[0].reversedBy, 'owner-test'); assert.equal(store.rentals.fees[0].reversalReason, 'Discard synthetic review');
@@ -66,6 +73,20 @@ const blockedCases = [
 for (const [name, change, message] of blockedCases) test('fee creation rejects ' + name + ' without changing any data', () => {
   const f = fixture(); change(f); const before = JSON.stringify(f.store);
   assert.throws(() => fees.record(f.store, f.context), message); assert.equal(JSON.stringify(f.store), before);
+});
+for(const [name,change,message] of [
+  ['missing purpose',body=>{delete body.purposeKind;},/Choose what/],
+  ['unknown purpose',body=>{body.purposeKind='food';},/Choose what/],
+  ['missing period',body=>{delete body.period;},/bill month/],
+  ['bad period',body=>{body.period='June 2098';},/bill month/],
+  ['missing other detail',body=>{body.purposeKind='other';},/Describe the other/],
+  ['unexpected detail',body=>{body.purposeDetail='Should not be here';},/custom purpose/]
+])test('tenant pass-through rejects '+name+' without changing data',()=>{const f=fixture('pass_through');change(f.context.body);const before=JSON.stringify(f.store);assert.throws(()=>fees.record(f.store,f.context),message);assert.equal(JSON.stringify(f.store),before);});
+test('tenant pass-through uses one stable balance key for the same tenant, purpose and period',()=>{
+  const first=fixture('pass_through','receipt'),one=fees.record(first.store,first.context),second=fixture('pass_through','payment'),two=fees.record(second.store,second.context);
+  assert.equal(one.fee.passThroughKey,two.fee.passThroughKey);
+  second.context.body.period='2098-07';second.context.draft.resolutions={};second.store.rentals.fees=[];delete second.store.expenses[two.expense.id];
+  const three=fees.record(second.store,second.context);assert.notEqual(two.fee.passThroughKey,three.fee.passThroughKey);
 });
 test('a fee cannot be posted twice through a new draft for identical bank evidence', () => {
   const f = fixture(); fees.record(f.store, f.context); const next = clone(f.context.draft); next.id = 'BRD-SECOND'; next.resolutions = {};

@@ -8,7 +8,10 @@ function fixture(){
   const tenant=id=>({id,tenant:'Synthetic '+id,floor:id,property:'Synthetic building',baseRent:1000,netRent:1000,startMonth:'2026-10',trackingFrom:'2026-10',dueDay:5,cgst:0,sgst:0,tds:0,confirmedAt:'2026-10-01',openingConfirmed:true,phone:'123',history:[],autoEnabled:false,securityOpening:500,securityOpeningDate:'2026-10-01'});
   return {rentalSourceImport:source.id,rentals:{revision:4,tenancies:[tenant('TEN-A'),tenant('TEN-B')],invoices:[{id:'RENT-A',tenancyId:'TEN-A',month:'2026-10',bankDue:1000,baseRent:1000,cgst:0,sgst:0,tds:0,dueDate:'2026-10-05'}],deposits:[],allocations:[{id:'ALLOC-A',tenancyId:'TEN-A',invoiceId:'RENT-A',kind:'receipt',receiptId:'REC-RENT',amount:200,date:'2026-10-10'}],credits:[{id:'CREDIT-A',tenancyId:'TEN-A',receiptId:'REC-RENT',amount:100,date:'2026-10-10'}],reminders:[],activity:[],automation:{lastCheckedDate:today}},receipts:[{id:'REC-RENT',nature:'PERSONAL',receiptType:'rental_income',tenancyId:'TEN-A',amount:400,date:'2026-10-10',account:'IndusInd Bank 7883'}],expenses:{},bankStatements:{synthetic:{imports:[{id:'FINAL-UNCHANGED'}],drafts:{existing:{decisions:{reviewed:{action:'exclude',reason:'Owner reviewed'}}}}}},auditLog:[]};
 }
-function fees(){return ['dealer_commission','documentation_fee'].flatMap((kind,k)=>['payment','receipt'].map((direction,d)=>({id:'FEE-'+k+'-'+d,tenancyId:'TEN-A',kind,direction,amount:101+k*100+d,date:'2026-10-21',account:'IndusInd Bank 7883',nature:'PERSONAL',...(direction==='payment'?{expenseId:'EX-FEE-'+k,paymentId:'PAY-FEE-'+k}:{receiptId:'REC-FEE-'+k}),note:'Synthetic fee <reference>',bankReconciliationEvidence:{draftId:'SYNTHETIC',bankRowId:'bank-fee-'+k+'-'+d}})));}
+function fees(){return ['dealer_commission','documentation_fee'].flatMap((kind,k)=>['payment','receipt'].map((direction,d)=>({id:'FEE-'+k+'-'+d,tenancyId:'TEN-A',kind,direction,amount:101+k*100+d,date:'2026-10-21',account:'IndusInd Bank 7883',nature:'PERSONAL',...(direction==='payment'?{expenseId:'EX-FEE-'+k,paymentId:'PAY-FEE-'+k}:{receiptId:'REC-FEE-'+k}),note:'Synthetic fee <reference>',bankReconciliationEvidence:{draftId:'SYNTHETIC',bankRowId:'bank-fee-'+k+'-'+d}}))).concat([
+  {id:'PASS-RECEIPT',tenancyId:'TEN-A',kind:'pass_through',direction:'receipt',amount:500,date:'2026-10-22',account:'IndusInd Bank 7883',nature:'PERSONAL',receiptId:'REC-PASS',purposeKind:'repair',purpose:'Repairs',period:'2026-10',passThroughKey:'PASS-KEY',note:'Tenant repair collection'},
+  {id:'PASS-PAYMENT',tenancyId:'TEN-A',kind:'pass_through',direction:'payment',amount:300,date:'2026-10-23',account:'IndusInd Bank 7883',nature:'PERSONAL',expenseId:'EX-PASS',paymentId:'PAY-PASS',purposeKind:'repair',purpose:'Repairs',period:'2026-10',passThroughKey:'PASS-KEY',note:'Repair vendor paid'}
+]);}
 function harness(store=fixture()){
   let saved=clone(store),writes=0;const routes={};
   const jobs=rental.register({get:(p,f)=>routes['GET '+p]=f,post:(p,f)=>routes['POST '+p]=f},{loadStore:()=>clone(saved),saveStore:s=>{writes++;saved=clone(s)},isOwner:req=>req.user.role==='owner',audit:()=>{},clock:()=>new Date(today+'T10:00:00Z')});
@@ -52,12 +55,13 @@ async function render(tab){
   context.window.mountRentalRegister(host,async (url,options)=>{calls.push({url,options});return rental.snapshot(clone(s),today)},escape,value=>'INR '+value);await new Promise(resolve=>setImmediate(resolve));return {html:host.innerHTML,calls};
 }
 test('selected-tenant fee UI separates payment/receipt amounts, escapes references and adds no correction controls',async()=>{
-  const {html,calls}=await render('payments'),feeSection=html.match(/<section class="card"><h3>Tenant-linked dealer commission[\s\S]*?<\/section>/)[0];
+  const {html,calls}=await render('payments'),feeSection=html.match(/<section class="card"><h3>Tenant-linked fees and pass-through expenses[\s\S]*?<\/section>/)[0];
   assert.match(feeSection,/Dealer commission/);assert.match(feeSection,/Documentation \/ agreement fee/);assert.match(feeSection,/<th>Paid<\/th><th>Received<\/th>/);assert.match(feeSection,/EX-FEE-0 \/ PAY-FEE-0/);assert.match(feeSection,/REC-FEE-1/);assert.match(feeSection,/Synthetic fee &lt;reference&gt;/);
+  assert.match(feeSection,/Tenant expense balances/);assert.match(feeSection,/Repairs/);assert.match(feeSection,/2026-10/);assert.match(feeSection,/INR 200/);assert.match(feeSection,/Held for the tenant expense \(liability\)/);
   assert.match(feeSection,/Reversed · Wrong synthetic source &lt;reviewed&gt;/);assert.doesNotMatch(feeSection,/OTHER-TENANT/);assert.doesNotMatch(feeSection,/<form|<button|data-reverse/);assert.match(html,/data-action="settle"/);assert.match(html,/data-action="security_record"/);
   assert.equal(calls.length,1);assert.equal(calls[0].options,undefined);
 });
 test('fee history shows the tenant of each source without adding it to rent correction forms',async()=>{
-  const {html,calls}=await render('history'),feeSection=html.match(/<section class="card"><h3>Dealer commission and documentation[\s\S]*?<\/section>/)[0];
+  const {html,calls}=await render('history'),feeSection=html.match(/<section class="card"><h3>Tenant-linked fees and pass-through expense history[\s\S]*?<\/section>/)[0];
   assert.match(feeSection,/Synthetic TEN-A · TEN-A/);assert.match(feeSection,/Synthetic TEN-B · TEN-B/);assert.match(feeSection,/OTHER-TENANT-EXPENSE/);assert.doesNotMatch(feeSection,/<form|<button|data-reverse/);assert.equal(calls.length,1);
 });

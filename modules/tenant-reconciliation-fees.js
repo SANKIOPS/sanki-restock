@@ -5,7 +5,17 @@ const { randomUUID, createHash } = require('node:crypto');
 const ACCOUNT = 'IndusInd Bank 7883';
 const SPECS = Object.freeze({
   dealer_commission: Object.freeze({ label: 'Dealer commission', category: 'Dealer Commission', receiptType: 'rental_dealer_commission' }),
-  documentation_fee: Object.freeze({ label: 'Documentation / agreement fee', category: 'Documentation / Agreement Fee', receiptType: 'rental_documentation_fee' })
+  documentation_fee: Object.freeze({ label: 'Documentation / agreement fee', category: 'Documentation / Agreement Fee', receiptType: 'rental_documentation_fee' }),
+  pass_through: Object.freeze({ label: 'Tenant-funded expense', category: 'Tenant Pass-through', receiptType: 'tenant_expense_collection', passThrough: true })
+});
+const PURPOSES = Object.freeze({
+  electricity: 'Electricity',
+  water: 'Water',
+  maintenance: 'Building maintenance',
+  repair: 'Repairs',
+  municipal: 'Government / municipal charge',
+  internet: 'Internet / utility',
+  other: 'Other tenant-funded expense'
 });
 const list = value => Array.isArray(value) ? value : [];
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -14,6 +24,22 @@ const isFeeKind = kind => Object.prototype.hasOwnProperty.call(SPECS, kind);
 const active = item => item && !item.reversedAt && !item.voidedAt;
 const canonical = value => Array.isArray(value) ? '[' + value.map(canonical).join(',') + ']' : value && typeof value === 'object' ? '{' + Object.keys(value).sort().filter(key => value[key] !== undefined).map(key => JSON.stringify(key) + ':' + canonical(value[key])).join(',') + '}' : JSON.stringify(value);
 const sourceHash = source => createHash('sha256').update(canonical(source)).digest('hex');
+function passThroughDetails(body, spec, tenancy) {
+  const supplied = ['purposeKind', 'purposeDetail', 'period'].some(key => body[key] != null && String(body[key]).trim() !== '');
+  if (!spec.passThrough) {
+    if (supplied) fail('Purpose and bill period are available only for a tenant-funded expense.', 400);
+    return {};
+  }
+  const purposeKind = String(body.purposeKind || '').trim(), period = String(body.period || '').trim();
+  if (!Object.prototype.hasOwnProperty.call(PURPOSES, purposeKind)) fail('Choose what the tenant-funded money is for.', 400);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) fail('Choose the bill month / period for this tenant-funded expense.', 400);
+  const detail = String(body.purposeDetail || '').replace(/\s+/g, ' ').trim();
+  if (purposeKind === 'other' && (detail.length < 3 || detail.length > 120)) fail('Describe the other tenant-funded expense in 3 to 120 characters.', 400);
+  if (purposeKind !== 'other' && detail) fail('A custom purpose may be entered only when Other tenant-funded expense is selected.', 400);
+  const purpose = purposeKind === 'other' ? detail : PURPOSES[purposeKind];
+  const passThroughKey = sourceHash(['tenant-pass-through-v1', tenancy.id, purposeKind, purposeKind === 'other' ? purpose.toLowerCase() : '', period]);
+  return { purposeKind, purpose, period, passThroughKey };
+}
 function exactMoney(value) {
   const amount = Number(value), cents = Math.round(amount * 100);
   if (!['number', 'string'].includes(typeof value) || value === '' || !Number.isFinite(amount) || amount < 0 || !Number.isSafeInteger(cents) || Math.abs(amount * 100 - cents) > 0.00001) fail('The statement amount is invalid. Review the original bank evidence.');
@@ -79,8 +105,8 @@ function assertNoDuplicate(store, draft, rowId, evidence) {
 function record(store, context) {
   const { draft, row, body, register, nature, actor, now, canApproveExpense } = context;
   const kind = String(body.kind || ''), spec = isFeeKind(kind) ? SPECS[kind] : null;
-  if (!spec) fail('Choose dealer commission or documentation / agreement fee.', 400);
-  if (Object.keys(body).some(key => !['draftId', 'rowId', 'tenancyId', 'kind', 'note'].includes(key))) fail('Only the tenant, fee kind and reconciliation remark may be supplied; amount, date and account come from the bank statement.', 400);
+  if (!spec) fail('Choose dealer commission, documentation / agreement fee, or tenant-funded expense.', 400);
+  if (Object.keys(body).some(key => !['draftId', 'rowId', 'tenancyId', 'kind', 'note', 'purposeKind', 'purposeDetail', 'period'].includes(key))) fail('Only the tenant, transaction type, purpose, bill period and reconciliation remark may be supplied; amount, date and account come from the bank statement.', 400);
   if (!row || !row.bank || row.status !== 'missing_in_app' || row.app || row.resolution) fail('Choose an unmatched bank transaction that has not been reviewed.', 400);
   const bank = row.bank, debit = exactMoney(bank.debit || 0), credit = exactMoney(bank.credit || 0);
   if ((debit > 0) === (credit > 0)) fail('Choose a statement row with exactly one payment or receipt amount.', 400);
@@ -91,7 +117,7 @@ function record(store, context) {
   if (debit && !canApproveExpense) fail('Expense approval and payment authority is required for the selected accounting entity.', 403);
   const tenancies = list(register && register.tenancies).filter(tenancy => tenancy.id === String(body.tenancyId || ''));
   if (tenancies.length !== 1) fail('Choose one existing rental tenant / floor.', 400);
-  const tenancy = tenancies[0], note = String(body.note || '').trim();
+  const tenancy = tenancies[0], passThrough = passThroughDetails(body, spec, tenancy), note = String(body.note || '').trim();
   if (!note || note.length > 2000) fail('Enter a reconciliation remark of no more than 2,000 characters.', 400);
   const rowIndex = /^bank-(\d+)$/.exec(String(body.rowId || '')), original = rowIndex && list(draft.transactions)[Number(rowIndex[1])];
   if (!original || bankIdentity(original) !== bankIdentity(bank)) fail('The selected transaction no longer matches the retained bank evidence. Reload the statement.');
@@ -99,14 +125,14 @@ function record(store, context) {
   assertNoDuplicate(store, draft, body.rowId, evidence);
   if (register.fees != null && !Array.isArray(register.fees)) fail('The tenant fee register cannot be verified. Nothing was recorded.');
   const direction = debit ? 'payment' : 'receipt', amount = debit || credit, id = 'TF-' + randomUUID(), source = [tenancy.tenant, tenancy.property, tenancy.floor].filter(Boolean).join(' · ');
-  const fee = { id, tenancyId: tenancy.id, kind, direction, amount, date: bank.date, account: ACCOUNT, nature, expenseId: '', paymentId: '', receiptId: '', bankReconciliationEvidence: clone(evidence), note, createdBy: actor, createdAt: now };
-  const linkage = { tenancyId: tenancy.id, rentalKind: kind, rentalFeeId: id, bankReconciliationEvidence: clone(evidence) };
+  const fee = { id, tenancyId: tenancy.id, kind, direction, amount, date: bank.date, account: ACCOUNT, nature, expenseId: '', paymentId: '', receiptId: '', bankReconciliationEvidence: clone(evidence), note, ...passThrough, createdBy: actor, createdAt: now };
+  const linkage = { tenancyId: tenancy.id, rentalKind: kind, rentalFeeId: id, ...(spec.passThrough ? { tenantPassThrough: true, balanceSheetOnly: true, tenantPassThroughKey: passThrough.passThroughKey, tenantPassThroughPurpose: passThrough.purpose, tenantPassThroughPurposeKind: passThrough.purposeKind, tenantPassThroughPeriod: passThrough.period } : {}), bankReconciliationEvidence: clone(evidence) };
   let expense, receipt;
   if (direction === 'payment') {
     let seq = Number.isSafeInteger(store.seq) ? store.seq : 0, expenseId;
     do { expenseId = 'EX-' + String(++seq).padStart(5, '0'); } while ((store.expenses || {})[expenseId]);
     const paymentId = 'PAY-001', payment = { id: paymentId, amount, date: bank.date, account: ACCOUNT, paymentType: 'UPI', proof: '', note: 'Verified against uploaded bank statement · ' + (bank.reference || draft.id), paidBy: actor, paidAt: now, personalFunds: false, bankReconciliationDraft: draft.id, bankReconciliationRow: body.rowId, ...clone(linkage) };
-    expense = { id: expenseId, date: bank.date, particulars: spec.label + ' · ' + source, amount, requestedAmount: amount, isInstallment: false, nature, type: 'variable', ledger: spec.category, vendor: String(bank.description || spec.label).trim().slice(0, 120), claimant: actor, account: ACCOUNT, channel: 'Shared', bill: 'none', fundedBy: 'company', paymentType: 'UPI', qrPhoto: '', billPhoto: '', purchasePaymentProof: '', exceptionEvidence: 'Uploaded bank statement', exceptionReason: note, billNote: 'Tenant fee recorded from verified bank statement', paidAlready: false, personalPaidAmount: 0, reimbursementStatus: 'not_applicable', reimbursementAmount: 0, reimbursementPayments: [], paymentProof: '', status: 'paid', paidAmount: amount, payments: [payment], createdBy: actor, createdAt: now, approvedBy: actor, approvedAt: now, paidBy: actor, paidAt: now, reconciliationSource: { ...clone(evidence), bankReference: evidence.reference, bankDescription: evidence.description, remark: note }, ...clone(linkage) };
+    expense = { id: expenseId, date: bank.date, particulars: (spec.passThrough ? passThrough.purpose + ' · ' + passThrough.period : spec.label) + ' · ' + source, amount, requestedAmount: amount, isInstallment: false, nature, type: 'variable', ledger: spec.category, vendor: String(spec.passThrough ? source : bank.description || spec.label).trim().slice(0, 120), claimant: actor, account: ACCOUNT, channel: 'Shared', bill: 'none', fundedBy: 'company', paymentType: 'UPI', qrPhoto: '', billPhoto: '', purchasePaymentProof: '', exceptionEvidence: 'Uploaded bank statement', exceptionReason: note, billNote: spec.passThrough ? 'Tenant-funded expense paid from verified bank statement; balance-sheet movement only' : 'Tenant fee recorded from verified bank statement', paidAlready: false, personalPaidAmount: 0, reimbursementStatus: 'not_applicable', reimbursementAmount: 0, reimbursementPayments: [], paymentProof: '', status: 'paid', paidAmount: amount, payments: [payment], ...(spec.passThrough ? { nonExpenseReimbursement: true } : {}), createdBy: actor, createdAt: now, approvedBy: actor, approvedAt: now, paidBy: actor, paidAt: now, reconciliationSource: { ...clone(evidence), bankReference: evidence.reference, bankDescription: evidence.description, remark: note }, ...clone(linkage) };
     // Match the normal store's empty proof/provisional fields up front so a
     // read-only reload cannot make unchanged source evidence look different.
     Object.assign(expense, { billPhotos: [], purchasePaymentProofs: [], paymentProofs: [], provisionalPaidAmount: 0 });
@@ -121,10 +147,10 @@ function record(store, context) {
     fee.receiptId = receiptId; fee.sourceFingerprint = sourceHash(receipt);
   }
   register.fees = list(register.fees); register.fees.push(fee);
-  register.activity = list(register.activity); register.activity.push({ at: now, by: actor, action: 'bank_tenant_fee_' + direction, tenancyId: tenancy.id, feeId: id, detail: spec.label + ' · ' + (fee.receiptId || fee.expenseId + '/' + fee.paymentId) + ' · ' + note });
+  register.activity = list(register.activity); register.activity.push({ at: now, by: actor, action: spec.passThrough ? 'bank_tenant_pass_through_' + direction : 'bank_tenant_fee_' + direction, tenancyId: tenancy.id, feeId: id, detail: (spec.passThrough ? passThrough.purpose + ' · ' + passThrough.period : spec.label) + ' · ' + (fee.receiptId || fee.expenseId + '/' + fee.paymentId) + ' · ' + note });
   register.revision = (Number(register.revision) || 0) + 1; store.rentals = register;
   draft.resolutions = draft.resolutions || {};
-  draft.resolutions[body.rowId] = { action: receipt ? 'create_receipt' : 'create_expense', reason: note, remark: note, category: spec.category, appId: receipt ? receipt.id : expense.id + '/' + fee.paymentId, receiptId: fee.receiptId, expenseId: fee.expenseId, rentalKind: kind, rentalFeeId: id, tenancyId: tenancy.id, rentalRecordIds: [id], postingNature: nature, by: actor, at: now };
+  draft.resolutions[body.rowId] = { action: receipt ? 'create_receipt' : 'create_expense', reason: note, remark: note, category: spec.category, appId: receipt ? receipt.id : expense.id + '/' + fee.paymentId, receiptId: fee.receiptId, expenseId: fee.expenseId, rentalKind: kind, rentalFeeId: id, tenancyId: tenancy.id, rentalRecordIds: [id], ...(spec.passThrough ? { tenantPassThroughKey: passThrough.passThroughKey, tenantPassThroughPurpose: passThrough.purpose, tenantPassThroughPeriod: passThrough.period } : {}), postingNature: nature, by: actor, at: now };
   return { fee, ...(receipt ? { receipt } : { expense }), direction, rentalKind: kind, tenancy: { id: tenancy.id, tenant: tenancy.tenant, floor: tenancy.floor, property: tenancy.property } };
 }
 function undo(store, context) {
@@ -164,8 +190,9 @@ function evidenceError(store, draft) {
     const claimError = foreignBankClaimError(store, draft, bank);
     if (claimError) return claimError;
     const fee = matches[0], source = fee.direction === 'payment' ? (store.expenses || {})[fee.expenseId] : list(store.receipts).find(receipt => receipt.id === fee.receiptId), appId = fee.receiptId || fee.expenseId + '/' + fee.paymentId;
-    if (!isFeeKind(fee.kind) || !['payment', 'receipt'].includes(fee.direction) || !source || sourceHash(source) !== fee.sourceFingerprint || fee.tenancyId !== source.tenancyId || fee.id !== source.rentalFeeId || fee.kind !== source.rentalKind || resolution.tenancyId !== fee.tenancyId || resolution.rentalKind !== fee.kind || resolution.appId !== appId || resolution.postingNature !== fee.nature || source.nature !== fee.nature || source.date !== bank.date || source.account !== ACCOUNT || Number(fee.amount) !== Number(source.amount) || fee.bankReconciliationEvidence.rowId !== rowId || fee.bankReconciliationEvidence.bankSignature !== bankIdentity(bank) || Number(source.amount) !== Number(fee.direction === 'payment' ? bank.debit : bank.credit)) return 'The tenant fee, linked source or bank evidence changed after review. Review the source before finalizing; nothing was posted.';
+    const spec = isFeeKind(fee.kind) ? SPECS[fee.kind] : null, passThroughValid = !spec || !spec.passThrough || !!fee.passThroughKey && fee.passThroughKey === source.tenantPassThroughKey && fee.purpose === source.tenantPassThroughPurpose && fee.purposeKind === source.tenantPassThroughPurposeKind && fee.period === source.tenantPassThroughPeriod && resolution.tenantPassThroughKey === fee.passThroughKey && resolution.tenantPassThroughPurpose === fee.purpose && resolution.tenantPassThroughPeriod === fee.period && source.tenantPassThrough === true && source.balanceSheetOnly === true;
+    if (!spec || !['payment', 'receipt'].includes(fee.direction) || !source || sourceHash(source) !== fee.sourceFingerprint || fee.tenancyId !== source.tenancyId || fee.id !== source.rentalFeeId || fee.kind !== source.rentalKind || resolution.tenancyId !== fee.tenancyId || resolution.rentalKind !== fee.kind || resolution.appId !== appId || resolution.postingNature !== fee.nature || source.nature !== fee.nature || source.date !== bank.date || source.account !== ACCOUNT || Number(fee.amount) !== Number(source.amount) || fee.bankReconciliationEvidence.rowId !== rowId || fee.bankReconciliationEvidence.bankSignature !== bankIdentity(bank) || Number(source.amount) !== Number(fee.direction === 'payment' ? bank.debit : bank.credit) || !passThroughValid) return 'The tenant fee, linked source or bank evidence changed after review. Review the source before finalizing; nothing was posted.';
   }
   return '';
 }
-module.exports = { ACCOUNT, SPECS, isFeeKind, bankIdentity, assertDraftWritable, record, undo, evidenceError };
+module.exports = { ACCOUNT, SPECS, PURPOSES, isFeeKind, bankIdentity, assertDraftWritable, record, undo, evidenceError };

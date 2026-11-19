@@ -46,6 +46,13 @@ test('paid portions only, excess advances and reimbursements never inflate expen
   assert.equal(run(sources).totals.expenses, 600);
   assert.equal(run(sources, { from: '2026-10-02' }).totals.expenses, 400);
 });
+test('tenant pass-through collection and payment do not inflate business income or expenses', () => {
+  const sources = fixtures();
+  sources.expenses = { receipts: [{ id: 'TENANT-IN', nature: 'SANKI', date: '2026-10-01', amount: 5000, receiptType: 'other_income', category: 'Tenant Pass-through', tenantPassThrough: true, balanceSheetOnly: true }], expenses: {
+    PASS: { id: 'PASS', nature: 'SANKI', date: '2026-10-02', amount: 4800, status: 'paid', ledger: 'Tenant Pass-through', tenantPassThrough: true, balanceSheetOnly: true, nonExpenseReimbursement: true, payments: [{ id: 'PAY', date: '2026-10-02', amount: 4800, account: 'IndusInd Bank 7883' }] }
+  } };
+  const report = run(sources); assert.equal(report.totals.otherIncome, 0); assert.equal(report.totals.expenses, 0); assert.equal(report.transactions.some(row => /TENANT-IN|PASS/.test(row.id)), false);
+});
 test('actual payroll payments only, not earned salary or salary advances', () => {
   const sources = fixtures();
   sources.salary = { months: { '2026-10': { salaryAmt: 50000 } }, advances: [{ amount: 8000 }], salaryPayments: [{ id: 'SAL1', amount: 1500, date: '2026-10-01', employeeName: 'Employee', active: true }, { id: 'SAL2', amount: 2000, date: '2026-10-01', active: false }] };

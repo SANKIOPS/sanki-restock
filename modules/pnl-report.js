@@ -410,7 +410,7 @@ function buildReport(sources = {}, options = {}) {
   }
   const manualReceipts = new Map();
   for (const receipt of list(books.receipts)) {
-    if (receipt.accountingExcluded || activeDraft(receipt)) continue;
+    if (receipt.accountingExcluded || receipt.balanceSheetOnly || activeDraft(receipt)) continue;
     const reportScope = receiptReportScope(receipt, books);
     if (reportScope.provisional) continue;
     if (reportScope.invalid) { warning(receipt.id, 'Incoming receipt Results classification or bank evidence is invalid. Review its explicit classification; no income has been assumed.', day(receipt.date), 'income'); continue; }

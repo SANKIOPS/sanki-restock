@@ -380,10 +380,10 @@ function tagHotelTransferAccounts(transfer){
 }
 function receiptCategory(receiptType,value){
   if(receiptType===expenseLoans.TYPE)return expenseLoans.CATEGORY;
-  const supplied=String(value||'').trim(),defaults={bank_interest:'Bank Interest Received',other_income:'Other Income',hotel_income:'Sewak Park Hotel Income',refund:'Refund Received',owner_contribution:'Owner Contribution',asset_sale:'Asset Sale',rental_income:'Rental Income',rental_security:'Rental Security Deposit'};
+  const supplied=String(value||'').trim(),defaults={bank_interest:'Bank Interest Received',other_income:'Other Income',hotel_income:'Sewak Park Hotel Income',refund:'Refund Received',owner_contribution:'Owner Contribution',asset_sale:'Asset Sale',rental_income:'Rental Income',rental_security:'Rental Security Deposit',tenant_expense_collection:'Tenant Pass-through'};
   return supplied||defaults[receiptType]||'';
 }
-function receiptLabel(receiptType){return{loan_received:'Loan received — repayable principal',product_sale:'Product sale',asset_sale:'Asset sale',bank_interest:'Bank interest received',refund:'Refund received',expense_refund:'Expense refund',refund_recovery:'Employee refund recovery',owner_contribution:'Owner contribution',other_income:'Other income',hotel_income:'Hotel income',rental_income:'Rental income',rental_security:'Rental security deposit',rental_dealer_commission:'Dealer commission received',rental_documentation_fee:'Documentation / agreement fee received'}[receiptType]||'Money received';}
+function receiptLabel(receiptType){return{loan_received:'Loan received — repayable principal',product_sale:'Product sale',asset_sale:'Asset sale',bank_interest:'Bank interest received',refund:'Refund received',expense_refund:'Expense refund',refund_recovery:'Employee refund recovery',owner_contribution:'Owner contribution',other_income:'Other income',hotel_income:'Hotel income',rental_income:'Rental income',rental_security:'Rental security deposit',rental_dealer_commission:'Dealer commission received',rental_documentation_fee:'Documentation / agreement fee received',tenant_expense_collection:'Tenant expense collection'}[receiptType]||'Money received';}
 function accountVisibleToReq(req,account){
   const name=canonicalAccountName(account),restricted=OWNER_ONLY_ACCOUNTS.some(value=>value.toLowerCase()===name.toLowerCase());
   const personalAccount=(ENTITY_ACCOUNTS.PERSONAL||[]).some(value=>value.toLowerCase()===name.toLowerCase());
@@ -4439,6 +4439,7 @@ router.get('/api/expenses/vendors', (req, res) => {
   natures.forEach(n=>{const master=vendorMasterForNature(s,n);Object.values(master).forEach(v=>ensureBook(n,v.name,v));});
   const finalizedBankExpenseRecords=(s.reconciliationExpenses||[]).filter(e=>!e.creditCardStatementId&&!e.accountingExcluded&&num(e.amount)>0&&!expenseClassificationReview.activeReconciliationDraft(s,e)).map(e=>Object.assign({},e,{ledger:e.category,status:'paid',paidAmount:num(e.amount),requestedAmount:num(e.amount),paymentType:'Bank reconciliation',source:'bank_reconciliation_expense',statementBacked:true,readOnly:true,approvedAt:e.createdAt,approvedBy:e.createdBy,claimant:'',payments:[{id:'RECONCILIATION',date:e.date,amount:num(e.amount),account:e.account,paymentType:'Bank reconciliation',bankReference:e.bankTransactionId||e.adjustmentId||e.settlementId||'',proof:e.proof||'',personalFunds:false,unpayBlockedReason:'Correct this transaction through Review Classification or its bank reconciliation history.'}]}));
   Object.values(s.expenses).concat(cardExpenseRecords(s),finalizedBankExpenseRecords).forEach(e => {
+    if(e.balanceSheetOnly)return;
     if(e.expenseRefundReceiptId||expenseRefunds.records(s).filter(expenseRefunds.received).some(r=>r.components.some(c=>c.externalMovementId===e.id)))return;
     const n=normalizedNature(e.nature);
     if (!canViewExpense(req,e)||!natures.includes(n)||!e.vendor||!['approved','partially_paid','paid'].includes(e.status)) return;

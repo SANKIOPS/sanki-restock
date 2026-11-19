@@ -19,6 +19,12 @@ test('pending payments and loan principal are excluded; interest alone is expens
  s.loanRepayments=[{id:'LP',nature:'PERSONAL',date:'2026-10-01',amount:1100,principalAmount:1000,interestAmount:100,source:'Lender'}];
  const r=build(src,options);assert.equal(r.totals.expenses,100);
 });
+test('tenant pass-through collections and payments remain balance-sheet movements, not personal income or expense',()=>{
+ const src=sources(),s=src.expenses;
+ s.receipts=[{id:'TENANT-IN',nature:'PERSONAL',date:'2026-10-01',amount:5000,account:'IndusInd Bank 7883',receiptType:'tenant_expense_collection',category:'Tenant Pass-through',tenantPassThrough:true,balanceSheetOnly:true}];
+ s.expenses.PASS={id:'PASS',nature:'PERSONAL',status:'paid',date:'2026-10-02',amount:4800,ledger:'Tenant Pass-through',tenantPassThrough:true,balanceSheetOnly:true,nonExpenseReimbursement:true,payments:[{id:'PAY',date:'2026-10-02',amount:4800,account:'IndusInd Bank 7883'}]};
+ const r=build(src,options);assert.equal(r.totals.income,0);assert.equal(r.totals.expenses,0);assert.equal(r.transactions.length,0);assert.equal(r.paidFrom.length,0);
+});
 test('date boundaries and entity names are validated',()=>{for(const change of [{entity:'unknown'},{from:'2026-08-21'},{to:'2026-11-14'},{from:'2026-11-13',to:'2026-11-12'}])assert.throws(()=>build(sources(),{...options,...change}),/valid dates/);});
 
 test('legacy card/EMI categories are disclosed for review, never counted as new costs or silently treated as profit',()=>{

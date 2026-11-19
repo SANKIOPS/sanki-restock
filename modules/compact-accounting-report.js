@@ -4,7 +4,7 @@ const loans=require('./expense-loans');
 const {money}=require('./physical-bank-balance');
 const hotel=require('./sewak-park-reporting');
 const START='2026-08-22', list=v=>Array.isArray(v)?v:Object.values(v||{}), nature=v=>String(v||'SANKI').toUpperCase();
-const active=r=>r&&!r.accountingExcluded&&!r.voided&&!r.voidedAt&&!r.reversedAt&&r.status!=='voided';
+const active=r=>r&&!r.accountingExcluded&&!r.balanceSheetOnly&&!r.voided&&!r.voidedAt&&!r.reversedAt&&r.status!=='voided';
 const inRange=(r,from,to)=>r.date>=from&&r.date<=to;
 const incomeTypes=new Set(['rental_income','hotel_income','sewak_park_hotel_income','other_income','bank_interest','bank_interest_received','asset_sale','product_sale','rental_dealer_commission','rental_documentation_fee','other']);
 const balanceCost=/security|deposit|loan principal|salary advance|gst payment|gst paid|capital|asset purchase|credit[ -]?card|card repayment|\bemi\b|loan repayment|owner withdrawal|owner contribution|internal transfer/i;

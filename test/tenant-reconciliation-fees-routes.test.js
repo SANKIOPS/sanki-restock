@@ -35,7 +35,9 @@ function setup(kind, direction, nature = 'SAMAST') {
   const bank = { date, description: 'Synthetic tenant fee ' + kind, reference: 'FEE-' + direction, debit: direction === 'payment' ? amount : 0, credit: direction === 'receipt' ? amount : 0, balance: direction === 'payment' ? 10000 - amount : 10000 + amount };
   store.bankReconciliationDrafts = { [id]: { id, nature: 'SAMAST', account: source.ACCOUNT, transactions: [bank], summary: { from: date, to: date, openingBalance: 10000, closingBalance: bank.balance, totalDebits: bank.debit, totalCredits: bank.credit, validated: true }, resolutions: {}, transactionOwnership: { 'bank-0': { nature, reason: 'Synthetic reviewed source' } }, createdAt: '2098-06-03T10:00:00.000Z', createdBy: 'prashant', expiresAt: '2099-01-01T00:00:00.000Z' } };
   fs.writeFileSync(file, JSON.stringify(store));
-  return { store, id, body: { draftId: id, rowId: 'bank-0', tenancyId: 'TEN-A', kind, note: 'Verified synthetic fee source' } };
+  const body={ draftId: id, rowId: 'bank-0', tenancyId: 'TEN-A', kind, note: 'Verified synthetic fee source' };
+  if(kind==='pass_through')Object.assign(body,{purposeKind:'electricity',period:'2098-06'});
+  return { store, id, body };
 }
 for (const kind of Object.keys(source.SPECS)) for (const direction of ['payment', 'receipt']) for (const nature of ['SAMAST', 'PERSONAL']) test('route records and safely undoes ' + kind + ' ' + direction + ' ' + nature, () => {
   const f = setup(kind, direction, nature), before = JSON.parse(fs.readFileSync(file));
@@ -46,8 +48,9 @@ for (const kind of Object.keys(source.SPECS)) for (const direction of ['payment'
   if (direction === 'receipt') {
     const ledger = invoke('GET', '/api/expenses/account-ledger', { query: { nature, account: source.ACCOUNT, from: '2098-06-02', to: '2098-06-02' } });
     assert.equal(ledger.status, 200, JSON.stringify(ledger.body));
-    assert.ok(ledger.body.entries.some(entry => entry.id === record.id && entry.description.startsWith(kind === 'dealer_commission' ? 'Dealer commission received' : 'Documentation / agreement fee received')));
+    assert.ok(ledger.body.entries.some(entry => entry.id === record.id && entry.kind === 'receipt' && entry.credit === record.amount),JSON.stringify(ledger.body.entries));
   }
+  if(kind==='pass_through'){assert.equal(record.tenantPassThrough,true);assert.equal(record.balanceSheetOnly,true);if(direction==='payment')assert.equal(record.nonExpenseReimbursement,true);}
   assert.equal(after.rentals.fees.length, 1); assert.ok(after.auditLog.some(event => event.action === 'TENANT_FEE_FROM_BANK_RECONCILIATION' && event.subjectId === record.id));
   assert.deepEqual(after.bankReconciliationDrafts[f.id].transactions, before.bankReconciliationDrafts[f.id].transactions);
   assert.deepEqual(after.bankReconciliationDrafts[f.id].transactionOwnership, before.bankReconciliationDrafts[f.id].transactionOwnership);

@@ -94,8 +94,8 @@ for (const [label, options] of [
   ['invalid amount', { rowPatch: { bank: { debit: 'not money', credit: 0 } } }]
 ]) test(`${label} cannot open a fee workflow or submit it`, async () => {
   const ui = harness(options);
-  assert.doesNotMatch(ui.context.bankRentalActions(ui.row), /dealer_commission|documentation_fee/);
-  for (const kind of ['dealer_commission', 'documentation_fee']) {
+  assert.doesNotMatch(ui.context.bankRentalActions(ui.row), /dealer_commission|documentation_fee|pass_through/);
+  for (const kind of ['dealer_commission', 'documentation_fee', 'pass_through']) {
     await ui.open(kind); assert.notEqual(ui.nodes.bankRentalDlg?.open, true);
     ui.context.bankRentalRowId = ui.row.id; ui.nodes.rentalReconKind = { value: kind }; ui.fire('bankRentalSave');
   }
@@ -112,6 +112,25 @@ for (const direction of ['debit', 'credit']) for (const entityTag of [{ nature: 
     assert.equal(ui.writes().length, 0);
   });
 }
+
+for(const direction of ['debit','credit'])test(`tenant pass-through ${direction} requires tenant, purpose and period and posts a balance-sheet link`,async()=>{
+  const ui=harness({direction});await ui.open('pass_through');
+  assert.equal(ui.nodes.rentalReconPassThrough.style.display,'block');
+  assert.match(ui.nodes.bankRentalTreatment.textContent,/balance-sheet pass-through/);
+  assert.match(ui.context.bankRentalActions(ui.row),direction==='debit'?/Pay tenant-funded expense/:/Record tenant expense collection/);
+  ui.nodes.rentalReconTenancy.value=tenant.id;ui.nodes.rentalReconNote.value='Verified tenant-funded movement';
+  ui.fire('bankRentalSave');assert.match(ui.nodes.bankRentalMsg.textContent,/Choose what/);
+  ui.nodes.rentalReconPurposeKind.value='electricity';ui.fire('rentalReconPurposeKind','change');
+  ui.nodes.rentalReconPeriod.value='2026-10';ui.fire('bankRentalSave');await flush();
+  assert.equal(ui.writes().length,1);
+  assert.deepEqual(JSON.parse(ui.writes()[0].request.body),{draftId:'BRD-FEES',rowId:'bank-fee',tenancyId:tenant.id,kind:'pass_through',note:'Verified tenant-funded movement',purposeKind:'electricity',purposeDetail:'',period:'2026-10'});
+});
+
+test('other tenant-funded expense reveals and requires a custom purpose',async()=>{
+  const ui=harness({direction:'credit'});await ui.open('pass_through');ui.nodes.rentalReconTenancy.value=tenant.id;ui.nodes.rentalReconNote.value='Verified other tenant collection';ui.nodes.rentalReconPurposeKind.value='other';ui.fire('rentalReconPurposeKind','change');
+  assert.equal(ui.nodes.rentalReconPurposeDetailWrap.style.display,'block');ui.nodes.rentalReconPeriod.value='2026-10';ui.fire('bankRentalSave');assert.match(ui.nodes.bankRentalMsg.textContent,/Describe the other expense/);assert.equal(ui.writes().length,0);
+  ui.nodes.rentalReconPurposeDetail.value='Lift repair contribution';ui.fire('bankRentalSave');await flush();assert.equal(ui.writes().length,1);
+});
 
 test('fee form requires tenant and remark and blocks duplicate submission while pending', async () => {
   let release;
@@ -173,7 +192,7 @@ test('revoked expense approval or selected-entity authority blocks a fee form at
     const ui = harness(); await ui.open('dealer_commission'); ui.nodes.rentalReconTenancy.value = tenant.id;
     revoke(ui); ui.fire('bankRentalSave');
     assert.equal(ui.writes().length, 0);
-    assert.match(ui.nodes.bankRentalMsg.textContent, /eligible for a tenant-linked fee/);
+    assert.match(ui.nodes.bankRentalMsg.textContent, /eligible for a tenant-linked transaction/);
   }
 });
 
