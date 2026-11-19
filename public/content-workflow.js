@@ -1,5 +1,7 @@
 (function(root,factory){if(typeof module==='object'&&module.exports)module.exports=factory();else root.ContentWorkflow=factory();})(typeof window==='object'?window:this,function(){
  'use strict';
+ function inDateRange(value,from='',to=''){if(from&&to&&from>to)return false;if(!from&&!to)return true;return !!value&&(!from||value>=from)&&(!to||value<=to);}
+ function contentDate(i,basis='latest'){return basis==='shoot'?i.shootDate||'':basis==='edited'?i.editedDate||i.source?.editedDate||'':basis==='poa'?i.poaDate||'':i.editedDate||i.source?.editedDate||i.shootDate||'';}
  const personName=v=>String(v||'').trim().toLowerCase().replace(/(^|[\s’'-])\p{L}/gu,c=>c.toUpperCase());
  const modelKey=v=>personName(v).toLowerCase();
  function modelList(items,genders={}){const names=new Map();for(const i of items){if(i.archived)continue;const key=modelKey(i.model);if(!key||key==='all')continue;const row=names.get(key)||{key,name:personName(i.model),count:0,gender:genders[key]||''};if(isShot(i)&&isVideo(i)&&!['Delivery Videos','My Journey'].includes(i.source?.tab))row.count++;names.set(key,row);}return [...names.values()].sort((a,b)=>b.count-a.count||a.name.localeCompare(b.name));}
@@ -39,5 +41,5 @@
   }
   return {people:[...groups.values()].sort((a,b)=>{const ai=team.map(personName).indexOf(a.name),bi=team.map(personName).indexOf(b.name);return (ai<0?999:ai)-(bi<0?999:bi)||a.name.localeCompare(b.name);}),missing};
  }
- return {contentKind,contentType,withContentType,editStatus,isShot,withFinalStatus,teamActivity,personName,modelKey,modelList,isPosted,stage,isVideo,summary,TYPES,videoType};
+ return {inDateRange,contentDate,contentKind,contentType,withContentType,editStatus,isShot,withFinalStatus,teamActivity,personName,modelKey,modelList,isPosted,stage,isVideo,summary,TYPES,videoType};
 });
