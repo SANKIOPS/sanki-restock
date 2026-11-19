@@ -1,0 +1,13 @@
+'use strict';
+const w=require('../public/content-workflow'),poa=require('./content-poa');
+const fail=(message,status=400)=>{throw Object.assign(Error(message),{status});};
+function attach({load,change,users,date,person}){
+ function slot(v){if(!v||typeof v!=='object')fail('Choose a plan date and time.');const d=date(v.date,false);if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(v.time||''))fail('Choose a valid time.');return {date:d,time:v.time,owner:person(v.owner||'')};}
+ function save(b,u,id){if(!poa.canPlan(u))fail('POA planning permission is required.',403);return change(b.revision,u.username,s=>{const i=s.items.find(i=>i.id===id&&!i.archived);if(!i)fail('Content not found.',404);if(b.editPlan!==undefined){i.editPlan=b.editPlan===null?null:slot(b.editPlan);if(i.editPlan?.owner)i.editor=i.editPlan.owner;}if(b.postingPlans!==undefined){if(!i.finalUrl)fail('Add the final video link before planning a post.');if(!b.postingPlans||typeof b.postingPlans!=='object'||Array.isArray(b.postingPlans))fail('Choose posting accounts.');const plans={};for(const [account,v] of Object.entries(b.postingPlans)){if(!i.accounts.includes(account))fail('Choose an account linked to this content.');if(w.isPosted(i,s.publications,account))fail('This content is already posted on '+account+'.');plans[account]=slot(v);}i.postingPlans={...(i.postingPlans||{}),...plans};}i.updatedAt=new Date().toISOString();i.updatedBy=u.username;return {action:'content_plan',id};});}
+ function view(u){const s=load(),tasks=[];for(const [n,t] of (s.poas||[]).entries()){if(t.archived||t.deleted||!poa.visible(t,u))continue;const p=poa.progress(t,s.items,s.publications);tasks.push({id:'shoot:'+t.id,kind:'shoot',poaId:t.id,number:'P-'+(n+1),title:t.title,date:t.shootDate||t.date,time:t.shootTime||'11:15',accounts:t.accounts,owners:t.shooters||[],done:p.shot>=t.quantity,status:p.shot>=t.quantity?'Shot':'To shoot'});}
+ for(const i of s.items.filter(i=>!i.archived)){if(i.editPlan){const done=!!i.finalUrl;tasks.push({id:'edit:'+i.id,kind:'edit',contentId:i.id,number:'#'+i.entryNumber,title:i.title,...i.editPlan,owners:[i.editPlan.owner].filter(Boolean),accounts:i.accounts,done,status:done?'Edited':w.editStatus(i)==='editing'?'Editing':'Not edited'});}for(const [account,p] of Object.entries(i.postingPlans||{})){if(!i.accounts.includes(account))continue;const done=w.isPosted(i,s.publications,account);tasks.push({id:'post:'+i.id+':'+account,kind:'post',contentId:i.id,number:'#'+i.entryNumber,title:i.title,...p,owners:[p.owner].filter(Boolean),accounts:[account],done,status:done?'Posted':'Planned'});}}
+ return {tasks:tasks.sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)),canPlan:poa.canPlan(u)};
+ }
+ return {save,view};
+}
+module.exports={attach};
