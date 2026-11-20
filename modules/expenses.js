@@ -4674,7 +4674,9 @@ router.get('/api/expenses/balances', (req, res) => {
     // ledger arithmetic visible for that account and mark only that card as
     // unreconciled until its bank opening anchor is resolved.
     const balanceWarnings=[];let statementBalance=calculatedBalance;
-    if(isBankLedgerName(name))try{statementBalance=recordedAccountBalance(s,nature,name,to,balanceProjection);}catch(error){balanceWarnings.push({code:'bank_anchor_unavailable',reference:name,message:String(error&&error.message||'Bank-anchored balance is unavailable.')});}
+    if(isBankLedgerName(name))try{statementBalance=isSharedBankReconciliationAccount(name)
+      ?sharedPhysicalBankView(s,name,to,{allowPendingBankAnchor:true}).balance
+      :recordedAccountBalance(s,nature,name,to,balanceProjection);}catch(error){balanceWarnings.push({code:'bank_anchor_unavailable',reference:name,message:String(error&&error.message||'Bank-anchored balance is unavailable.')});}
     let issues=[];try{issues=reconciliationIssues(s,nature,name,to);}catch(error){balanceWarnings.push({code:'reconciliation_status_unavailable',reference:name,message:String(error&&error.message||'Reconciliation status is unavailable.')});}
     const allIssues=issues.concat(balanceWarnings),closingBalance=statementBalance-restrictedAmount,cashVerification=nature==='SANKI'&&name===DEFAULT_COUNTER_CASH?latestApprovedCashReconciliation(s,to):null;
     const exact=isBankLedgerName(name)||name===gokwikAccounting.CLEARING,money=v=>exact?Math.round(num(v)*100)/100:round0(v);return { name, physicalBalance:isSharedBankReconciliationAccount(name), opening: money(opening), topups, received, transferredIn, transferredOut, spent, excludedBankIn:money(excludedBankIn), excludedBankOut:money(excludedBankOut), periodNet:money(topups+received+transferredIn-transferredOut-spent+(applyBankTruth?excludedBankIn-excludedBankOut:0)-periodRestricted), statementBalance:money(statementBalance), restrictedAmount:money(restrictedAmount), restrictedFunds:holds, balance:money(closingBalance), closingAsOf:to||'today', reconciled:balanceWarnings.length?false:issues.some(issue=>issue.code==='store_credit_source_changed')?false:cashVerification?true:issues.length===0, reconciledThrough:cashVerification&&cashVerification.verifiedThrough||'', reconciledBy:cashVerification&&(cashVerification.approvedBy||cashVerification.requestedBy)||'', reconciliationIssues:cashVerification?allIssues.filter(issue=>issue.code==='store_credit_source_changed'||issue.code==='bank_anchor_unavailable'||issue.code==='reconciliation_status_unavailable'):allIssues, recordWarnings:allIssues };
@@ -5238,12 +5240,12 @@ function sharedPhysicalBankView(s,account,to,options={}){
   const saved=(s.physicalBankOpeningBalances||{})[account];
   const opening=saved!=null?num(saved):num(((s.openingBalancesByNature||{}).SAMAST||{})[account])+num(((s.openingBalancesByNature||{}).PERSONAL||{})[account]);
   const dates=['SAMAST','PERSONAL'].map(n=>(((s.openingBalanceDatesByNature||{})[n])||{})[account]).filter(Boolean).sort();
-  const projection=require('./physical-bank-balance').project({book,movements:rows,opening,openingDate:dates[0]||'2026-08-22',to:to||indiaBusinessDate()});
+  const projection=require('./physical-bank-balance').project({book,movements:rows,opening,openingDate:dates[0]||'2026-08-22',to:to||indiaBusinessDate(),allowPendingBankAnchor:!!options.allowPendingBankAnchor});
   projection.bankMovementAuthorityConflicts=rows.bankMovementAuthorityConflicts||[];
   return projection;
 }
 function sharedPhysicalLedger(req,res,s,account,nature,from,to,expenseNature){
-  const projection=sharedPhysicalBankView(s,account,to),book=(s.bankStatements||{})[bankStatementBookKey('SAMAST',account)]||{};
+  const projection=sharedPhysicalBankView(s,account,to,{allowPendingBankAnchor:true}),book=(s.bankStatements||{})[bankStatementBookKey('SAMAST',account)]||{};
   // Keep historical bank evidence visible, without replaying its source records.
   const history=Object.values(book.transactions||{}).filter(r=>projection.anchor&&r.date<=projection.anchor.cutoffDate&&(!from||r.date>=from)&&(!to||r.date<=to)).map(r=>({...r,kind:'bank_transaction',entity:r.entityTag&&r.entityTag.nature||r.transactionNature||'',reference:r.reference||r.id,editable:false,reconciliation:{bankDate:r.date,reconciliationId:r.lastSeenImport||r.firstSeenImport||''}}));
   let running=num(projection.openingEntry.balance);
