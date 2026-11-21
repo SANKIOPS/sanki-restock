@@ -89,3 +89,13 @@ main{max-width:1600px;padding:22px 26px}main>header{margin-bottom:14px;padding-b
 #correctionReasonDialog header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 #correctionReasonDialog h2{font-size:18px;margin:0}
 .full-correction-reason{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;padding:12px;background:#fff4da;border-radius:6px}
+
+#contentWorkspace .content-table th:nth-child(11){width:125px}
+.posting-status-cell .account-post-status{display:block;max-width:100%;margin:0 0 8px;white-space:normal}
+.posting-status-cell .account-post-status:last-child{margin-bottom:0}
+.posting-status-cell .status-pill{max-width:100%;box-sizing:border-box;white-space:normal;overflow-wrap:anywhere;line-height:1.4}
+.posting-status-cell button.posting-state{font-family:inherit;font-size:10px;margin:0;border:1px solid transparent;text-align:left;cursor:pointer}
+.posting-status-cell button.posting-state:hover{border-color:var(--green)}
+.posting-status-cell button.posting-state:disabled{opacity:1;cursor:default}
+.posting-planned{background:#e4eef6;color:#24536f}.posting-overdue{background:#fff0dd;color:#9a3520}.posting-posted{background:#e3f0e5;color:#005540}.posting-not_planned{background:#f0eee5;color:#69675c}
+.posting-schedule{display:block;font-size:10px!important;line-height:1.45!important;white-space:normal;overflow-wrap:anywhere;margin-top:3px;color:var(--green)!important}
