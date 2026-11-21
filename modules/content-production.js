@@ -141,6 +141,7 @@ function createRouter(store=createStore()){
  r.post(BASE+'/items/:id/plans',run(req=>store.plans.save(req.body,req.user,req.params.id)));
  r.get(BASE+'/scripts',run(req=>store.scripts.view(req.user)));
  r.post(BASE+'/scripts',run(req=>store.scripts.save(req.body,req.user)));
+ r.post(BASE+'/scripts/:id/use',run(req=>store.scripts.markUsed(req.body,req.user,req.params.id)));
  r.patch(BASE+'/scripts/:id',run(req=>store.scripts.save(req.body,req.user,req.params.id)));
  r.get(BASE+'/poa',run(req=>store.poa.view(req.user)));
  r.post(BASE+'/poa/cast-members',run(req=>store.poa.addCast(req.body,req.user)));
