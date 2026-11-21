@@ -7,7 +7,7 @@ const canDelete=u=>owns(u)||u.username==='janvi';
 const fail=(m,status=400)=>{throw Object.assign(Error(m),{status});};
 const text=(v,n=1000)=>String(v??'').trim().slice(0,n);
 const SOP={lighting:'Check lighting before recording. Avoid unwanted shadows, flickering lights and reflections.',transitions:'Match the action across transitions. Keep transitions smooth and synchronise cuts with the music’s beat.',funny:'Use suitable sound effects and highlight facial reactions to strengthen the humour.'};
-function progress(task,items,publications=[]){const rows=items.filter(i=>i.poaId===task.id&&!i.archived);return {linked:rows.length,shot:rows.filter(i=>i.rawUrl||w.isShot(i)).length,editing:rows.filter(i=>w.editStatus(i)==='editing').length,edited:rows.filter(i=>!!i.finalUrl).length,posted:rows.filter(i=>w.stage(i,publications)==='posted').length,ids:rows.map(i=>i.id)};}
+function progress(task,items,publications=[]){const rows=items.filter(i=>i.poaId===task.id&&!i.archived);return {linked:rows.length,shot:rows.filter(i=>i.correctionStatus!=='reshoot'&&(i.rawUrl||w.isShot(i))).length,editing:rows.filter(i=>w.editStatus(i)==='editing').length,edited:rows.filter(i=>!!i.finalUrl&&!w.needsCorrection(i)).length,posted:rows.filter(i=>w.stage(i,publications)==='posted').length,ids:rows.map(i=>i.id)};}
 function assigned(t,u){return [...t.shooters,t.editor,t.publisher,...Object.values(t.castLogins||{})].includes(u.username);}
 function unassigned(t){return !(t.shooters||[]).length&&!t.editor&&!t.publisher;}
 function canWork(t,u){return canPlan(u)||rolesOf(u).includes('content_team')&&(unassigned(t)||[...(t.shooters||[]),t.editor,t.publisher].includes(u.username));}

@@ -6,9 +6,10 @@
  const modelKey=v=>personName(v).toLowerCase();
  function modelList(items,genders={}){const names=new Map();for(const i of items){if(i.archived)continue;const key=modelKey(i.model);if(!key||key==='all')continue;const row=names.get(key)||{key,name:personName(i.model),count:0,gender:genders[key]||''};if(isShot(i)&&isVideo(i)&&!['Delivery Videos','My Journey'].includes(i.source?.tab))row.count++;names.set(key,row);}return [...names.values()].sort((a,b)=>b.count-a.count||a.name.localeCompare(b.name));}
  const contentKind=i=>i.contentKind==='story'?'story':'video';
- const editStatus=i=>i.finalUrl?'done':i.editStatus;
+ const needsCorrection=i=>['reshoot','reedit'].includes(i.correctionStatus);
+ const editStatus=i=>needsCorrection(i)?(i.editStatus==='editing'?'editing':'pending'):i.finalUrl?'done':i.editStatus;
  const isShot=i=>i.shootStatus==='shot'||!!i.finalUrl;
- const withFinalStatus=i=>i.finalUrl?{...i,editStatus:'done',shootStatus:'shot'}:i;
+ const withFinalStatus=i=>i.finalUrl&&!needsCorrection(i)?{...i,editStatus:'done',shootStatus:'shot'}:i;
  const TYPES=['Model aesthetics','UGC','Funny video','Product only','Gasolina'];
  const contentType=i=>/gasolina/i.test(i.title||'')?'Gasolina':videoType(i.type);
  const withContentType=i=>/gasolina/i.test(i.title||'')?{...i,type:'Gasolina'}:i;
@@ -21,6 +22,7 @@
   return /^posted$/i.test(String(i.source?.posted||'').trim())&&(!account||!i.accounts.length||i.accounts.includes(account));
  }
  function stage(i,publications=[]){
+  if(needsCorrection(i))return i.correctionStatus;
   if(i.accounts.length?i.accounts.every(a=>isPosted(i,publications,a)):isPosted(i,publications))return 'posted';
   if(i.finalUrl)return 'post';
   if(i.shootStatus!=='shot')return 'shoot';
@@ -28,7 +30,7 @@
   return i.finalUrl?'post':'file';
  }
  const isVideo=i=>!/^image|photo|carousel$/i.test(i.contentFormat||'');
- function summary(items,publications=[],includeLibrary=false,kind='video',account=''){const videos=items.filter(i=>(includeLibrary||!['Delivery Videos','My Journey'].includes(i.source?.tab))&&!i.archived&&contentKind(i)===kind&&isShot(i)&&(kind==='story'||isVideo(i)));return {total:videos.length,posted:videos.filter(i=>account?isPosted(i,publications,account):stage(i,publications)==='posted').length,ready:videos.filter(i=>account?!!i.finalUrl&&!isPosted(i,publications,account):stage(i,publications)==='post').length,notEdited:videos.filter(i=>stage(i,publications)==='edit').length};}
+ function summary(items,publications=[],includeLibrary=false,kind='video',account=''){const videos=items.filter(i=>(includeLibrary||!['Delivery Videos','My Journey'].includes(i.source?.tab))&&!i.archived&&contentKind(i)===kind&&isShot(i)&&(kind==='story'||isVideo(i)));return {total:videos.length,posted:videos.filter(i=>account?!needsCorrection(i)&&isPosted(i,publications,account):stage(i,publications)==='posted').length,ready:videos.filter(i=>account?!needsCorrection(i)&&!!i.finalUrl&&!isPosted(i,publications,account):stage(i,publications)==='post').length,notEdited:videos.filter(i=>stage(i,publications)==='edit').length};}
  function teamActivity(items,from,to,team=[]){
   const groups=new Map(),missing={shot:[],edited:[]};
   const group=n=>{n=personName(n)||'Unassigned';if(!groups.has(n))groups.set(n,{name:n,shot:[],editing:[],edited:[],pending:[],lastUpdate:''});return groups.get(n);};team.forEach(group);
@@ -42,5 +44,5 @@
   return {people:[...groups.values()].sort((a,b)=>{const ai=team.map(personName).indexOf(a.name),bi=team.map(personName).indexOf(b.name);return (ai<0?999:ai)-(bi<0?999:bi)||a.name.localeCompare(b.name);}),missing};
  }
  function editorTeamActivity(items,from,to){const names=['Ishnoor','Karan','Lokesh'],data=teamActivity(items,from,to,names),ids=new Map(items.map(i=>[i.id,i]));data.people=names.map(n=>data.people.find(p=>p.name===n));data.missing.shot=data.missing.shot.filter(id=>{const i=ids.get(id);return names.includes(personName(i.shotBy||i.shooter||i.source?.shooter));});data.missing.edited=data.missing.edited.filter(id=>{const i=ids.get(id);return names.includes(personName(i.editedBy||i.editor||i.source?.editor));});return data;}
- return {editorTeamActivity,inDateRange,contentDate,contentKind,contentType,withContentType,editStatus,isShot,withFinalStatus,teamActivity,personName,modelKey,modelList,isPosted,stage,isVideo,summary,TYPES,videoType};
+ return {needsCorrection,editorTeamActivity,inDateRange,contentDate,contentKind,contentType,withContentType,editStatus,isShot,withFinalStatus,teamActivity,personName,modelKey,modelList,isPosted,stage,isVideo,summary,TYPES,videoType};
 });
