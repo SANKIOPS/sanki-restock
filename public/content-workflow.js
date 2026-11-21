@@ -27,6 +27,10 @@
   const status=isPosted(i,publications,account)?'posted':!valid?'not_planned':p.date+' '+p.time<now?'overdue':'planned';
   return {status,label:{posted:'Posted',not_planned:'Not planned',overdue:'Overdue',planned:'Planned'}[status],date:valid?p.date:'',time:valid?p.time:'',owner:valid?p.owner||'':'',blocked:needsCorrection(i)};
  }
+ function planTaskVisible(t,username,postingOverview=false){const people=t.participants||t.owners||[];return (postingOverview&&t.kind==='post')||!people.length||people.includes(username);}
+ function postingQueue(items,publications=[],focus='today',today=istMinute().slice(0,10),now=istMinute()){
+  return items.filter(i=>!i.archived).flatMap(i=>(i.accounts||[]).map(account=>{const p=postingState(i,publications,account,now);return {contentId:i.id,account,...p};})).filter(p=>p.date&&p.status!=='posted'&&(focus==='today'?p.date===today:focus==='overdue'?p.status==='overdue':false));
+ }
  function stage(i,publications=[]){
   if(needsCorrection(i))return i.correctionStatus;
   if(i.accounts.length?i.accounts.every(a=>isPosted(i,publications,a)):isPosted(i,publications))return 'posted';
@@ -50,5 +54,5 @@
   return {people:[...groups.values()].sort((a,b)=>{const ai=team.map(personName).indexOf(a.name),bi=team.map(personName).indexOf(b.name);return (ai<0?999:ai)-(bi<0?999:bi)||a.name.localeCompare(b.name);}),missing};
  }
  function editorTeamActivity(items,from,to){const names=['Ishnoor','Karan','Lokesh'],data=teamActivity(items,from,to,names),ids=new Map(items.map(i=>[i.id,i]));data.people=names.map(n=>data.people.find(p=>p.name===n));data.missing.shot=data.missing.shot.filter(id=>{const i=ids.get(id);return names.includes(personName(i.shotBy||i.shooter||i.source?.shooter));});data.missing.edited=data.missing.edited.filter(id=>{const i=ids.get(id);return names.includes(personName(i.editedBy||i.editor||i.source?.editor));});return data;}
- return {istMinute,postingState,needsCorrection,editorTeamActivity,inDateRange,contentDate,contentKind,contentType,withContentType,editStatus,isShot,withFinalStatus,teamActivity,personName,modelKey,modelList,isPosted,stage,isVideo,summary,TYPES,videoType};
+ return {planTaskVisible,postingQueue,istMinute,postingState,needsCorrection,editorTeamActivity,inDateRange,contentDate,contentKind,contentType,withContentType,editStatus,isShot,withFinalStatus,teamActivity,personName,modelKey,modelList,isPosted,stage,isVideo,summary,TYPES,videoType};
 });
