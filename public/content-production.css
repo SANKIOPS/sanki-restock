@@ -74,3 +74,5 @@ main{max-width:1600px;padding:22px 26px}main>header{margin-bottom:14px;padding-b
 .correction-counters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.correction-counters button{font-size:14px;padding:7px 12px;border:1px solid #d8c6a3;color:#76591d;background:#fffaf0}.correction-counters button[aria-pressed=true]{background:#f6e6bd;border-color:#aa852e}.correction-counters strong{margin-left:8px}.correction-label{display:block;font-size:12px;margin-top:6px}.correction-label select{margin-top:3px;min-width:140px}
 
 .edit-reshoot,.edit-reedit{background:#fff0cc;color:#79521b}
+
+.correction-reason-field{display:block;font-size:12px;margin-top:6px}.correction-reason-field[hidden]{display:none}.correction-reason-field textarea{width:100%;min-width:150px;box-sizing:border-box}.correction-reason-preview{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:190px;white-space:pre-wrap;margin-top:4px;color:#79521b}
