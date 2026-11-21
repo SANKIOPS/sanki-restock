@@ -10,7 +10,7 @@
  const editStatus=i=>needsCorrection(i)?(i.editStatus==='editing'?'editing':'pending'):i.finalUrl?'done':i.editStatus;
  const isShot=i=>i.shootStatus==='shot'||!!i.finalUrl;
  const withFinalStatus=i=>i.finalUrl&&!needsCorrection(i)?{...i,editStatus:'done',shootStatus:'shot'}:i;
- const TYPES=['Model aesthetics','UGC','Funny video','Product only','Gasolina'];
+ const TYPES=['Model aesthetics','UGC','Funny video','Product only','Gasolina','Product showcasing'];
  const contentType=i=>/gasolina/i.test(i.title||'')?'Gasolina':videoType(i.type);
  const withContentType=i=>/gasolina/i.test(i.title||'')?{...i,type:'Gasolina'}:i;
  const videoType=t=>TYPES.includes(t)?t:({'Model showcase':'Model aesthetics','Funny':'Funny video'}[t]||'');
