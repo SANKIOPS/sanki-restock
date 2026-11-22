@@ -37,3 +37,23 @@ test('income tax compliance fees remain operating costs, not income tax paid',()
  for(const ledger of ['Income tax filing fees','Income tax professional service','GST Fee'])assert.equal(taxKind({ledger}), '');
  assert.equal(taxKind({ledger:'GST Fee',reconciliationSource:{bankDescription:'GST/123/GST'}}),'gstPaid');
 });
+test('monthly rent tracking separates approved net due, actual bank receipts and verified TDS credit',()=>{
+ const src=sources(),s=src.expenses;
+ s.rentals={tenancies:[{id:'TEN-A',tenant:'Synthetic tenant',startMonth:'2026-09',trackingFrom:'2026-09',confirmedAt:'2026-09-01'}],invoices:[{id:'INV-A',tenancyId:'TEN-A',month:'2026-09',dueDate:'2026-09-05',baseRent:110000,cgst:9900,sgst:9900,tds:11000,bankDue:118800,tdsStatus:'verified',tdsReference:'26AS synthetic reference'}],allocations:[],deposits:[]};
+ s.receipts=[{id:'RENT-A',nature:'SAMAST',receiptType:'rental_income',date:'2026-09-07',amount:108000,account:'Synthetic bank'}];
+ const r=build(src,{...options,to:'2026-09-30'}).samastProfit,m=r.months[0];
+ assert.equal(m.desiredNet,118800);assert.equal(m.received,108000);assert.equal(m.rentDifference,10800);
+ assert.equal(m.gstExpected,19800);assert.equal(m.gst,18000);assert.equal(m.gstPending,1800);
+ assert.equal(m.tdsExpected,11000);assert.equal(m.tdsVerified,11000);assert.equal(m.tdsPending,0);
+ assert.equal(m.baseRent,100000);assert.equal(m.profit,100000);
+ assert.equal(r.entries.find(x=>x.id==='INV-A').tdsReference,'26AS synthetic reference');
+});
+test('desired rent and monthly tax gaps remain Needs review when an active tenancy has no approved charge',()=>{
+ const src=sources(),s=src.expenses;
+ s.rentals={tenancies:[{id:'TEN-A',tenant:'Missing monthly charge',startMonth:'2026-09',trackingFrom:'2026-09',confirmedAt:'2026-09-01'}],invoices:[],allocations:[],deposits:[]};
+ s.receipts=[{id:'RENT-A',nature:'SAMAST',receiptType:'rental_income',date:'2026-09-07',amount:108000}];
+ const r=build(src,{...options,to:'2026-09-30'}).samastProfit,m=r.months[0];
+ assert.equal(m.desiredNet,null);assert.equal(m.rentDifference,null);assert.equal(m.gstPending,null);assert.equal(m.tdsPending,null);
+ assert.deepEqual(m.rentDueReview,['Missing monthly charge']);assert.equal(r.totals.desiredNet,null);
+ assert.equal(m.received,108000);assert.equal(m.baseRent,100000);assert.equal(m.profit,100000);
+});

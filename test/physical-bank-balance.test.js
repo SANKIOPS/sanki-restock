@@ -23,3 +23,22 @@ test('contradictory finalized closing fails rather than manufacturing an adjustm
  const b={...book,imports:[{id:'bad',to:'2026-10-19',closingBalance:42,reconciled:true}]};
  assert.throws(()=>project({book:b,to:'2026-11-13'}),/different closing|conflict/i);
 });
+test('read-only balance uses validated bank closing when its ledger difference is pending',()=>{
+ const pending={reconciledThrough:'2026-11-15',lastReconciliation:{through:'2026-11-15',closingBalance:109402.35,balanceReconciled:false,closingBalanceDeferred:true,balanceDifference:-328232,draftId:'DRAFT-PENDING'},imports:[{id:'BST-PENDING',draftId:'DRAFT-PENDING',to:'2026-11-15',balanceReconciled:false,closingBalanceDeferred:true,balanceDifference:-328232,statementSummary:{to:'2026-11-15',closingBalance:109402.35,validated:true}}]};
+ const movements=[row('already-covered','2026-11-15',-999999),row('rent','2026-11-18',136200,'SAMAST'),row('later-debits','2026-11-18',-80892,'PERSONAL')];
+ assert.throws(()=>project({book:pending,movements,to:'2026-11-18'}),/deferred|unreconciled/i);
+ const result=project({book:pending,movements,to:'2026-11-18',allowPendingBankAnchor:true});
+ assert.equal(result.balance,164710.35);
+ assert.equal(result.anchor.anchorRecordId,'BST-PENDING');
+ assert.equal(result.anchor.balancePending,true);
+ assert.equal(result.verified,false);
+ assert.match(result.basis,/ledger balance pending/i);
+ assert.match(result.warnings[0],/pending review/i);
+});
+test('pending statement display anchor remains unavailable when latest closings conflict',()=>{
+ const pending={reconciledThrough:'2026-11-15',imports:[
+  {id:'A',to:'2026-11-15',balanceReconciled:false,statementSummary:{to:'2026-11-15',closingBalance:100,validated:true}},
+  {id:'B',to:'2026-11-15',balanceReconciled:false,statementSummary:{to:'2026-11-15',closingBalance:200,validated:true}}
+ ]};
+ assert.throws(()=>project({book:pending,to:'2026-11-18',allowPendingBankAnchor:true}),/deferred|unreconciled|different closing|conflict/i);
+});

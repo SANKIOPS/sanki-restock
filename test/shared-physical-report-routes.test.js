@@ -19,6 +19,16 @@ test('both entity ledger routes and balance cards use one physical close and lat
   const balances=await invoke('/api/expenses/balances',{nature,to:'2026-11-13'});assert.equal(balances.body.accounts.find(a=>a.name===account).balance,385197.82);
  }
 });
+test('7883 cards and ledger use bank closing instead of one-entity arithmetic while balance review is pending',async t=>{
+ const before=fs.readFileSync(file,'utf8');t.after(()=>fs.writeFileSync(file,before));
+ const s=structuredClone(baseline),account='IndusInd Bank 7883',pending={id:'BST-PENDING',draftId:'DRAFT-PENDING',from:'2026-11-14',to:'2026-11-15',balanceReconciled:false,closingBalanceDeferred:true,balanceDifference:-328232,statementSummary:{from:'2026-11-14',to:'2026-11-15',openingBalance:119909.35,closingBalance:109402.35,totalDebits:101000,totalCredits:90493,validated:true}};
+ Object.assign(s,{expenses:{},receipts:[],transfers:[],adjustments:[],vendorAdvances:[],bankMovementAuthority:{},bankDateOverrides:{},bankReconciliationDrafts:{},bankStatements:{[account]:{reconciledThrough:'2026-11-15',lastReconciliation:{through:'2026-11-15',closingBalance:109402.35,balanceReconciled:false,closingBalanceDeferred:true,balanceDifference:-328232,draftId:'DRAFT-PENDING'},imports:[pending],transactions:{}}},physicalBankOpeningBalances:{[account]:111710.4}});
+ s.receipts=[{id:'REC-RENT',nature:'SAMAST',account,date:'2026-11-18',amount:136200,receiptType:'rental_income'}];
+ s.expenses.PERSONAL={id:'PERSONAL',nature:'PERSONAL',status:'paid',approvedAt:'2026-11-18',date:'2026-11-18',amount:80892,ledger:'Personal',payments:[{id:'PAY-1',account,date:'2026-11-18',amount:80892}]};
+ fs.writeFileSync(file,JSON.stringify(s));
+ const ledger=await invoke('/api/expenses/account-ledger',{nature:'PERSONAL',account,to:'2026-11-18'});assert.equal(ledger.status,200,JSON.stringify(ledger.body));assert.equal(ledger.body.balance,164710.35);assert.equal(ledger.body.bankVerified,false);assert.match(ledger.body.balanceBasis,/ledger balance pending/i);
+ const balances=await invoke('/api/expenses/balances',{nature:'PERSONAL',to:'2026-11-18'});assert.equal(balances.status,200,JSON.stringify(balances.body));const card=balances.body.accounts.find(row=>row.name===account);assert.equal(card.balance,164710.35);assert.equal(card.physicalBalance,true);
+});
 test('compact report reads do not migrate or write financial source and reject unauthorized roles',async()=>{
  const before=fs.readFileSync(file,'utf8');const result=await invoke('/api/expenses/compact-report',{entity:'SAMAST',from:'2026-08-22',to:'2026-11-13'});assert.equal(result.status,200,JSON.stringify(result.body));assert.equal(result.body.totals.income,100000);assert.equal(fs.readFileSync(file,'utf8'),before);
  const forbidden=await invoke('/api/expenses/compact-report',{entity:'PERSONAL',from:'2026-08-22',to:'2026-11-13'},{role:'accounting',roles:['accounting'],username:'staff',permissions:{}});assert.equal(forbidden.status,403);
