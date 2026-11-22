@@ -104,6 +104,7 @@ const API_ROLE_RULES = [
   { prefix: '/api/seo-control',     roles: ['owner'] },
   { prefix: '/api/marketing/meta',  roles: ['owner'] },
   { prefix: '/api/catalogue-images', roles: ['owner'] },
+  { prefix: '/api/image-review', roles: ['owner'] },
   { prefix: '/api/salary/',               roles: ['admin', 'accounting', 'owner'] },
   { prefix: '/api/incentives',             roles: ['admin', 'accounting', 'owner'] },
   { prefix: '/api/setup/',                roles: ['admin'] },
@@ -247,7 +248,7 @@ function gate(req, res, next) {
 
   // The Money Picture and its capital/OD APIs are private to the Owner role,
   // even when another account has ordinary Admin access.
-  if ((p === '/owner.html' || p === '/rentals.html' || p === '/catalogue-images.html' || p.startsWith('/api/owner/') || p.startsWith('/api/catalogue-images')) && !rolesOf(user).includes('owner') && !(isPrashant(user) && p === '/rentals.html')) {
+  if ((p === '/owner.html' || p === '/rentals.html' || p === '/catalogue-images.html' || p === '/image-review.html' || p.startsWith('/api/owner/') || p.startsWith('/api/catalogue-images') || p.startsWith('/api/image-review')) && !rolesOf(user).includes('owner') && !(isPrashant(user) && p === '/rentals.html')) {
     if (p.startsWith('/api/')) return res.status(403).json({ success: false, error: 'Owner only.' });
     return res.redirect(302, landingForUser(user));
   }

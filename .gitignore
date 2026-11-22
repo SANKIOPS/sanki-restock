@@ -44,3 +44,8 @@ pnl-line-corrections.json.*.tmp
 content-production.json
 content-production.json.lock
 content-production.json.tmp-*
+
+# Persistent garment-reference review data.
+image-review.json
+image-review.json.tmp-*
+image-review-files/
