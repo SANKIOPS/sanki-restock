@@ -45,7 +45,7 @@ function statusFor(record, item) {
     const latest = record.proposalRevision || 0;
     return record.approvedProposalRevision === latest ? 'approved_for_upload' : 'awaiting_approval';
   }
-  if (record.decision === 'needs_correction') return ORIGINAL_VIEWS.every(v => record.originals?.some(f => f.view === v)) ? 'ready_for_correction' : 'awaiting_originals';
+  if (record.decision === 'needs_correction') return record.originals?.length > 0 ? 'ready_for_correction' : 'awaiting_originals';
   return 'unreviewed';
 }
 function createImageReviewRouter(options = {}) {
@@ -140,7 +140,7 @@ function createImageReviewRouter(options = {}) {
     if(!['jpeg','png','webp'].includes(metadata.format)||metadata.pages>1)return res.status(400).json({success:false,error:'Use a single JPEG, PNG or WebP photo.'});
     await sharp(req.file.buffer,{limitInputPixels:80000000}).stats();
     const {item,state,record}=await context(req);
-    if(kind==='proposal'&&!ORIGINAL_VIEWS.every(v=>record.originals.some(f=>f.view===v)))return res.status(409).json({success:false,error:'Upload original front, back and detail references before staging corrections.'});
+    if(kind==='proposal'&&!record.originals.some(f=>f.view===view))return res.status(409).json({success:false,error:'Upload an original reference for this view before staging its correction.'});
     const name=crypto.randomUUID()+'.'+(metadata.format==='jpeg'?'jpg':metadata.format);
     const photo={id:crypto.randomUUID(),file:name,view,kind,bytes:req.file.size,width:metadata.width,height:metadata.height,sha256:crypto.createHash('sha256').update(req.file.buffer).digest('hex'),uploadedAt:new Date().toISOString(),uploadedBy:req.user.username};
     fs.mkdirSync(directory,{recursive:true});fs.writeFileSync(path.join(directory,name),req.file.buffer,{flag:'wx'});
@@ -155,7 +155,8 @@ function createImageReviewRouter(options = {}) {
   router.post('/api/image-review/items/:id/approve',wrap(async(req,res)=>{
     const {item,state,record}=await context(req,true);
     if(record.fingerprint!==item.fingerprint)return res.status(409).json({success:false,error:'Review the changed website gallery before approving.'});
-    if(!ORIGINAL_VIEWS.every(v=>record.originals.some(f=>f.view===v))||!ORIGINAL_VIEWS.every(v=>record.proposals.some(f=>f.view===v)))return res.status(409).json({success:false,error:'Original and proposed front, back and detail photos are required.'});
+    const requestedViews=[...new Set(record.originals.map(f=>f.view))];
+    if(!requestedViews.length||!requestedViews.every(v=>record.proposals.some(f=>f.view===v)))return res.status(409).json({success:false,error:'Each uploaded reference view needs its matching correction before approval.'});
     record.approvedProposalRevision=record.proposalRevision;record.approvedAt=new Date().toISOString();
     res.json({success:true,item:persist(item,state,record,req,'proposal-approved')});
   }));
