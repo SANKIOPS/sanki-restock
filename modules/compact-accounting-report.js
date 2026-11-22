@@ -139,7 +139,7 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
     }
     if(entity==='SAMAST'){
       samastProfit=require('./samast-profit').build(s,{from,to,receipts:profitRentReceipts,costs:report.transactions.filter(r=>r.expenses),salary:salary||{}});
-      for(const month of samastProfit.months.filter(item=>!item.rentDueComplete))warnings.push('Rent '+month.month+': approve monthly charges'+(month.rentDueReview.length?' for '+month.rentDueReview.join(', '):'')+' before treating desired rent, GST or TDS gaps as final.');
+      for(const month of samastProfit.months.filter(item=>item.unassignedRent>0))warnings.push('Rent '+month.month+': select the tenant for '+money(month.unassignedRent)+' of bank rent receipts before using their calculated base, GST, TDS or profit.');
     }
     result=money(income-expenses);resultLabel='Cash surplus / deficit';
     basis='Recorded income received minus approved paid costs. Transfers, loan principal and refundable security are excluded. This is a cash management view, not earned or tax-adjusted profit.';
