@@ -11,15 +11,21 @@
 #detailRows .economics-detail-table{min-width:850px;width:100%;table-layout:auto}#detailRows .economics-detail-table td{white-space:normal;overflow-wrap:anywhere}#detailRows .economics-detail-table th{white-space:normal}#detailRows .economics-detail-table td:last-child{font-weight:600}
 
 /* Fixed-width monthly columns fit together on desktop; amounts retain paise. */
-#samastMonths{max-height:none}
+#samastMonths,#samastTaxMonths{max-height:none}
 .samast-monthly-table{width:100%;min-width:0;table-layout:fixed;font-size:clamp(10px,.85vw,12px)}
 .samast-monthly-table th,.samast-monthly-table td{min-width:0;padding:9px 4px;text-align:right;font-size:inherit;white-space:nowrap}
 .samast-monthly-table th{white-space:normal;letter-spacing:0;font-size:10px;line-height:1.4}
 .samast-monthly-table th:first-child,.samast-monthly-table td:first-child{width:10%;text-align:left;white-space:normal}
 .samast-monthly-table .drill{font-size:inherit;max-width:100%;min-height:32px;text-align:inherit}
 .samast-monthly-table td:first-child .drill{white-space:normal}
-.samast-monthly-table td:nth-child(5),.samast-monthly-table td:nth-child(8){background:#eaf0e4;font-weight:700}
+.samast-monthly-table td:nth-child(3),.samast-monthly-table td:nth-child(8){background:#eaf0e4;font-weight:700}
 .samast-monthly-table tbody tr:last-child td{font-weight:700;border-top:2px solid var(--green)}
+.samast-tax-table{width:100%;min-width:980px;table-layout:fixed;font-size:11px}
+.samast-tax-table th,.samast-tax-table td{padding:10px 6px;text-align:right;white-space:normal}
+.samast-tax-table th:first-child,.samast-tax-table td:first-child{text-align:left}
+.samast-tax-table td:nth-child(4),.samast-tax-table td:nth-child(8){background:#f4eedc;font-weight:700}
+.samast-tax-table tbody tr:last-child td{font-weight:700;border-top:2px solid var(--green)}
+.samast-tax-table .drill{font-size:inherit;white-space:normal;text-align:inherit}
 @media(max-width:850px){.samast-monthly-table{min-width:800px}}
 
 #expenses .drill{font-weight:600}#operatingCategorySection{margin-top:18px}#operatingCategories{max-height:none}.cost-review-notice{padding:14px 18px;background:#f4eedc;border:1px solid #d9c99b;color:var(--ink);font-size:13px}
