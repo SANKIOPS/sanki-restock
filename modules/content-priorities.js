@@ -1,0 +1,14 @@
+'use strict';
+const w=require('../public/content-workflow'),allowed=require('./content-daily-operations').allowed;
+const ACCOUNTS=['Femme','Homme','Fashion'];
+function rows(s){return (s.videoMinimums||[]).map(target=>{
+ const items=s.items.filter(i=>!i.archived&&w.contentKind(i)==='video'&&w.isVideo(i)&&!['Delivery Videos','My Journey'].includes(i.source?.tab)&&i.accounts.includes(target.account)&&w.contentType(i)===target.type&&!w.isPosted(i,s.publications,target.account));
+ const ready=items.filter(i=>i.finalUrl&&!w.needsCorrection(i)).length,short=Math.max(0,target.minimum-ready);
+ const edits=items.filter(i=>i.correctionStatus!=='reshoot'&&(!i.finalUrl||w.needsCorrection(i))&&(i.rawUrl||w.isShot(i))).sort((a,b)=>Number(w.editStatus(b)==='editing')-Number(w.editStatus(a)==='editing')||(a.shootDate||'9999').localeCompare(b.shootDate||'9999')||(a.entryNumber||0)-(b.entryNumber||0));
+ const editFirst=edits.slice(0,short),remaining=Math.max(0,short-editFirst.length),shootRows=items.filter(i=>i.correctionStatus==='reshoot'||!i.finalUrl&&!i.rawUrl&&!w.isShot(i));
+ const planned=(s.poas||[]).filter(t=>!t.archived&&!t.deleted&&t.contentKind!=='story'&&t.accounts.includes(target.account)&&t.type===target.type).flatMap(t=>Array.from({length:Math.max(0,(t.quantity||1)-s.items.filter(i=>!i.archived&&i.poaId===t.id).length)},()=>({id:t.id,title:t.title,poa:true})));
+ const shoots=[...shootRows.map(i=>({id:i.id,title:i.title,number:i.entryNumber,reshoot:i.correctionStatus==='reshoot'})),...planned].slice(0,remaining);
+ return {...target,ready,short,editing:editFirst.filter(i=>w.editStatus(i)==='editing').length,editFirst:editFirst.map(i=>({id:i.id,title:i.title,number:i.entryNumber,editing:w.editStatus(i)==='editing',reedit:i.correctionStatus==='reedit'})),shootFirst:shoots,newShoots:Math.max(0,remaining-shoots.length)};
+ }).sort((a,b)=>Number(b.short>0)-Number(a.short>0)||(a.ready/a.minimum)-(b.ready/b.minimum)||b.short-a.short||a.account.localeCompare(b.account)||a.type.localeCompare(b.type));}
+function attach({load,change}){return {view:u=>({rows:rows(load()),canEdit:allowed(u)}),save(b,u){if(!allowed(u))throw Object.assign(Error('Only the owner and Janvi can set video minimums.'),{status:403});if(!Array.isArray(b.targets)||b.targets.length>ACCOUNTS.length*w.TYPES.length)throw Object.assign(Error('Choose valid video minimums.'),{status:400});const seen=new Set(),targets=b.targets.map(t=>{const key=t.account+'|'+t.type;if(!ACCOUNTS.includes(t.account)||!w.TYPES.includes(t.type)||!Number.isInteger(t.minimum)||t.minimum<0||t.minimum>999||seen.has(key))throw Object.assign(Error('Choose one minimum from 0 to 999 for each account and video type.'),{status:400});seen.add(key);return {account:t.account,type:t.type,minimum:t.minimum};}).filter(t=>t.minimum>0);return change(b.revision,u.username,s=>{s.videoMinimums=targets;return {action:'video_minimums',id:''};});}};}
+module.exports={attach,rows};
