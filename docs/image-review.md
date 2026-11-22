@@ -11,3 +11,7 @@ This release reads Shopify only. It does not generate images, replace media, del
 Persist `image-review.json` and `image-review-files/` alongside the directory containing DATA_PATH. Include both in backups. Never expose the directory as public static files. The authenticated API serves only files linked to review records. Corrupt review state fails closed instead of being overwritten. Exports include review history and photo links; photo bytes remain in authenticated storage.
 
 Validation: node --test test/image-review.test.js test/catalogue-images.test.js test/auth-authorization.test.js test/manage-navigation.test.js
+
+## Per-view workflow revision
+
+The owner screen has only Front, Back and Detail reference slots. Each is optional. Uploading any one view makes the item ready for correction; unchanged views need no upload. Uploads save automatically. The former separate proposed correction upload and approval controls are hidden from this screen. Existing proposal records and audit history are retained. The backend accepts staged corrections only for referenced views and requires only those views before staged approval. Finished-image approval and Shopify publication remain subsequent controlled steps; uploading a reference never replaces live media.
