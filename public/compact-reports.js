@@ -98,7 +98,7 @@ function renderSamast(){
  $('samastBasis').textContent=data.basis;
  const tracked=(key,value)=>{if(value==null)return'Needs review';if(!['rentDifference','gstPending','tdsPending'].includes(key))return money(value);return value>0?money(value)+' pending':value<0?money(value)+' excess / advance':money(0)+' clear';};
  const rows=keys=>data.months.map(m=>[drill(monthLabel(m.month)+(customReportDates&&m.partial?' · '+m.from+' to '+m.to:''),()=>samastDetails(m.month,'profit')),...keys.map(key=>drill(tracked(key,m[key]),()=>samastDetails(m.month,key)))]).concat([['Total',...keys.map(key=>drill(tracked(key,data.totals[key]),()=>samastDetails('',key)))]]);
- table($('samastMonths'),['Month','Desired net rent','Actual rent received','Difference','Base rent received','Expenses','Salaries','Profit before tax'],rows(['desiredNet','received','rentDifference','baseRent','expense','salary','profit']),{search:true,label:'Search profit months'});
+ table($('samastMonths'),['Month','Desired net rent','Actual rent received','Difference','Base rent received','GST received','TDS deducted','Expenses','Salaries','Profit before tax'],rows(['desiredNet','received','rentDifference','baseRent','gst','tds','expense','salary','profit']),{search:true,label:'Search profit months'});
  $('samastMonths').querySelector('table')?.classList.add('samast-monthly-table');
  table($('samastTaxMonths'),['Month','GST expected','GST received','GST pending','GST remitted','TDS expected','TDS credit verified','TDS credit pending','Income tax paid'],rows(['gstExpected','gst','gstPending','gstPaid','tdsExpected','tdsVerified','tdsPending','incomeTaxPaid']),{search:true,label:'Search GST and TDS months'});
  $('samastTaxMonths').querySelector('table')?.classList.add('samast-tax-table');
