@@ -28,7 +28,7 @@ function applySourceOverride(s,now){
   s.rentals={tenancies:seeds(),invoices:[],deposits:[],allocations:[],credits:[],reminders:[],activity:[{at:now,by:'owner instruction',action:'source_replacement',detail:'Replaced previous rental records with the six final floor rows in RENT.numbers. Previous register archived; bank receipts unchanged.'}],revision,automation:{}};
   s.rentalSourceImport=rentalSource.id;return true;
 }
-function state(s){const r=s.rentals||{tenancies:seeds()};for(const k of ['invoices','deposits','allocations','credits','reminders','activity'])if(!Array.isArray(r[k]))r[k]=[];r.revision=r.revision||0;r.automation=r.automation||{};return r;}
+function state(s){const r=s.rentals||{tenancies:seeds()};for(const k of ['invoices','deposits','allocations','credits','reminders','activity','tdsEvidence'])if(!Array.isArray(r[k]))r[k]=[];r.revision=r.revision||0;r.automation=r.automation||{};return r;}
 function depositBalance(r,tid){return money(Number((r.tenancies.find(t=>t.id===tid)||{}).securityOpening||0)+sum(active(r.deposits).filter(x=>x.tenancyId===tid))-sum(active(r.allocations).filter(x=>x.tenancyId===tid&&x.kind==='security')));}
 function outstanding(r,i){return i.voidedAt?0:money(i.bankDue-sum(active(r.allocations).filter(x=>x.invoiceId===i.id)));}
 function creditBalance(r,c){return c.reversedAt?0:money(c.amount-sum(active(r.allocations).filter(x=>x.creditId===c.id)));}
@@ -139,7 +139,14 @@ function register(router,{loadStore,saveStore,isOwner,audit,clock=()=>new Date()
       t={id:id('TEN'),tenant:String(b.tenant).trim(),floor:String(b.floor).trim(),property:String(b.property).trim(),baseRent:0,startMonth:today.slice(0,7),dueDay:null,cgst:0,sgst:0,tds:0,endDate:'',history:[]};r.tenancies.push(t);
     }else{
       if(!t)return deny(res,'Choose a tenant / floor.');
-      if(b.action==='terms'){
+      if(b.action==='tds_month'){
+        const month=String(b.month||''),status=String(b.status||''),reference=String(b.reference||b.reason||'').trim();
+        if(!validMonth(month)||!['pending','verified'].includes(status))return deny(res,'Choose the rent month and TDS status.');
+        if(status==='verified'&&!reference)return deny(res,'Enter the TDS submission / 26AS reference.');
+        const evidence=r.tdsEvidence.find(x=>x.tenancyId===t.id&&x.month===month);
+        const value={status,reference,updatedAt:now,updatedBy:actor};
+        if(evidence)Object.assign(evidence,value);else r.tdsEvidence.push({id:id('TDS'),tenancyId:t.id,month,...value});
+      }else if(b.action==='terms'){
         const net=b.netRent===undefined?t.netRent:(b.netRent===''||b.netRent===null?null:money(b.netRent));if(net!=null&&!positive(net))return deny(res,'Enter a positive net rent or leave it blank to calculate from taxes.');
         const base=money(b.baseRent),due=b.dueDay===''||b.dueDay==null?null:Number(b.dueDay),effective=String(b.startMonth||''),end=String(b.endDate||''),startDate=String(b.startDate||''),rates=['cgst','sgst','tds'].map(k=>Number(b[k]));
         if(!positive(base)||!validMonth(effective)||(due!==null&&(!Number.isInteger(due)||due<1||due>31))||(end&&!validDate(end))||(startDate&&!validDate(startDate))||(end&&startDate&&end<startDate))return deny(res,'Enter valid rent, effective month, due day and lease dates.');

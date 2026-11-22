@@ -29,6 +29,16 @@ test('rent changes preserve previously created charges and Fraganote stops after
   assert.deepEqual(h.get().invoices.map(i=>i.baseRent),[83790,90000]);assert.equal(h.get().invoices[1].dueDate,'2026-10-05');
   assert.equal(h.call({action:'invoice',tenancyId:'fraganote-3',month:'2026-09'}).status,400);
 });
+test('monthly TDS submission status is saved separately from rent charges',()=>{
+  const h=harness(),tenancyId='amty-4';
+  assert.equal(h.call({action:'tds_month',tenancyId,month:'2026-09',status:'verified',reference:''}).status,400);
+  assert.equal(h.call({action:'tds_month',tenancyId,month:'2026-09',status:'pending',reference:''}).status,200);
+  assert.equal(h.get().invoices.length,0,'tracking TDS must not create a rent charge');
+  assert.equal(h.call({action:'tds_month',tenancyId,month:'2026-09',status:'verified',reference:'26AS-SEP'}).status,200);
+  assert.deepEqual(h.get().tdsEvidence.map(x=>({tenancyId:x.tenancyId,month:x.month,status:x.status,reference:x.reference})),[{tenancyId,month:'2026-09',status:'verified',reference:'26AS-SEP'}]);
+  assert.equal(h.call({action:'tds_month',tenancyId,month:'2026-09',status:'not_applicable'}).status,400);
+  assert.equal(h.call({action:'tds_month',tenancyId,month:'2026-13',status:'pending'}).status,400);
+});
 test('SAMAST tenant-linked rent is available without including unrelated business money or security as rent',()=>{
   const h=harness(),tenancyId='amty-4',otherTenancyId='lujo-2',receipt={id:'SAMAST-RENT',nature:'SAMAST',receiptType:'rental_income',tenancyId,amount:1000,date:'2026-09-01',account:'IndusInd Bank 7883'};
   h.store().receipts.push(receipt,

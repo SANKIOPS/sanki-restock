@@ -1,34 +1,50 @@
 'use strict';
 const {money}=require('./physical-bank-balance');
-const list=v=>Array.isArray(v)?v:Object.values(v||{});
+const {termsAt}=require('./rental-register');
+const list=value=>Array.isArray(value)?value:Object.values(value||{});
 const validMonth=value=>/^\d{4}-(?:0[1-9]|1[0-2])$/.test(String(value||''));
+const daysInMonth=month=>new Date(Date.UTC(+month.slice(0,4),+month.slice(5,7),0)).getUTCDate();
 const activeInvoice=invoice=>invoice&&invoice.voidedAt==null&&invoice.reversedAt==null&&!invoice.opening&&validMonth(invoice.month);
-function tenancyActiveInMonth(tenancy,month){
- if(!tenancy||tenancy.status==='ended'&&!tenancy.endDate)return false;
- const start=String(tenancy.startDate||((tenancy.trackingFrom||tenancy.startMonth||'')+'-01')).slice(0,7),end=String(tenancy.endDate||'').slice(0,7);
- return (!validMonth(start)||start<=month)&&(!validMonth(end)||end>=month);
+function monthWindow(tenancy,month){
+ if(!tenancy||tenancy.status==='ended'&&!tenancy.endDate)return null;
+ const start=String(tenancy.startDate||((tenancy.trackingFrom||tenancy.startMonth||'')+'-01')),end=String(tenancy.endDate||''),last=daysInMonth(month);
+ if(start.slice(0,7)>month||end&&end.slice(0,7)<month)return null;
+ const first=start.slice(0,7)===month?Math.max(1,Math.min(last,Number(start.slice(8))||1)):1;
+ const final=end.slice(0,7)===month?Math.max(first,Math.min(last,Number(end.slice(8))||last)):last;
+ return {first,final,days:final-first+1,totalDays:last,factor:(final-first+1)/last};
 }
-function rentDueEntries(store,months,receipts){
- const rental=store&&store.rentals,hasRegister=!!rental&&Array.isArray(rental.tenancies)&&Array.isArray(rental.invoices),entries=[],review=new Map();
- for(const month of months){
-  const invoices=hasRegister?rental.invoices.filter(invoice=>activeInvoice(invoice)&&invoice.month===month):[];
-  const activeTenancies=hasRegister?rental.tenancies.filter(tenancy=>tenancyActiveInMonth(tenancy,month)):[];
-  const charged=new Set(invoices.map(invoice=>invoice.tenancyId).filter(Boolean));
-  const missing=activeTenancies.filter(tenancy=>!charged.has(tenancy.id));
-  const hasReceipt=receipts.some(receipt=>String(receipt.date||'').startsWith(month));
-  const complete=hasRegister&&!missing.length&&(activeTenancies.length>0||invoices.length>0||!hasReceipt);
-  review.set(month,{complete,missing:missing.map(tenancy=>tenancy.tenant||tenancy.floor||tenancy.id)});
-  for(const invoice of invoices){
-   const tenant=rental.tenancies.find(item=>item.id===invoice.tenancyId),desiredNet=money(Number(invoice.bankDue)||0);
-   const baseDue=money(invoice.taxBreakdownUnknown?desiredNet/1.08:Number(invoice.baseRent)||0);
-   const tdsExpected=money(invoice.taxBreakdownUnknown?baseDue*.10:Number(invoice.tds)||0);
-   // Tie the rounded tax components exactly to the approved net charge.
-   const gstExpected=money(invoice.taxBreakdownUnknown?desiredNet-baseDue+tdsExpected:(Number(invoice.cgst)||0)+(Number(invoice.sgst)||0));
-   const tdsVerified=invoice.tdsStatus==='verified'?tdsExpected:0;
-   entries.push({id:invoice.id,reference:invoice.id,date:invoice.dueDate||month+'-01',kind:'rent_due',entity:'SAMAST',category:'Approved rent charge',description:(tenant?.tenant||'Tenant')+' · '+month,tenant:tenant?.tenant||'',payer:tenant?.tenant||'',account:'',amount:desiredNet,profitKind:'rent_due',baseRent:0,gst:0,tds:0,received:0,desiredNet,rentDifference:desiredNet,gstExpected,gstPending:gstExpected,tdsExpected,tdsVerified,tdsPending:money(tdsExpected-tdsVerified),tdsEvidenceStatus:invoice.tdsStatus||'pending',tdsReference:invoice.tdsReference||'',expense:0,salary:0,profit:0,gstPaid:0,incomeTaxPaid:0});
+function rates(terms){
+ let gst=Number(terms.cgst||0)+Number(terms.sgst||0),tds=Number(terms.tds||0);
+ // The imported rent sheet supplies base and net amounts but no split rates.
+ // Its 1.08 net factor is the configured 18% GST less 10% TDS arrangement.
+ if(terms.netRent!=null&&!gst&&!tds){gst=18;tds=10;}
+ return {gst,tds};
+}
+function desiredRentEntries(store,months){
+ const rental=store&&store.rentals,tenancies=list(rental&&rental.tenancies),invoices=list(rental&&rental.invoices).filter(activeInvoice),evidence=list(rental&&rental.tdsEvidence),entries=[];
+ for(const month of months)for(const tenancy of tenancies){
+  const window=monthWindow(tenancy,month);if(!window)continue;
+  const terms=termsAt(tenancy,month),invoice=invoices.find(item=>item.tenancyId===tenancy.id&&item.month===month),configured=rates(terms);
+  let baseDue,gstExpected,tdsExpected,desiredNet,source;
+  if(invoice){
+   baseDue=money(Number(invoice.baseRent)||0);tdsExpected=money(invoice.taxBreakdownUnknown?baseDue*configured.tds/100:Number(invoice.tds)||0);
+   desiredNet=money(Number(invoice.bankDue)||0);gstExpected=money(invoice.taxBreakdownUnknown?desiredNet-baseDue+tdsExpected:(Number(invoice.cgst)||0)+(Number(invoice.sgst)||0));source='Manual monthly override';
+  }else{
+   baseDue=money(Number(terms.baseRent||0)*window.factor);tdsExpected=money(baseDue*configured.tds/100);
+   desiredNet=money((terms.netRent==null?Number(terms.baseRent||0)*(1+(configured.gst-configured.tds)/100):Number(terms.netRent||0))*window.factor);
+   gstExpected=money(desiredNet-baseDue+tdsExpected);source=window.factor===1?'Tenant setup':'Tenant setup · automatic '+window.days+'/'+window.totalDays+' day proration';
   }
+  const saved=evidence.find(item=>item.tenancyId===tenancy.id&&item.month===month),status=saved?.status||invoice?.tdsStatus||'pending',reference=saved?.reference||invoice?.tdsReference||'',tdsVerified=status==='verified'?tdsExpected:0;
+  entries.push({id:invoice?.id||'RENT-DESIRED-'+tenancy.id+'-'+month,reference:invoice?.id||tenancy.id+'/'+month,date:invoice?.dueDate||month+'-01',kind:'rent_due',entity:'SAMAST',category:'Rent to collect',description:(tenancy.tenant||'Tenant')+' · '+(tenancy.floor||month)+' · '+source,tenant:tenancy.tenant||'',floor:tenancy.floor||'',tenancyId:tenancy.id,payer:tenancy.tenant||'',account:'',amount:desiredNet,profitKind:'rent_due',baseDue,baseRent:0,gst:0,tds:0,received:0,unassignedRent:0,desiredNet,rentDifference:desiredNet,gstExpected,gstPending:gstExpected,tdsExpected,tdsVerified,tdsPending:money(tdsExpected-tdsVerified),tdsEvidenceStatus:status,tdsReference:reference,expense:0,salary:0,profit:0,gstPaid:0,incomeTaxPaid:0});
  }
- return {entries,review};
+ return entries;
+}
+function receiptSplit(store,receipt){
+ const tenancy=list(store&&store.rentals&&store.rentals.tenancies).find(item=>item.id===receipt.tenancyId);if(!tenancy)return null;
+ const terms=termsAt(tenancy,String(receipt.date||'').slice(0,7)),configured=rates(terms),factor=1+(configured.gst-configured.tds)/100;
+ if(!Number.isFinite(factor)||factor<=0)return null;
+ const received=money(Number(receipt.amount)||0),baseRent=money(received/factor),tds=money(baseRent*configured.tds/100),gst=money(received-baseRent+tds);
+ return {tenancy,received,baseRent,gst,tds};
 }
 // Classify only explicit tax remittances, not professional/compliance service fees.
 function taxKind(record){
@@ -37,38 +53,31 @@ function taxKind(record){
  if(/\b(?:self[ -]?assess(?:ed|ment)\s+i\.?\s*t\.?|income[ -]?tax|self[ -]?assess(?:ed|ment)(?: income)? tax|advance income[ -]?tax)\b/i.test(category)&&!/consult|professional|filing|preparation|service/i.test(category))return 'incomeTaxPaid';
  return '';
 }
-// Receipt reporting only. Never write back the derived base/GST/TDS to accounting.
+// Receipt reporting only. Calculated tax components are never written back to accounting.
 function build(store,{from,to,receipts,costs,salary={}}){
- const salaryLinks=new Set(list(salary.salaryPayments).filter(p=>p.active!==false&&!p.accountingExcluded).map(p=>p.linkedLedgerEntryId).filter(Boolean));
- const entries=[];
- const zero={baseRent:0,gst:0,tds:0,received:0,desiredNet:0,rentDifference:0,gstExpected:0,gstPending:0,tdsExpected:0,tdsVerified:0,tdsPending:0,expense:0,salary:0,profit:0,gstPaid:0,incomeTaxPaid:0};
- const selectedMonths=[];
- for(let month=from.slice(0,7);month<=to.slice(0,7);){selectedMonths.push(month);const next=new Date(month+'-01T00:00:00Z');next.setUTCMonth(next.getUTCMonth()+1);month=next.toISOString().slice(0,7);}
- const due=rentDueEntries(store,selectedMonths,receipts);entries.push(...due.entries);
- for(const r of receipts){
-  const received=money(Number(r.amount)||0),baseRent=money(received/1.08),tds=money(baseRent*.10);
-  // Keep rounded components tied exactly to the authoritative bank receipt.
-  const gst=money(received-baseRent+tds);
-  entries.push({...zero,id:r.id,reference:r.id,date:r.date,kind:'income',entity:'SAMAST',category:'Rental income',description:r.particulars||r.source||r.payer||'Rent receipt',account:r.account||'',amount:baseRent,profitKind:'rent',baseRent,gst,tds,received,rentDifference:-received,gstPending:-gst,expense:0,salary:0,profit:baseRent,proof:r.proof||r.paymentProof||'',proofs:r.proofs||r.paymentProofs||[],bankReference:r.bankReconciliationEvidence?.reference||r.bankReference||'',bankDescription:r.bankReconciliationEvidence?.description||'',payer:r.payer||r.receivedFrom||r.source||''});
+ const salaryLinks=new Set(list(salary.salaryPayments).filter(payment=>payment.active!==false&&!payment.accountingExcluded).map(payment=>payment.linkedLedgerEntryId).filter(Boolean)),entries=[];
+ const zero={baseDue:0,baseRent:0,gst:0,tds:0,received:0,unassignedRent:0,desiredNet:0,rentDifference:0,gstExpected:0,gstPending:0,tdsExpected:0,tdsVerified:0,tdsPending:0,expense:0,salary:0,profit:0,gstPaid:0,incomeTaxPaid:0};
+ const selectedMonths=[];for(let month=from.slice(0,7);month<=to.slice(0,7);){selectedMonths.push(month);const next=new Date(month+'-01T00:00:00Z');next.setUTCMonth(next.getUTCMonth()+1);month=next.toISOString().slice(0,7);}
+ entries.push(...desiredRentEntries(store,selectedMonths));
+ for(const receipt of receipts){
+  const received=money(Number(receipt.amount)||0),split=receiptSplit(store,receipt),common={...zero,id:receipt.id,reference:receipt.id,date:receipt.date,kind:'income',entity:'SAMAST',category:'Rental income',description:receipt.particulars||receipt.source||receipt.payer||'Rent receipt',account:receipt.account||'',received,rentDifference:-received,proof:receipt.proof||receipt.paymentProof||'',proofs:receipt.proofs||receipt.paymentProofs||[],bankReference:receipt.bankReconciliationEvidence?.reference||receipt.bankReference||'',bankDescription:receipt.bankReconciliationEvidence?.description||'',payer:receipt.payer||receipt.receivedFrom||receipt.source||'',tenancyId:receipt.tenancyId||''};
+  if(!split)entries.push({...common,amount:received,profitKind:'rent_unassigned',unassignedRent:received});
+  else entries.push({...common,amount:split.baseRent,profitKind:'rent',tenant:split.tenancy.tenant||'',floor:split.tenancy.floor||'',baseRent:split.baseRent,gst:split.gst,tds:split.tds,gstPending:-split.gst,profit:split.baseRent});
  }
- for(const r of costs){
-  const isSalary=r.kind==='salary'||salaryLinks.has(r.id)||[...salaryLinks].some(id=>String(r.id).startsWith(id+'/'))||/\bsalar(?:y|ies)\b/i.test(r.category||'');
-  const payroll=list(salary.salaryPayments).find(p=>String(r.id).startsWith(p.id+'/'));
-  const amount=money(r.expenses),tax=taxKind(r);
-  const profitKind=tax?'tax':isSalary?'salary':'expense';
-  entries.push({...r,...zero,proof:r.proof||payroll?.proofs?.[0]||'',proofs:payroll?.proofs||[],vendor:r.vendor||payroll?.employeeName||salary.employees?.[payroll?.empId]?.name||'',kind:'expense',entity:'SAMAST',amount,profitKind,expense:profitKind==='expense'?amount:0,salary:profitKind==='salary'?amount:0,profit:tax?0:-amount,...(tax?{[tax]:amount}:{})});
+ for(const record of costs){
+  const isSalary=record.kind==='salary'||salaryLinks.has(record.id)||[...salaryLinks].some(id=>String(record.id).startsWith(id+'/'))||/\bsalar(?:y|ies)\b/i.test(record.category||''),payroll=list(salary.salaryPayments).find(payment=>String(record.id).startsWith(payment.id+'/')),amount=money(record.expenses),tax=taxKind(record),profitKind=tax?'tax':isSalary?'salary':'expense';
+  entries.push({...record,...zero,proof:record.proof||payroll?.proofs?.[0]||'',proofs:payroll?.proofs||[],vendor:record.vendor||payroll?.employeeName||salary.employees?.[payroll?.empId]?.name||'',kind:'expense',entity:'SAMAST',amount,profitKind,expense:profitKind==='expense'?amount:0,salary:profitKind==='salary'?amount:0,profit:tax?0:-amount,...(tax?{[tax]:amount}:{})});
  }
- const fields=['baseRent','expense','salary','profit','gst','tds','received','desiredNet','rentDifference','gstExpected','gstPending','tdsExpected','tdsVerified','tdsPending','gstPaid','incomeTaxPaid'];
- const total=rows=>Object.fromEntries(fields.map(key=>[key,money(rows.reduce((n,r)=>n+r[key],0))]));
+ const fields=['baseDue','baseRent','expense','salary','profit','gst','tds','received','unassignedRent','desiredNet','rentDifference','gstExpected','gstPending','tdsExpected','tdsVerified','tdsPending','gstPaid','incomeTaxPaid'];
+ const total=rows=>Object.fromEntries(fields.map(key=>[key,money(rows.reduce((sum,row)=>sum+row[key],0))]));
+ const status=values=>values.tdsExpected<=0?'Not applicable':values.tdsVerified>=values.tdsExpected?'Submitted':values.tdsVerified>0?'Partly submitted':'Pending';
  const months=[];
  for(let month=from.slice(0,7);month<=to.slice(0,7);){
-  const start=month+'-01',next=new Date(start+'T00:00:00Z');next.setUTCMonth(next.getUTCMonth()+1);const nextMonth=next.toISOString().slice(0,7),end=new Date(next.getTime()-86400000).toISOString().slice(0,10);
-  const values=total(entries.filter(r=>r.date.startsWith(month))),rentReview=due.review.get(month);
-  if(!rentReview?.complete)for(const key of ['desiredNet','rentDifference','gstExpected','gstPending','tdsExpected','tdsVerified','tdsPending'])values[key]=null;
-  months.push({month,from:from>start?from:start,to:to<end?to:end,partial:from>start||to<end,rentDueComplete:!!rentReview?.complete,rentDueReview:rentReview?.missing||[],...values});month=nextMonth;
+  const start=month+'-01',next=new Date(start+'T00:00:00Z');next.setUTCMonth(next.getUTCMonth()+1);const nextMonth=next.toISOString().slice(0,7),end=new Date(next.getTime()-86400000).toISOString().slice(0,10),values=total(entries.filter(row=>row.date.startsWith(month)));
+  if(values.unassignedRent>0)for(const key of ['baseRent','gst','tds','profit'])values[key]=null;
+  months.push({month,from:from>start?from:start,to:to<end?to:end,partial:from>start||to<end,taxSplitComplete:values.unassignedRent===0,tdsStatus:status(values),...values});month=nextMonth;
  }
- const totals=total(entries),complete=months.every(month=>month.rentDueComplete);
- if(!complete)for(const key of ['desiredNet','rentDifference','gstExpected','gstPending','tdsExpected','tdsVerified','tdsPending'])totals[key]=null;
- return {basis:'Receipts/payments basis · Desired net rent comes only from approved tenant rent charges; missing or partial-month charges show Needs review. Actual rent received comes only from recorded rent bank receipts. Difference = desired net rent − actual rent received (positive is pending; negative is advance/excess). Base rent from actual receipts = bank receipt ÷ 1.08 (18% GST added, 10% TDS deducted). Profit before income tax = actual-receipt base rent − Samast expenses paid − Samast salaries paid. GST expected and TDS expected come from approved charges; GST received comes from actual receipts. TDS credit is confirmed only when its monthly rent-charge evidence is marked Verified. GST remittances and actual income tax paid are separate and excluded from operating expenses. Unpaid rent, personal spending, transfers, refundable deposits and loan principal are excluded.',months,totals,entries:require('./report-expense-entries').enrichMany(store,entries).sort((a,b)=>b.date.localeCompare(a.date))};
+ const totals=total(entries);if(totals.unassignedRent>0)for(const key of ['baseRent','gst','tds','profit'])totals[key]=null;totals.tdsStatus=status(totals);
+ return {basis:'Rent to collect = base rent + GST − TDS. Click a month to see every floor and its linked bank receipts.',months,totals,entries:require('./report-expense-entries').enrichMany(store,entries).sort((a,b)=>b.date.localeCompare(a.date))};
 }
-module.exports={build,taxKind,rentDueEntries};
+module.exports={build,taxKind,desiredRentEntries,receiptSplit};

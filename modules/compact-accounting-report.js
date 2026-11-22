@@ -139,11 +139,13 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
     }
     if(entity==='SAMAST'){
       samastProfit=require('./samast-profit').build(s,{from,to,receipts:profitRentReceipts,costs:report.transactions.filter(r=>r.expenses),salary:salary||{}});
-      for(const month of samastProfit.months.filter(item=>!item.rentDueComplete))warnings.push('Rent '+month.month+': approve monthly charges'+(month.rentDueReview.length?' for '+month.rentDueReview.join(', '):'')+' before treating desired rent, GST or TDS gaps as final.');
+      for(const month of samastProfit.months.filter(item=>item.unassignedRent>0))warnings.push('Rent '+month.month+': select the tenant for '+money(month.unassignedRent)+' of bank rent receipts before using their base rent, GST, TDS or profit.');
+      result=samastProfit.totals.profit;resultLabel='Profit before income tax';
+      basis='Actual rent received is the bank amount. Rental income is its base-rent component, excluding GST and reflecting TDS deducted by tenants. Profit before income tax = rental income − Samast expenses − salaries.';
+    }else{
+      result=money(income-expenses);resultLabel='Cash surplus / deficit';
+      basis='Recorded income received minus approved paid costs. Transfers, loan principal and refundable security are excluded. This is a cash management view, not earned or tax-adjusted profit.';
     }
-    result=money(income-expenses);resultLabel='Cash surplus / deficit';
-    basis='Recorded income received minus approved paid costs. Transfers, loan principal and refundable security are excluded. This is a cash management view, not earned or tax-adjusted profit.';
-    if(entity==='SAMAST')warnings.push('Rental receipts are bank amounts and may include GST, TDS effects or advance rent. Cash surplus is not net rental profit.');
   }
   const transfers=[];
   for(const r of list(s.transfers).filter(r=>active(r)&&inRange(r,from,to))){

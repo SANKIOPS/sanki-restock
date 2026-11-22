@@ -12,7 +12,7 @@ test('20 lakh borrowing, transfers and principal do not become profit; personal 
 test('security remains outstanding after spending, counts opening once and ignores future/refunded amounts',()=>{
  const src=sources(),s=src.expenses;s.receipts=[{id:'RENT',nature:'SAMAST',receiptType:'rental_income',amount:100000,date:'2026-10-01'},{id:'SEC',nature:'SAMAST',receiptType:'rental_security_deposit',amount:50000,date:'2026-10-01'}];
  s.rentals={tenancies:[{id:'T1',securityOpening:10000,securityOpeningDate:'2026-08-22'}],deposits:[{id:'SEC1',tenancyId:'T1',amount:50000,date:'2026-10-01'},{id:'REF',tenancyId:'T1',amount:-5000,date:'2026-10-02'},{tenancyId:'T1',amount:90000,date:'2026-12-01'}],allocations:[{tenancyId:'T1',kind:'security',amount:2000,date:'2026-10-03'}]};
- const r=build(src,{...options,entity:'SAMAST'});assert.equal(r.totals.income,100000);assert.equal(r.obligations.securityTotal,53000);assert.equal(r.resultLabel,'Cash surplus / deficit');
+ const r=build(src,{...options,entity:'SAMAST'});assert.equal(r.totals.income,100000);assert.equal(r.obligations.securityTotal,53000);assert.equal(r.resultLabel,'Profit before income tax');assert.equal(r.totals.result,null,'unassigned rent cannot become income or profit');
 });
 test('pending payments and loan principal are excluded; interest alone is expense',()=>{
  const src=sources(),s=src.expenses;s.expenses.P={id:'P',nature:'PERSONAL',status:'paid',amount:3000,date:'2026-10-01',payments:[{id:'PAY',amount:3000,date:'2026-10-01',bankReconciliationDraft:'DRAFT'}]};s.bankReconciliationDrafts={DRAFT:{}};
