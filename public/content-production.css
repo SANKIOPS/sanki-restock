@@ -113,3 +113,5 @@ main{max-width:1600px;padding:22px 26px}main>header{margin-bottom:14px;padding-b
 .script-table .script-create-poa{color:var(--green);border-color:var(--green);background:#edf4e9;font-weight:600;white-space:nowrap}.script-table td:last-child{min-width:135px}
 
 .script-table .script-used{color:var(--green);background:#e4f1e8;opacity:1;font-weight:600}
+
+.workspace-subtabs{margin-top:-4px;gap:6px}.workspace-subtabs button{padding:7px 12px;font-size:13px}
