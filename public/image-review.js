@@ -5,7 +5,25 @@
   let items=[],offset=0,total=0,selected=null,busy=false,initial=true,request=0;
   async function api(url,options={}){const r=await fetch('/api/image-review'+url,options);const d=await r.json();if(!r.ok||!d.success)throw Error(d.error||'Could not load Image Review.');return d;}
   function message(text,error=false){$('message').textContent=text;$('message').className='message'+(error?' error':'');}
-  function enlarge(src){$('enlargedImage').src=src;$('imageDialog').showModal();}
+  let zoom=1,panX=0,panY=0,fitWidth=0,fitHeight=0;
+  const stage=$('zoomStage'),zoomImage=$('enlargedImage'),pointers=new Map();
+  function paintZoom(){
+    const limitX=Math.max(0,(fitWidth*zoom-stage.clientWidth)/2),limitY=Math.max(0,(fitHeight*zoom-stage.clientHeight)/2);
+    panX=Math.max(-limitX,Math.min(limitX,panX));panY=Math.max(-limitY,Math.min(limitY,panY));
+    zoomImage.style.width=fitWidth+'px';zoomImage.style.height=fitHeight+'px';zoomImage.style.transform=`translate(-50%,-50%) translate(${panX}px,${panY}px) scale(${zoom})`;
+    $('zoomLevel').value=Math.round(zoom*100)+'%';$('zoomIn').disabled=zoom>=8;$('zoomOut').disabled=zoom<=1;
+  }
+  function fitImage(){if(!zoomImage.naturalWidth||!stage.clientWidth)return;const ratio=Math.min(stage.clientWidth/zoomImage.naturalWidth,stage.clientHeight/zoomImage.naturalHeight);fitWidth=zoomImage.naturalWidth*ratio;fitHeight=zoomImage.naturalHeight*ratio;zoom=1;panX=panY=0;paintZoom();}
+  function changeZoom(value,x=stage.clientWidth/2,y=stage.clientHeight/2){const next=Math.max(1,Math.min(8,value)),ratio=next/zoom;panX=(panX-(x-stage.clientWidth/2))*ratio+(x-stage.clientWidth/2);panY=(panY-(y-stage.clientHeight/2))*ratio+(y-stage.clientHeight/2);zoom=next;paintZoom();}
+  function enlarge(src){pointers.clear();zoomImage.onload=fitImage;zoomImage.src=src;$('imageDialog').showModal();fitImage();}
+  $('zoomIn').addEventListener('click',()=>changeZoom(zoom*1.5));$('zoomOut').addEventListener('click',()=>changeZoom(zoom/1.5));$('zoomFit').addEventListener('click',fitImage);
+  stage.addEventListener('wheel',e=>{e.preventDefault();const r=stage.getBoundingClientRect();changeZoom(zoom*Math.exp(-e.deltaY*0.002),e.clientX-r.left,e.clientY-r.top);},{passive:false});
+  stage.addEventListener('dblclick',e=>{const r=stage.getBoundingClientRect();if(zoom>1)fitImage();else changeZoom(3,e.clientX-r.left,e.clientY-r.top);});
+  stage.addEventListener('pointerdown',e=>{stage.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});});
+  stage.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;const before=[...pointers.values()],old=pointers.get(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});const after=[...pointers.values()];if(before.length===2){const distance=p=>Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),r=stage.getBoundingClientRect(),prior=distance(before);if(prior)changeZoom(zoom*distance(after)/prior,(after[0].x+after[1].x)/2-r.left,(after[0].y+after[1].y)/2-r.top);}else{panX+=e.clientX-old.x;panY+=e.clientY-old.y;paintZoom();}});
+  for(const name of['pointerup','pointercancel','lostpointercapture'])stage.addEventListener(name,e=>pointers.delete(e.pointerId));
+  stage.addEventListener('keydown',e=>{if(['+','=','-','0','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();if(e.key==='0')fitImage();else if(e.key==='+'||e.key==='=')changeZoom(zoom*1.5);else if(e.key==='-')changeZoom(zoom/1.5);else{panX+=e.key==='ArrowLeft'?60:e.key==='ArrowRight'?-60:0;panY+=e.key==='ArrowUp'?60:e.key==='ArrowDown'?-60:0;paintZoom();}}});
+  new ResizeObserver(()=>{if($('imageDialog').open)fitImage();}).observe(stage);
   const picture=(image,extra='')=>`<button class="image-button ${extra}" data-image="${esc(image.src||image.url)}" aria-label="Enlarge garment image"><img src="${esc(image.src||image.url)}" alt="${esc(image.alt||image.view||'Garment image')}" loading="lazy"></button>`;
   function wirePictures(root){root.querySelectorAll('[data-image]').forEach(b=>b.addEventListener('click',()=>enlarge(b.dataset.image)));}
   function fillSelect(id,values){const select=$(id),old=select.value;select.replaceChildren(new Option(id==='collection'?'All collections':id==='gender'?'All genders':'All categories',''),...values.map(v=>new Option(v,v)));select.value=values.includes(old)?old:'';return old!==select.value;}
