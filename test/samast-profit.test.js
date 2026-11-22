@@ -75,5 +75,6 @@ test('Samast monthly UI follows the simple rent formula and expands floor receip
  const js=require('node:fs').readFileSync(require('node:path').join(__dirname,'../public/compact-reports.js'),'utf8');
  assert.match(js,/headers=\['Month','Base rent','GST \(18%\)','TDS \(10%\)','Rent to collect','Actual rent received','Difference','Expenses','Salaries','Profit before tax'\]/);
  assert.match(js,/samastMonthBreakdown\(expandedSamastMonth\)/);assert.match(js,/className='rent-receipt-evidence'/);
+ assert.match(js,/samastRow\('Actual rent received in bank','received'/);assert.match(js,/samastRow\('Rental income · base rent','baseRent'/);
  assert.doesNotMatch(js,/Search profit months/);
 });
