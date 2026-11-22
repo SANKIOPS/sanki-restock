@@ -21,6 +21,7 @@
   if(publications.some(p=>p.contentId===i.id&&(!account||p.account===account)))return true;
   return /^posted$/i.test(String(i.source?.posted||'').trim())&&(!account||!i.accounts.length||i.accounts.includes(account));
  }
+ function postedOn(i,publications=[],account){if(!isPosted(i,publications,account))return '';if(i.postedOnByAccount?.[account])return i.postedOnByAccount[account];return publications.filter(p=>p.contentId===i.id&&p.account===account&&p.date).map(p=>p.date).sort().pop()||'';}
  function istMinute(now=new Date()){return now.toLocaleString('sv-SE',{timeZone:'Asia/Kolkata'}).slice(0,16);}
  function postingState(i,publications=[],account,now=istMinute()){
   const p=i.postingPlans?.[account],valid=p&&/^\d{4}-\d{2}-\d{2}$/.test(p.date||'')&&/^([01]\d|2[0-3]):[0-5]\d$/.test(p.time||'');
@@ -54,5 +55,5 @@
   return {people:[...groups.values()].sort((a,b)=>{const ai=team.map(personName).indexOf(a.name),bi=team.map(personName).indexOf(b.name);return (ai<0?999:ai)-(bi<0?999:bi)||a.name.localeCompare(b.name);}),missing};
  }
  function editorTeamActivity(items,from,to){const names=['Ishnoor','Karan','Lokesh'],data=teamActivity(items,from,to,names),ids=new Map(items.map(i=>[i.id,i]));data.people=names.map(n=>data.people.find(p=>p.name===n));data.missing.shot=data.missing.shot.filter(id=>{const i=ids.get(id);return names.includes(personName(i.shotBy||i.shooter||i.source?.shooter));});data.missing.edited=data.missing.edited.filter(id=>{const i=ids.get(id);return names.includes(personName(i.editedBy||i.editor||i.source?.editor));});return data;}
- return {planTaskVisible,postingQueue,istMinute,postingState,needsCorrection,editorTeamActivity,inDateRange,contentDate,contentKind,contentType,withContentType,editStatus,isShot,withFinalStatus,teamActivity,personName,modelKey,modelList,isPosted,stage,isVideo,summary,TYPES,videoType};
+ return {postedOn,planTaskVisible,postingQueue,istMinute,postingState,needsCorrection,editorTeamActivity,inDateRange,contentDate,contentKind,contentType,withContentType,editStatus,isShot,withFinalStatus,teamActivity,personName,modelKey,modelList,isPosted,stage,isVideo,summary,TYPES,videoType};
 });
