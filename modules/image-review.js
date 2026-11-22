@@ -38,7 +38,9 @@ function catalogueRows(products) {
 }
 function statusFor(record, item) {
   if (!record) return 'unreviewed';
+  if(record.job&&['publishing','publish_failed'].includes(record.job.status))return record.job.status;
   if (record.fingerprint !== item.fingerprint) return 'website_changed';
+  if(record.job&&['queued','processing','ready','publishing','publish_failed','published'].includes(record.job.status))return record.job.status;
   if (record.decision === 'correct') return 'correct';
   if (record.decision === 'unreviewed') return 'unreviewed';
   if (record.proposals?.length) {
@@ -83,7 +85,7 @@ function createImageReviewRouter(options = {}) {
   }
   const publicFile = f => ({ ...f, url:'/api/image-review/files/'+f.file });
   function present(item, record) {
-    return { ...item, status:statusFor(record,item), review:{ revision:record?.revision || 0, notes:record?.notes || '', decision:record?.decision || '', reviewedAt:record?.reviewedAt || null, originals:(record?.originals || []).map(publicFile), proposals:(record?.proposals || []).map(publicFile), approvedAt:record?.approvedAt || null } };
+    return { ...item, status:statusFor(record,item), review:{ job:record?.job||null, pendingViews:record?.pendingViews||null, revision:record?.revision || 0, notes:record?.notes || '', decision:record?.decision || '', reviewedAt:record?.reviewedAt || null, originals:(record?.originals || []).map(publicFile), proposals:(record?.proposals || []).map(publicFile), approvedAt:record?.approvedAt || null } };
   }
   async function context(req, fresh = false) {
     let item = (await catalogue()).find(i => i.id === req.params.id);if (!item) { const error=new Error('Product colour not found. Refresh the catalogue.');error.status=404;throw error; }
@@ -97,9 +99,11 @@ function createImageReviewRouter(options = {}) {
     const state=read(), previous=state.records[item.id];
     if (!Number.isInteger(Number(req.body.revision)) || Number(req.body.revision) !== (previous?.revision || 0)) { const error=new Error('This product was updated in another window. Reload it before saving.');error.status=409;throw error; }
     if (req.body.fingerprint !== item.fingerprint) { const error=new Error('The website gallery changed. Reload and review the current images.');error.status=409;throw error; }
+    if(previous?.job&&((previous.job.status==='publishing')||(previous.job.status==='publish_failed'))&&!req.path.endsWith('/publish')){const error=new Error('Finish or retry this product’s publishing before editing it.');error.status=409;throw error;}
     return { item, state, record:previous || { revision:0, originals:[], proposals:[], history:[] } };
   }
   function persist(item,state,record,req,event) {
+    const latestState=read();if((latestState.records[item.id]?.revision||0)!==record.revision){const error=new Error('This product was updated in another window. Reload before saving.');error.status=409;throw error;}state=latestState;
     if(typeof req.body.notes==='string')record.notes=req.body.notes.slice(0,4000);
     record.gallerySnapshots=record.gallerySnapshots||[];
     if(!record.gallerySnapshots.some(s=>s.fingerprint===item.fingerprint))record.gallerySnapshots.push({fingerprint:item.fingerprint,images:item.images,at:new Date().toISOString()});
@@ -140,12 +144,15 @@ function createImageReviewRouter(options = {}) {
     if(!['jpeg','png','webp'].includes(metadata.format)||metadata.pages>1)return res.status(400).json({success:false,error:'Use a single JPEG, PNG or WebP photo.'});
     await sharp(req.file.buffer,{limitInputPixels:80000000}).stats();
     const {item,state,record}=await context(req);
+    if(record.job&&kind==='proposal'&&(record.job.id!==req.body.jobId||record.job.status!=='processing'||record.job.lease!==req.body.lease||Date.parse(record.job.leaseUntil)<Date.now()))return res.status(409).json({success:false,error:'Claim the current queue job before returning images.'});
+    if(record.job&&kind==='proposal'&&!record.job.references.some(f=>f.view===view))return res.status(409).json({success:false,error:'This view was not requested in the queue job.'});
     if(kind==='proposal'&&!record.originals.some(f=>f.view===view))return res.status(409).json({success:false,error:'Upload an original reference for this view before staging its correction.'});
     const name=crypto.randomUUID()+'.'+(metadata.format==='jpeg'?'jpg':metadata.format);
-    const photo={id:crypto.randomUUID(),file:name,view,kind,bytes:req.file.size,width:metadata.width,height:metadata.height,sha256:crypto.createHash('sha256').update(req.file.buffer).digest('hex'),uploadedAt:new Date().toISOString(),uploadedBy:req.user.username};
+    const photo={jobId:kind==='proposal'?record.job?.id:undefined,id:crypto.randomUUID(),file:name,view,kind,bytes:req.file.size,width:metadata.width,height:metadata.height,sha256:crypto.createHash('sha256').update(req.file.buffer).digest('hex'),uploadedAt:new Date().toISOString(),uploadedBy:req.user.username};
     fs.mkdirSync(directory,{recursive:true});fs.writeFileSync(path.join(directory,name),req.file.buffer,{flag:'wx'});
     if(kind==='original'){
-      record.originals.push(photo);record.decision='needs_correction';
+      record.originals.push(photo);record.decision='needs_correction';record.pendingViews=[...new Set([...(record.pendingViews||[]),view])];
+      if(record.job){record.history.push({event:'job-invalidated',job:record.job,at:photo.uploadedAt});record.job=null;}
       // Earlier drafts stay in history; a new original requires a fresh correction set.
       if(record.proposals.length){record.history.push({event:'proposals-superseded',files:record.proposals,at:photo.uploadedAt});record.proposals=[];}
     }else{const previous=record.proposals.filter(f=>f.view===view);if(previous.length)record.history.push({event:'proposal-replaced',files:previous,at:photo.uploadedAt});record.proposals=record.proposals.filter(f=>f.view!==view).concat(photo);record.proposalRevision=(record.proposalRevision||0)+1;record.decision='needs_correction';}
@@ -154,21 +161,23 @@ function createImageReviewRouter(options = {}) {
   }));
   router.post('/api/image-review/items/:id/approve',wrap(async(req,res)=>{
     const {item,state,record}=await context(req,true);
+    if(record.job)return res.status(409).json({success:false,error:'Use the queue review and publish controls.'});
     if(record.fingerprint!==item.fingerprint)return res.status(409).json({success:false,error:'Review the changed website gallery before approving.'});
     const requestedViews=[...new Set(record.originals.map(f=>f.view))];
     if(!requestedViews.length||!requestedViews.every(v=>record.proposals.some(f=>f.view===v)))return res.status(409).json({success:false,error:'Each uploaded reference view needs its matching correction before approval.'});
     record.approvedProposalRevision=record.proposalRevision;record.approvedAt=new Date().toISOString();
     res.json({success:true,item:persist(item,state,record,req,'proposal-approved')});
   }));
+  require('./image-review-queue')({router,wrap,context,read,save,persist,present,catalogue,client,store,directory,fetchImage:options.fetchImage,updateProduct:product=>{const rows=catalogueRows([product]);cache=(cache||[]).filter(i=>i.productId!==String(product.id)).concat(rows).sort((a,b)=>String(b.publishedAt||'').localeCompare(String(a.publishedAt||'')));return rows;}});
   router.get('/api/image-review/files/:name',wrap(async(req,res)=>{
     const name=req.params.name;if(!/^[a-f0-9-]{36}\.(?:jpg|png|webp)$/.test(name))return res.sendStatus(404);
-    const state=read();const linked=Object.values(state.records).some(r=>[...(r.originals||[]),...(r.proposals||[]),...(r.history||[]).flatMap(h=>h.files||[])].some(f=>f.file===name));
+    const state=read();const linked=Object.values(state.records).some(r=>[...(r.originals||[]),...(r.proposals||[]),...(r.job?.receipts||[]).map(x=>x.backup).filter(Boolean),...(r.history||[]).flatMap(h=>[...(h.files||[]),...(h.job?.receipts||[]).map(x=>x.backup).filter(Boolean)])].some(f=>f.file===name));
     if(!linked)return res.sendStatus(404);res.set('Cache-Control','private, no-store');res.set('X-Content-Type-Options','nosniff');res.sendFile(path.join(directory,name));
   }));
   router.get('/api/image-review/export',wrap(async(req,res)=>{
-    const items=await catalogue(),state=read();res.attachment('sanki-image-review.json').json({version:1,exportedAt:new Date().toISOString(),syncedAt,items:items.map(i=>({...present(i,state.records[i.id]),audit:state.records[i.id]?.history||[]})),note:'Original references and correction decisions only. No Shopify mutations are performed by this module.'});
+    const items=await catalogue(),state=read();res.attachment('sanki-image-review.json').json({version:1,exportedAt:new Date().toISOString(),syncedAt,items:items.map(i=>({...present(i,state.records[i.id]),audit:state.records[i.id]?.history||[]})),note:'Review references, queue jobs, approved image publishing receipts and audit history.'});
   }));
-  router.use('/api/image-review',(error,req,res,next)=>{if(res.headersSent)return next(error);res.status(error.status||(error.code==='LIMIT_FILE_SIZE'?413:400)).json({success:false,error:error.code==='LIMIT_FILE_SIZE'?'Photo exceeds 20 MB.':error.message || 'Could not save review.'});});
+  router.use('/api/image-review',(error,req,res,next)=>{if(res.headersSent)return next(error);res.status(error.status||(error.code==='LIMIT_FILE_SIZE'?413:400)).json({success:false,item:error.item,error:error.code==='LIMIT_FILE_SIZE'?'Photo exceeds 20 MB.':error.message || 'Could not save review.'});});
   return router;
 }
 module.exports={router:createImageReviewRouter(),createImageReviewRouter,catalogueRows,statusFor};
