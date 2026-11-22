@@ -1,6 +1,6 @@
 'use strict';
 const w=require('../public/content-workflow'),allowed=require('./content-daily-operations').allowed;
-const ACCOUNTS=['Femme','Homme','Fashion'];
+const ACCOUNTS=['Femme','Fashion','Homme'];
 function rows(s){return (s.videoMinimums||[]).map(target=>{
  const items=s.items.filter(i=>!i.archived&&w.contentKind(i)==='video'&&w.isVideo(i)&&!['Delivery Videos','My Journey'].includes(i.source?.tab)&&i.accounts.includes(target.account)&&w.contentType(i)===target.type&&!w.isPosted(i,s.publications,target.account));
  const ready=items.filter(i=>i.finalUrl&&!w.needsCorrection(i)).length,short=Math.max(0,target.minimum-ready);
