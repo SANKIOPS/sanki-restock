@@ -10,17 +10,26 @@
 
 #detailRows .economics-detail-table{min-width:850px;width:100%;table-layout:auto}#detailRows .economics-detail-table td{white-space:normal;overflow-wrap:anywhere}#detailRows .economics-detail-table th{white-space:normal}#detailRows .economics-detail-table td:last-child{font-weight:600}
 
-/* Fixed-width monthly columns fit together on desktop; amounts retain paise. */
+/* Monthly summary stays readable; floor and receipt evidence expands inside it. */
 #samastMonths{max-height:none}
-.samast-monthly-table{width:100%;min-width:0;table-layout:fixed;font-size:clamp(10px,.85vw,12px)}
-.samast-monthly-table th,.samast-monthly-table td{min-width:0;padding:9px 4px;text-align:right;font-size:inherit;white-space:nowrap}
-.samast-monthly-table th{white-space:normal;letter-spacing:0;font-size:10px;line-height:1.4}
-.samast-monthly-table th:first-child,.samast-monthly-table td:first-child{width:10%;text-align:left;white-space:normal}
-.samast-monthly-table .drill{font-size:inherit;max-width:100%;min-height:32px;text-align:inherit}
-.samast-monthly-table td:first-child .drill{white-space:normal}
-.samast-monthly-table td:nth-child(3),.samast-monthly-table td:nth-child(11){background:#eaf0e4;font-weight:700}
-.samast-monthly-table tbody tr:last-child td{font-weight:700;border-top:2px solid var(--green)}
-@media(max-width:850px){.samast-monthly-table{min-width:800px}}
+.samast-monthly-table{width:100%;min-width:1160px;table-layout:auto;font-size:12px}
+.samast-monthly-table>thead>tr>th,.samast-monthly-table>tbody>tr>td{padding:11px 8px;text-align:right;font-size:inherit;white-space:nowrap}
+.samast-monthly-table>thead>tr>th{white-space:normal;letter-spacing:0;font-size:10px;line-height:1.35}
+.samast-monthly-table>thead>tr>th:first-child,.samast-monthly-table>tbody>tr>td:first-child{text-align:left;white-space:normal}
+.samast-monthly-table>tbody>tr>td:first-child{min-width:132px}
+.samast-monthly-table>tbody>tr>td>.drill{font-size:inherit;max-width:100%;min-height:32px;text-align:inherit}
+.samast-monthly-table>tbody>tr>td:first-child>.drill{white-space:normal;font-weight:700}
+.samast-monthly-table>tbody>tr>td:nth-child(5),.samast-monthly-table>tbody>tr>td:nth-child(6),.samast-monthly-table>tbody>tr>td:nth-child(10){background:#eaf0e4;font-weight:700}
+.samast-monthly-table>tbody>tr:last-child>td{font-weight:700;border-top:2px solid var(--green)}
+.samast-monthly-table>tbody>.samast-expanded-row>td{border-bottom:0;background:#edf3e7}
+.samast-monthly-table>tbody>.samast-detail-row>td{padding:0 12px 16px!important;background:#edf3e7!important;border-bottom:2px solid var(--green);text-align:left;white-space:normal}
+.samast-inline-detail{background:var(--paper);border:1px solid #b9c9b2;overflow:auto}
+.samast-inline-detail table{min-width:1180px;table-layout:auto}
+.samast-inline-detail th,.samast-inline-detail td{padding:10px 9px;font-size:11px;vertical-align:top;text-align:right;white-space:nowrap}
+.samast-inline-detail th:first-child,.samast-inline-detail td:first-child{text-align:left;min-width:190px;font-weight:650;white-space:normal}
+.samast-inline-detail th:last-child,.samast-inline-detail td:last-child{text-align:left;min-width:250px;white-space:normal}
+.rent-receipt-list{display:grid;gap:6px}.rent-receipt-evidence{border:1px solid var(--line);background:#faf9f1;padding:7px 9px}.rent-receipt-evidence summary{cursor:pointer;color:var(--green);font-weight:650;white-space:nowrap}.rent-receipt-evidence p{margin:6px 0;white-space:normal;overflow-wrap:anywhere}.rent-receipt-evidence .proof-links{margin-top:6px}
+@media(max-width:850px){.samast-monthly-table{min-width:1080px}}
 .tds-status-form{display:grid;grid-template-columns:minmax(220px,1.5fr) minmax(150px,.8fr) minmax(220px,1fr) auto;gap:12px;align-items:center;padding:14px;margin:10px 0}.tds-status-form h3,.tds-status-form p{margin:0}.tds-status-form input,.tds-status-form select{min-height:42px}@media(max-width:800px){.tds-status-form{grid-template-columns:1fr}}
 
 #expenses .drill{font-weight:600}#operatingCategorySection{margin-top:18px}#operatingCategories{max-height:none}.cost-review-notice{padding:14px 18px;background:#f4eedc;border:1px solid #d9c99b;color:var(--ink);font-size:13px}

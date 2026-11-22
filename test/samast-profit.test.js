@@ -10,6 +10,7 @@ test('Samast monthly profit splits confirmed rent rates, excludes personal spend
  s.expenses.E=cost('E','SAMAST',20000,'Repairs');s.expenses.P=cost('P','PERSONAL',9000,'Food');s.expenses.S=cost('S','SAMAST',5000,'Salary');s.expenses.G=cost('G','SAMAST',18000,'GST payment');s.expenses.U={...cost('U','SAMAST',500,'Repairs'),status:'pending',payments:[]};
  const before=JSON.stringify(src),r=build(src,options).samastProfit;
  assert.deepEqual(r.months.map(m=>[m.month,m.baseRent,m.expense,m.salary,m.profit,m.gst,m.tds,m.received]),[['2026-09',100000,20000,5000,75000,18000,10000,108000],['2026-10',50000,0,0,50000,9000,5000,54000]]);
+ assert.deepEqual(r.months.map(m=>[m.baseDue,m.gstExpected,m.tdsExpected,m.desiredNet]),[[100000,18000,10000,108000],[100000,18000,10000,108000]]);
  assert.equal(r.months[1].partial,true);assert.equal(r.totals.profit,125000);assert.equal(JSON.stringify(src),before);
 });
 test('salary linked to an expense is separated once, standalone payroll also appears with proof',()=>{
@@ -43,7 +44,7 @@ test('monthly rent tracking separates approved net due, actual bank receipts and
  s.rentals={tenancies:[tenant()],invoices:[{id:'INV-A',tenancyId:'TEN-A',month:'2026-09',dueDate:'2026-09-05',baseRent:110000,cgst:9900,sgst:9900,tds:11000,bankDue:118800,tdsStatus:'verified',tdsReference:'26AS synthetic reference'}],tdsEvidence:[],allocations:[],deposits:[]};
  s.receipts=[{id:'RENT-A',nature:'SAMAST',receiptType:'rental_income',tenancyId:'TEN-A',date:'2026-09-07',amount:108000,account:'Synthetic bank'}];
  const r=build(src,{...options,to:'2026-09-30'}).samastProfit,m=r.months[0];
- assert.equal(m.desiredNet,118800);assert.equal(m.received,108000);assert.equal(m.rentDifference,10800);
+ assert.equal(m.baseDue,110000);assert.equal(m.desiredNet,118800);assert.equal(m.received,108000);assert.equal(m.rentDifference,10800);
  assert.equal(m.gstExpected,19800);assert.equal(m.gst,18000);assert.equal(m.gstPending,1800);
  assert.equal(m.tdsExpected,11000);assert.equal(m.tdsVerified,11000);assert.equal(m.tdsPending,0);
  assert.equal(m.baseRent,100000);assert.equal(m.profit,100000);
@@ -54,7 +55,7 @@ test('tenant setup automatically supplies desired rent and prorates the first ac
  s.rentals={tenancies:[tenant({tenant:'Partial tenant',baseRent:30000,netRent:32400,startDate:'2026-09-11'})],invoices:[],tdsEvidence:[],allocations:[],deposits:[]};
  s.receipts=[{id:'RENT-A',nature:'SAMAST',receiptType:'rental_income',tenancyId:'TEN-A',date:'2026-09-17',amount:21600}];
  const r=build(src,{...options,to:'2026-09-30'}).samastProfit,m=r.months[0];
- assert.equal(m.desiredNet,21600);assert.equal(m.received,21600);assert.equal(m.rentDifference,0);
+ assert.equal(m.baseDue,20000);assert.equal(m.desiredNet,21600);assert.equal(m.received,21600);assert.equal(m.rentDifference,0);
  assert.equal(m.gstExpected,3600);assert.equal(m.tdsExpected,2000);assert.equal(m.tdsStatus,'Pending');
  assert.equal(m.baseRent,20000);assert.equal(m.gst,3600);assert.equal(m.tds,2000);assert.equal(m.profit,20000);
  assert.match(r.entries.find(x=>x.profitKind==='rent_due').description,/automatic 20\/30 day proration/);
@@ -69,4 +70,10 @@ test('TDS status becomes submitted only from saved tenant-month evidence',()=>{
  const src=sources();src.expenses.rentals.tdsEvidence=[{id:'TDS-1',tenancyId:'TEN-A',month:'2026-09',status:'verified',reference:'26AS-REF'}];
  const r=build(src,{...options,to:'2026-09-30'}).samastProfit,m=r.months[0],due=r.entries.find(x=>x.profitKind==='rent_due');
  assert.equal(m.tdsExpected,10000);assert.equal(m.tdsVerified,10000);assert.equal(m.tdsPending,0);assert.equal(m.tdsStatus,'Submitted');assert.equal(due.tdsReference,'26AS-REF');
+});
+test('Samast monthly UI follows the simple rent formula and expands floor receipts inline',()=>{
+ const js=require('node:fs').readFileSync(require('node:path').join(__dirname,'../public/compact-reports.js'),'utf8');
+ assert.match(js,/headers=\['Month','Base rent','GST \(18%\)','TDS \(10%\)','Rent to collect','Actual rent received','Difference','Expenses','Salaries','Profit before tax'\]/);
+ assert.match(js,/samastMonthBreakdown\(expandedSamastMonth\)/);assert.match(js,/className='rent-receipt-evidence'/);
+ assert.doesNotMatch(js,/Search profit months/);
 });
