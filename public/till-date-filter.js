@@ -41,7 +41,7 @@
   function enhance(){
     controllers=controllers.filter(function(c){return c.from.isConnected&&c.to.isConnected;});
     Array.prototype.forEach.call(document.querySelectorAll('input[type="date"]'),function(to){
-      if(to.dataset.tillDateEnhanced||to.readOnly||!semantic(to,'to'))return;
+      if(to.closest('[data-simple-period]')||to.dataset.tillDateEnhanced||to.readOnly||!semantic(to,'to'))return;
       var from=pairedFrom(to);if(!from||from.readOnly)return;
       to.dataset.tillDateEnhanced='1';
       var root=to.parentElement;
