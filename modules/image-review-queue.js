@@ -1,6 +1,7 @@
 'use strict';
 const fs=require('fs'),path=require('path'),crypto=require('crypto');
 const VIEWS=['front','back','detail'];
+const {OUTPUT_VIEWS,outputViews}=require('./image-review-views');
 const fail=(message,status=409)=>Object.assign(new Error(message),{status});
 module.exports=function installQueue({router,wrap,context,read,save,persist,present,catalogue,client,store,directory,fetchImage=require('node-fetch'),updateProduct}){
  const publishing=new Set();
@@ -18,10 +19,12 @@ module.exports=function installQueue({router,wrap,context,read,save,persist,pres
    if(image.variantIds.some(id=>!own.has(id))||(others&&!image.variantIds.length))throw fail('This website photo is shared with another colour. Choose Add new photo or resolve its colour assignment first.');
    if(Object.values(targets).includes(target))throw fail('Choose a different website photo for each corrected view.');
   }targets[ref.view]=target;}
+  const plannedViews=req.body.fullSet===false?refs.map(f=>f.view):OUTPUT_VIEWS;
+  for(const view of plannedViews)if(!targets[view])targets[view]='add';
   if(record.job)record.history.push({event:'job-replaced',job:record.job,at:new Date().toISOString()});
   if(record.proposals.length)record.history.push({event:'proposals-superseded',files:record.proposals,at:new Date().toISOString()});
   record.proposals=[];record.approvedAt=null;record.approvedProposalRevision=null;
-  record.job={id:crypto.randomUUID(),status:'queued',createdAt:new Date().toISOString(),referenceKey:JSON.stringify(refs.map(f=>f.id)),references:refs.map(f=>({...f})),targets,fingerprint:item.fingerprint,notes:String(req.body.notes||''),gallery:item.images,receipts:[]};
+  record.job={id:crypto.randomUUID(),status:'queued',createdAt:new Date().toISOString(),referenceKey:JSON.stringify(refs.map(f=>f.id)),references:refs.map(f=>({...f})),outputViews:plannedViews,generationViews:plannedViews,targets,fingerprint:item.fingerprint,notes:String(req.body.notes||''),gallery:item.images,receipts:[]};
   record.decision='needs_correction';res.json({success:true,item:persist(item,state,record,req,'job-queued')});
  }));
  router.post('/api/image-review/items/:id/claim',wrap(async(req,res)=>{
@@ -35,21 +38,34 @@ module.exports=function installQueue({router,wrap,context,read,save,persist,pres
  router.get('/api/image-review/items/:id/packet',wrap(async(req,res)=>{
   const item=(await catalogue()).find(i=>i.id===req.params.id),record=read().records[req.params.id];if(!item||!record?.job)throw fail('Queue job not found.',404);
   const job=validJob(record,record.job.id);if(job.fingerprint!==item.fingerprint)throw fail('The website gallery changed. Requeue after reviewing it.');
-  res.set('Cache-Control','private, no-store');res.attachment('image-job-'+job.id+'.json').json({version:1,item:present(item,record),job,originals:job.references.map(f=>({...f,base64:fs.readFileSync(path.join(directory,f.file)).toString('base64')})),instructions:'Use the attached genuine references as design evidence. Correct only requested views. Preserve exact colour, construction, pockets, trims, texture and sold components. Follow the current approved SANKI image/style SOP. Do not infer missing garment details from old generated website images. Return each generated view to this job with its lease, then complete only after visual fidelity checks. Never publish from the worker.'});
+  res.set('Cache-Control','private, no-store');res.attachment('image-job-'+job.id+'.json').json({version:1,item:present(item,record),job,originals:job.references.map(f=>({...f,base64:fs.readFileSync(path.join(directory,f.file)).toString('base64')})),instructions:'Use the attached genuine references as design evidence. Generate every outputViews entry, using these three originals as shared design evidence; no separate raw angle/product photo is needed. On revisions regenerate only generationViews and retain other results. feedbackByView identifies the exact photo correction. Preserve exact colour, construction, pockets, trims, texture and sold components. Follow the current approved SANKI image/style SOP. Do not infer missing garment details from old generated website images. Return each generated view to this job with its lease, then complete only after visual fidelity checks. Never publish from the worker.'});
  }));
  router.post('/api/image-review/items/:id/complete',wrap(async(req,res)=>{
   const {item,state,record}=await context(req,true),job=validJob(record,req.body.jobId);
   if(job.fingerprint!==item.fingerprint)throw fail('The website gallery changed. Review and create images again.');
   if(job.status!=='processing'||job.lease!==req.body.lease||Date.parse(job.leaseUntil)<Date.now())throw fail('The generation claim expired. Claim the job again.');
-  if(!job.references.every(ref=>record.proposals.some(f=>f.view===ref.view&&f.jobId===job.id)))throw fail('Return an image for every requested view first.');
+  if(!outputViews(job).every(view=>record.proposals.some(f=>f.view===view&&f.jobId===job.id)))throw fail('Return an image for every requested view first.');
   if(!String(req.body.qa||'').trim())throw fail('Record the visual garment-fidelity checks first.');
-  job.status='ready';job.qa=String(req.body.qa).slice(0,4000);job.completedAt=new Date().toISOString();res.json({success:true,item:persist(item,state,record,req,'job-ready')});
+  job.status='ready';job.generationViews=[];job.qa=String(req.body.qa).slice(0,4000);job.completedAt=new Date().toISOString();res.json({success:true,item:persist(item,state,record,req,'job-ready')});
  }));
  router.post('/api/image-review/items/:id/revise',wrap(async(req,res)=>{
   const {item,state,record}=await context(req,true),job=validJob(record,req.body.jobId);if(!['ready','queued','processing'].includes(job.status))throw fail('This job cannot be revised now.');
-  if(!String(req.body.feedback||'').trim())throw fail('Describe what needs changing.');
-  record.history.push({event:'revision-requested',files:record.proposals,job:{...job},at:new Date().toISOString()});record.proposals=[];
-  job.status='queued';job.feedback=String(req.body.feedback).slice(0,4000);job.lease=null;job.qa=null;record.approvedAt=null;record.approvedProposalRevision=null;
+  const planned=req.body.fullSet===true?OUTPUT_VIEWS:outputViews(job);
+  const feedbackByView={};
+  for(const [view,text] of Object.entries(req.body.viewFeedback||{})){
+   if(!planned.includes(view))throw fail('Unknown photo view.',400);
+   if(typeof text!=='string')throw fail('Photo feedback must be text.',400);
+   if(text.trim())feedbackByView[view]=text.trim().slice(0,2000);
+  }
+  const globalFeedback=String(req.body.feedback||'').trim().slice(0,4000);
+  const missing=planned.filter(view=>!record.proposals.some(f=>f.view===view&&f.jobId===job.id));
+  const regenerate=[...new Set([...Object.keys(feedbackByView),...missing,...(globalFeedback?planned:[])])];
+  if(!regenerate.length)throw fail('Write a correction under the photo you want changed.');
+  record.history.push({event:'revision-requested',files:record.proposals,job:JSON.parse(JSON.stringify(job)),at:new Date().toISOString()});
+  record.proposals=record.proposals.filter(f=>!regenerate.includes(f.view));
+  job.outputViews=[...planned];for(const view of planned)if(!job.targets[view])job.targets[view]='add';
+  job.generationViews=regenerate;job.feedbackByView=feedbackByView;
+  job.status='queued';job.feedback=globalFeedback||Object.entries(feedbackByView).map(([view,text])=>view+': '+text).join('\n');job.lease=null;job.qa=null;record.approvedAt=null;record.approvedProposalRevision=null;
   res.json({success:true,item:persist(item,state,record,req,'job-requeued')});
  }));
  async function shopify(url,options){const response=await client.request(`https://${store}/admin/api/2026-07${url}`,{...options,maxRetries:options?.method==='POST'?0:undefined});const body=response.status===204?{}:await response.json();if(!response.ok)throw fail('Shopify did not finish the image update ('+response.status+'). Retry publishing; completed uploads are retained.');return body;}
@@ -62,7 +78,7 @@ module.exports=function installQueue({router,wrap,context,read,save,persist,pres
    const {item,record}=await context(req,true),job=validJob(record,req.body.jobId);
    if(!['ready','publish_failed','publishing'].includes(job.status))throw fail('Wait for generated images before approving.');
    if(job.fingerprint!==item.fingerprint&&!job.receipts.length&&job.status==='ready')throw fail('Website images changed. Review and requeue before publishing.');
-   const outputs=job.references.map(ref=>record.proposals.find(f=>f.view===ref.view&&f.jobId===job.id));if(outputs.some(f=>!f))throw fail('Some generated views are missing.');
+   const outputs=outputViews(job).map(view=>record.proposals.find(f=>f.view===view&&f.jobId===job.id));if(outputs.some(f=>!f))throw fail('Some generated views are missing.');
    // On retries, verify the gallery matches our last saved checkpoint; do not overwrite outside edits.
    if(job.receipts.length||job.status==='publish_failed'||job.status==='publishing'){
     const targets=new Set(Object.values(job.targets)),made=new Set(job.receipts.map(r=>r.newId));

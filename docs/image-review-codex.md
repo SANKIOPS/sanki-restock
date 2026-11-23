@@ -23,3 +23,10 @@ Approvals are bound to exact product-colour, gallery fingerprint, result revisio
 Publishing is checkpointed and locked per product. Retry publishing retains successful uploads; a unique job/view marker recovers a POST whose response was interrupted. References and results cannot change during incomplete publishing. External gallery changes block publishing. A publish failure is shown as retryable with the concrete error. Archives include original metadata and bytes for recovery. The server does not automatically roll back successfully published views after a partial failure.
 
 Tests use a mocked Shopify client and verify no writes before approval, claim/revision checks, reference download integrity, result return, revisions, backup creation, exact targeted replacement, retained extra images, variant assignments, partial failure/retry without duplicate uploads, and stale gallery rejection. Production publishing requires the owner's first real approved job; no dummy product is published for testing.
+
+## Five-view gallery and per-photo revisions (23 November)
+New jobs plan `outputViews` in this order: front, detail, angle, back, product. Only front/back/detail raw references are uploaded; all originals are shared design evidence for the angle and product-only outputs. Existing three-view jobs retain their outputs until explicitly expanded via Revise with fullSet. Missing views default to Add new photo; no existing extras are deleted automatically.
+
+On revisions, `feedbackByView` records comments against exact view IDs. `generationViews` lists only commented and missing views. Uncommented generated results remain attached to the job. Complete/publish verifies every output view exists. The worker upload controls list generationViews; do not regenerate unaffected views. The normal review panel shows all five slots, with side-by-side originals only for the three source views. Owner approval/publishing remains separate.
+
+Detail crop: focus on the waistband/fastening/pleats and pocket construction down to the upper thigh. Avoid the earlier long crop toward the knee: show roughly half to at most three quarters of that previous detail coverage.

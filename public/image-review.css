@@ -5,3 +5,14 @@
 .gallery figure{margin:0;flex-shrink:0}.gallery figcaption{text-align:center;font-size:12px;padding:4px}.target-label{margin-top:12px}.target-label select{min-width:0;width:100%}.comparison{display:grid;grid-template-columns:1fr 1fr;gap:8px}.comparison .slot-picture{height:190px}.job-panel{padding:18px;border:1px solid var(--line);background:#eef1ea;border-radius:8px;margin:20px 0}#workerPanel article{margin:12px 0}#workerPanel textarea{width:100%}
 
 [data-target][aria-invalid="true"]{border:2px solid #a43324;outline:2px solid #f0c2b8}.target-error{color:#a43324!important;font-weight:600}
+
+/* Keep intrinsic image sizes from overflowing grid cells on iPad. */
+.photo-grid,.photo-slot,.comparison,.comparison>div,.slot-picture{min-width:0}
+.photo-slot{overflow:hidden}.slot-picture{overflow:hidden}.slot-picture>.image-button{width:100%;height:100%;min-width:0;min-height:0;border-radius:0;display:flex;align-items:center;justify-content:center}.slot-picture>.image-button img{display:block;max-width:100%;max-height:100%;object-fit:contain}
+.comparison{grid-template-columns:repeat(2,minmax(0,1fr))}.comparison.ai-only{grid-template-columns:minmax(0,1fr)}
+.result-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}.result-grid .slot-picture{height:260px}.photo-feedback textarea{width:100%;min-width:0;resize:vertical}.photo-feedback{margin:12px 0}
+.viewer-navigation{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0;padding-bottom:8px}.viewer-navigation span{font-size:12px;color:var(--muted);text-align:center}.viewer-navigation button{min-height:44px;touch-action:manipulation}
+#imageDialog{height:94dvh;max-height:94dvh;margin:auto;padding:max(8px,env(safe-area-inset-top)) max(8px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left))}.zoom-toolbar{position:relative;z-index:2;background:var(--wash)}#closeImage{min-height:44px;touch-action:manipulation}#viewerRevision{flex-shrink:0;margin-top:8px}#viewerRevision[hidden]{display:none}#viewerRevision textarea{width:100%;resize:none;max-height:90px}#viewerRevision small{font-weight:400}#reviewDialog{overscroll-behavior:contain;max-height:94dvh}#reviewBody{min-width:0}.dialog-header>div{min-width:0}#closeReview{flex-shrink:0;min-height:44px}
+@media(max-width:1000px){.result-grid{grid-template-columns:minmax(0,1fr)}.result-grid .slot-picture{height:300px}.photo-grid:not(.result-grid){grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.photo-grid:not(.result-grid){grid-template-columns:minmax(0,1fr)}.result-grid .slot-picture{height:210px}.viewer-navigation span{display:none}.zoom-toolbar{gap:5px}.zoom-toolbar button{padding:7px 9px}#viewerCaption{flex-basis:100%;order:2}}
+[hidden]{display:none!important}

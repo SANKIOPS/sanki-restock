@@ -7,6 +7,7 @@ const multer = require('multer');
 const sharp = require('sharp');
 const { shopifyClient } = require('./shopify-client');
 const ORIGINAL_VIEWS = ['front', 'back', 'detail'];
+const {OUTPUT_VIEWS,outputViews}=require('./image-review-views');
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const tagsOf = p => Array.isArray(p.tags) ? p.tags : String(p.tags || '').split(',').map(t => t.trim());
 function tagged(p, prefix) { return tagsOf(p).filter(t => t.toLowerCase().startsWith(prefix.toLowerCase())).map(t => t.slice(prefix.length).trim()).filter(Boolean); }
@@ -138,7 +139,7 @@ function createImageReviewRouter(options = {}) {
   router.post('/api/image-review/items/:id/photos',upload.single('image'),wrap(async(req,res)=>{
     if(!(req.user.roles||[req.user.role]).includes('owner')&&req.body.kind!=='original')return res.status(403).json({success:false,error:'Image Reviewers can upload original references only.'});
     const kind=req.body.kind,view=String(req.body.view || '');
-    if(!['original','proposal'].includes(kind)||!ORIGINAL_VIEWS.includes(view))return res.status(400).json({success:false,error:'Choose original/proposal and front/back/detail.'});
+    if(!['original','proposal'].includes(kind)||!(kind==='original'?ORIGINAL_VIEWS:OUTPUT_VIEWS).includes(view))return res.status(400).json({success:false,error:'Choose original/proposal and front/back/detail.'});
     if(!req.file)return res.status(400).json({success:false,error:'Choose a front, back or detail image.'});
     // Decode bytes; do not trust file extensions or browser MIME types. Preserve original upload bytes.
     const metadata=await sharp(req.file.buffer,{limitInputPixels:80000000}).metadata();
@@ -146,8 +147,8 @@ function createImageReviewRouter(options = {}) {
     await sharp(req.file.buffer,{limitInputPixels:80000000}).stats();
     const {item,state,record}=await context(req);
     if(record.job&&kind==='proposal'&&(record.job.id!==req.body.jobId||record.job.status!=='processing'||record.job.lease!==req.body.lease||Date.parse(record.job.leaseUntil)<Date.now()))return res.status(409).json({success:false,error:'Claim the current queue job before returning images.'});
-    if(record.job&&kind==='proposal'&&!record.job.references.some(f=>f.view===view))return res.status(409).json({success:false,error:'This view was not requested in the queue job.'});
-    if(kind==='proposal'&&!record.originals.some(f=>f.view===view))return res.status(409).json({success:false,error:'Upload an original reference for this view before staging its correction.'});
+    if(record.job&&kind==='proposal'&&!outputViews(record.job).includes(view))return res.status(409).json({success:false,error:'This view was not requested in the queue job.'});
+    if(kind==='proposal'&&!record.job&&!record.originals.some(f=>f.view===view))return res.status(409).json({success:false,error:'Upload an original reference for this view before staging its correction.'});
     const name=crypto.randomUUID()+'.'+(metadata.format==='jpeg'?'jpg':metadata.format);
     const photo={jobId:kind==='proposal'?record.job?.id:undefined,id:crypto.randomUUID(),file:name,view,kind,bytes:req.file.size,width:metadata.width,height:metadata.height,sha256:crypto.createHash('sha256').update(req.file.buffer).digest('hex'),uploadedAt:new Date().toISOString(),uploadedBy:req.user.username};
     fs.mkdirSync(directory,{recursive:true});fs.writeFileSync(path.join(directory,name),req.file.buffer,{flag:'wx'});
