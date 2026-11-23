@@ -3,6 +3,8 @@
   const $=id=>document.getElementById(id), esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const labels={queued:'Queued',processing:'Creating images',ready:'Ready to review',publishing:'Publishing',publish_failed:'Publishing needs retry',published:'Published',unreviewed:'Not reviewed',correct:'Images correct',awaiting_originals:'Awaiting originals',ready_for_correction:'Ready for correction',awaiting_approval:'Awaiting approval',approved_for_upload:'Approved for upload',website_changed:'Website changed'};
   let items=[],offset=0,total=0,selected=null,busy=false,initial=true,request=0,canPublish=false;
+  const bulkSelection=new Map();let bulkPlan=[],bulkRunning=false,bulkPreparing=false,bulkStop=false;
+  const bulkEligible=i=>window.ImageReviewBulk.eligible(i);
   async function api(url,options={}){const r=await fetch('/api/image-review'+url,options);const d=await r.json();if(!r.ok||!d.success){const error=Error(d.error||'Could not load Image Review.');error.item=d.item;throw error;}return d;}
   function message(text,error=false){$('message').textContent=text;$('message').className='message'+(error?' error':'');}
   const outputOrder=['front','detail','angle','back','product'],viewNames={front:'Model front',detail:'Detail close-up',angle:'Model 45°',back:'Model back',product:'Product-only front'};
@@ -62,8 +64,9 @@
     if(initial){initial=false;let reload=false;if(d.facets.collections.includes('Casuals')){$('collection').value='Casuals';reload=true;}if(d.facets.genders.includes('Women')){$('gender').value='Women';reload=true;}if(reload)return load();}
     canPublish=d.canPublish===true;items=d.items;total=d.total;if(!canPublish){const exportLink=document.querySelector('a[href="/api/image-review/export"]');if(exportLink)exportLink.hidden=true;}
     $('summary').innerHTML=Object.entries(d.summary).map(([status,count])=>`<span><strong>${count}</strong>${esc(labels[status]||status)}</span>`).join('');
-    $('products').innerHTML=items.length?items.map(i=>`<article class="product">${i.images[0]?picture(i.images[0],'product-cover'):'<div class="product-cover">No website images</div>'}<div class="product-info"><h3>${esc(i.title)}</h3><p class="meta">${esc(i.colour)} · ${esc(i.category)} · ${esc(i.shopifyStatus)}${i.publishedAt?' · Published':' · Not published'}</p><p class="meta">${esc(i.variants.map(v=>v.sku).filter(Boolean).join(', ')||'SKU missing')}</p><span class="badge ${esc(i.status)}">${esc(labels[i.status])}</span><div class="strip">${i.images.map(m=>picture(m)).join('')}</div><button class="primary" data-review="${esc(i.id)}">Review ${i.images.length} website images</button></div></article>`).join(''):'<div class="empty">No products match these filters.</div>';
-    wirePictures($('products'));$('products').querySelectorAll('[data-review]').forEach(b=>b.addEventListener('click',()=>open(items.find(i=>i.id===b.dataset.review))));
+    $('products').innerHTML=items.length?items.map(i=>`<article class="product">${canPublish&&bulkEligible(i)?`<label class="bulk-select"><input type="checkbox" data-bulk-select="${esc(i.id)}" ${bulkSelection.has(i.id)?'checked':''} aria-label="Select ${esc(i.title)} ${esc(i.colour)}"> Select for approval</label>`:''}${i.images[0]?picture(i.images[0],'product-cover'):'<div class="product-cover">No website images</div>'}<div class="product-info"><h3>${esc(i.title)}</h3><p class="meta">${esc(i.colour)} · ${esc(i.category)} · ${esc(i.shopifyStatus)}${i.publishedAt?' · Published':' · Not published'}</p><p class="meta">${esc(i.variants.map(v=>v.sku).filter(Boolean).join(', ')||'SKU missing')}</p><span class="badge ${esc(i.status)}">${esc(labels[i.status])}</span><div class="strip">${i.images.map(m=>picture(m)).join('')}</div><button class="primary" data-review="${esc(i.id)}">Review ${i.images.length} website images</button></div></article>`).join(''):'<div class="empty">No products match these filters.</div>';
+    $('products').querySelectorAll('[data-bulk-select]').forEach(input=>input.onchange=()=>{const item=items.find(i=>i.id===input.dataset.bulkSelect);if(input.checked)bulkSelection.set(item.id,item);else bulkSelection.delete(item.id);updateBulk();});
+    updateBulk();wirePictures($('products'));$('products').querySelectorAll('[data-review]').forEach(b=>b.addEventListener('click',()=>open(items.find(i=>i.id===b.dataset.review))));
     $('page').textContent=total?`${offset+1}–${Math.min(offset+24,total)} of ${total} product colours`:'0 product colours';$('previous').disabled=offset===0;$('next').disabled=offset+24>=total;message('Shopify images read '+new Date(d.syncedAt).toLocaleString()+'. No upload means not reviewed.');
   }catch(e){message(e.message,true);}}
   function latest(list,view){return [...list].reverse().find(f=>f.view===view);}
@@ -113,7 +116,61 @@
   function decision(value){mutate('',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({...base(),decision:value,notes:$('notes').value})});}
   function upload(input){const file=input.files[0];if(!file)return;const form=new FormData();form.append('image',file);form.append('kind',input.dataset.kind);form.append('view',input.dataset.view);form.append('revision',selected.review.revision);form.append('fingerprint',selected.fingerprint);form.append('notes',$('notes').value);mutate('/photos',{method:'POST',body:form});}
   $('closeReview').addEventListener('click',()=>{if(!busy){$('reviewDialog').close();load();}});$('reviewDialog').addEventListener('cancel',e=>{if(busy)e.preventDefault();else load();});$('closeImage').addEventListener('click',()=>$('imageDialog').close());
-  for(const k of['collection','gender','category','status'])$(k).addEventListener('change',()=>{offset=0;load();});let timer;$('search').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>{offset=0;load();},250);});
+  for(const k of['collection','gender','category','status'])$(k).addEventListener('change',()=>{offset=0;bulkSelection.clear();load();});let timer;$('search').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>{offset=0;bulkSelection.clear();load();},250);});
+
+
+  function updateBulk(){
+    $('bulkActions').hidden=!canPublish;
+    $('selectionCount').textContent=bulkSelection.size+' selected';
+    $('approveSelected').disabled=!bulkSelection.size||bulkRunning||bulkPreparing;
+    for(const id of ['selectPage','clearSelection','approveFiltered'])$(id).disabled=bulkRunning||bulkPreparing;
+    $('approveFiltered').textContent=$('category').value?'Approve all ready in '+$('category').value:'Approve all ready in filters';
+    $('products').querySelectorAll('[data-bulk-select]').forEach(e=>{e.checked=bulkSelection.has(e.dataset.bulkSelect);e.disabled=bulkRunning||bulkPreparing;});
+  }
+  async function prepareBulk(mode){
+    if(!canPublish||bulkRunning||bulkPreparing)return;
+    bulkPreparing=true;updateBulk();
+    try{
+      const scope=['collection','gender','category','search'].map(k=>$(k).value).filter(Boolean).join(' / ')||'All products';
+      let candidates=[];
+      if(mode==='selected'){
+        for(const id of bulkSelection.keys()){const d=await api('/items/'+encodeURIComponent(id));candidates.push(d.item);}
+      }else{
+        const params=new URLSearchParams({limit:48,status:'ready'});
+        for(const k of ['collection','gender','category','search'])if($(k).value)params.set(k,$(k).value);
+        if($('status').value&&$('status').value!=='ready')throw Error('Choose Ready to review or All statuses before approving all filtered products.');
+        let position=0,count=Infinity;
+        while(position<count){params.set('offset',position);const d=await api('/catalogue?'+params);count=d.total;candidates.push(...d.items);if(!d.items.length)break;position+=d.items.length;}
+      }
+      bulkPlan=window.ImageReviewBulk.plan(candidates);
+      if(!bulkPlan.length){message('No complete five-image sets are ready for approval in this selection.',true);return;}
+      $('bulkScope').textContent=bulkPlan.length+' product colours · '+(mode==='selected'?'Your selected products':scope);
+      $('bulkList').innerHTML=bulkPlan.map(i=>'<li>'+esc(i.title)+' · '+esc(i.colour)+' · '+esc(i.variants.map(v=>v.sku).join(', '))+'</li>').join('');
+      $('bulkProgress').textContent='Review this list, then approve and publish.';
+      $('confirmBulk').hidden=false;$('confirmBulk').disabled=false;$('confirmBulk').textContent='Approve & publish '+bulkPlan.length+' products';$('stopBulk').hidden=true;$('closeBulk').disabled=false;
+      $('bulkDialog').showModal();
+    }catch(e){message(e.message,true);}finally{bulkPreparing=false;updateBulk();}
+  }
+  $('selectPage').onclick=()=>{for(const i of items)if(bulkEligible(i))bulkSelection.set(i.id,i);updateBulk();};
+  $('clearSelection').onclick=()=>{bulkSelection.clear();updateBulk();};
+  $('approveSelected').onclick=()=>prepareBulk('selected');$('approveFiltered').onclick=()=>prepareBulk('filtered');
+  $('closeBulk').onclick=()=>{if(!bulkRunning)$('bulkDialog').close();};
+  $('bulkDialog').addEventListener('cancel',e=>{if(bulkRunning)e.preventDefault();});
+  $('stopBulk').onclick=()=>{bulkStop=true;$('stopBulk').disabled=true;$('bulkProgress').textContent+=' Stopping after this product…';};
+  $('confirmBulk').onclick=async()=>{
+    if(!canPublish||bulkRunning)return;bulkRunning=true;bulkStop=false;updateBulk();$('confirmBulk').disabled=true;$('closeBulk').disabled=true;$('stopBulk').hidden=false;$('stopBulk').disabled=false;
+    const results=await window.ImageReviewBulk.publish(bulkPlan,async i=>{
+      return api('/items/'+encodeURIComponent(i.id)+'/publish',json({revision:i.review.revision,fingerprint:i.fingerprint,jobId:i.review.job.id,notes:i.review.notes||''}));
+    },()=>bulkStop,(done,total,item,result)=>{
+      if(result.ok)bulkSelection.delete(item.id);
+      $('bulkProgress').textContent=done+' / '+total+' processed · '+item.title+' · '+(result.ok?'Published':result.error);
+    });
+    bulkRunning=false;$('closeBulk').disabled=false;$('stopBulk').hidden=true;$('confirmBulk').hidden=true;
+    const passed=results.filter(r=>r.ok).length,failed=results.filter(r=>!r.ok);
+    $('bulkProgress').textContent=passed+' published · '+failed.length+' failed · '+(bulkPlan.length-results.length)+' not processed.';
+    if(failed.length)$('bulkList').innerHTML=failed.map(r=>'<li>'+esc(r.item.title)+' · '+esc(r.error)+'</li>').join('');
+    await load();updateBulk();
+  };
 
   if(new URLSearchParams(location.search).get('worker')==='1'){
     const panel=document.createElement('section');panel.id='workerPanel';panel.className='job-panel';document.querySelector('main').prepend(panel);

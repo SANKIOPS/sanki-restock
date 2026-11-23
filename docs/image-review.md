@@ -28,3 +28,9 @@ Publishing integration tests use a mocked Shopify client. Production publishing 
 ## Image Reviewer responsibility
 
 Users & Roles includes **Image Reviewer (review, upload and submit only)**. Assign this role alone for an image-review-only account. Its fixed page is Image Review; it may browse galleries, mark decisions, upload original references, create correction jobs and request revisions. It cannot publish, approve publishing, claim generation work, return generated results, download worker packets, export bulk review data, manage users, or access other departments. Additional independently assigned roles retain their own permissions. The Owner retains generation handoff and publishing controls. The page hides publishing controls for reviewers, and both the outer auth gate and module routes enforce the restrictions.
+
+## Bulk approval
+
+Owners can select complete Ready to review product-colour sets with the card checkboxes, select the ready sets on a page, and approve selected sets across pages. Filter changes clear the selection. “Approve all ready in filters” includes every matching page, not only visible cards; choosing Category changes its label to “Approve all ready in [category]”. Collection, gender, category and search filters all apply.
+
+Both actions first show the exact product-colour list and count. Only the final “Approve & publish” starts Shopify publishing. Five current-job images are required for bulk eligibility. Publishing is sequential through the existing owner-only publish endpoint with the reviewed revision, fingerprint and job ID. Changed jobs, website conflicts and failures are reported per product, without silently approving them. Stop after current product ends the remaining run. Keep this browser tab open during a run. Successful sets are removed from the selection; failed sets can be inspected and retried from their individual review. Image Reviewers do not receive approval controls.
