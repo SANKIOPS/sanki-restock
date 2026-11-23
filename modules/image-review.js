@@ -111,7 +111,7 @@ function createImageReviewRouter(options = {}) {
     record.history.push({event,at:record.updatedAt,by:req.user.username});state.records[item.id]=record;save(state);return present(item,record);
   }
   const wrap = fn => async (req,res,next) => { try { await fn(req,res); } catch(error) { next(error); } };
-  router.use('/api/image-review',(req,res,next) => (req.user?.roles || [req.user?.role]).includes('owner') ? next() : res.status(403).json({success:false,error:'Owner only.'}));
+  router.use('/api/image-review',(req,res,next) => require('./image-review-access').canAccess(req.user,req.originalUrl.split('?')[0],req.method) ? next() : res.status(403).json({success:false,error:'This action is restricted to the Owner.'}));
   router.get('/api/image-review/catalogue',wrap(async(req,res) => {
     const items=await catalogue(), state=read();
     const inCollection=items.filter(i=>!req.query.collection||i.collections.includes(req.query.collection));
@@ -122,7 +122,7 @@ function createImageReviewRouter(options = {}) {
     const summary={};for(const item of filtered){const status=statusFor(state.records[item.id],item);summary[status]=(summary[status]||0)+1;}
     if(req.query.status)filtered=filtered.filter(i=>statusFor(state.records[i.id],i)===req.query.status);
     const offset=Math.max(0,Math.floor(Number(req.query.offset)||0)), limit=Math.min(48,Math.max(1,Math.floor(Number(req.query.limit)||24)));
-    res.json({success:true,syncedAt,facets,summary,total:filtered.length,items:filtered.slice(offset,offset+limit).map(i=>present(i,state.records[i.id]))});
+    res.json({success:true,canPublish:(req.user.roles||[req.user.role]).includes('owner'),syncedAt,facets,summary,total:filtered.length,items:filtered.slice(offset,offset+limit).map(i=>present(i,state.records[i.id]))});
   }));
   router.post('/api/image-review/sync',wrap(async(req,res)=>{await catalogue(true);res.json({success:true,syncedAt});}));
   router.patch('/api/image-review/items/:id',wrap(async(req,res)=>{
@@ -136,6 +136,7 @@ function createImageReviewRouter(options = {}) {
   }));
   const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:20*1024*1024,files:1}});
   router.post('/api/image-review/items/:id/photos',upload.single('image'),wrap(async(req,res)=>{
+    if(!(req.user.roles||[req.user.role]).includes('owner')&&req.body.kind!=='original')return res.status(403).json({success:false,error:'Image Reviewers can upload original references only.'});
     const kind=req.body.kind,view=String(req.body.view || '');
     if(!['original','proposal'].includes(kind)||!ORIGINAL_VIEWS.includes(view))return res.status(400).json({success:false,error:'Choose original/proposal and front/back/detail.'});
     if(!req.file)return res.status(400).json({success:false,error:'Choose a front, back or detail image.'});

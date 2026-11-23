@@ -24,3 +24,7 @@ Validation:
 `node --test test/image-review-queue.test.js test/image-review.test.js test/catalogue-images.test.js test/auth-authorization.test.js test/manage-navigation.test.js`
 
 Publishing integration tests use a mocked Shopify client. Production publishing is first exercised on an actual owner-approved result set, never dummy catalogue media.
+
+## Image Reviewer responsibility
+
+Users & Roles includes **Image Reviewer (review, upload and submit only)**. Assign this role alone for an image-review-only account. Its fixed page is Image Review; it may browse galleries, mark decisions, upload original references, create correction jobs and request revisions. It cannot publish, approve publishing, claim generation work, return generated results, download worker packets, export bulk review data, manage users, or access other departments. Additional independently assigned roles retain their own permissions. The Owner retains generation handoff and publishing controls. The page hides publishing controls for reviewers, and both the outer auth gate and module routes enforce the restrictions.

@@ -94,6 +94,7 @@ const SECRET = (function () {
 
 // ── Roles → which pages each role may open, and where they land ──
 const ROLES = [
+  { id: 'image_reviewer', label: 'Image Reviewer (review, upload and submit only)' },
   { id: 'content_team', label: 'Content team (shoot, edit and post)' },
   { id: 'admin',       label: 'Admin (full access)' },
   { id: 'owner',       label: 'Owner (private Money Picture + accounting)' },
@@ -117,6 +118,7 @@ const ROLE_IDS = ROLES.map(r => r.id);
 // Role fallback homes are used only when Stock Search is not among that
 // user's permitted pages.
 const ROLE_HOME = {
+  image_reviewer: '/image-review.html',
   content_team: '/content-production.html',
   admin:       '/dashboard.html',
   owner:       '/owner.html',
@@ -137,6 +139,7 @@ const ROLE_HOME = {
 // DEFAULT (seed) map — the admin can override it per role (persisted in the
 // user store under `rolePages`); admin always stays '*'.
 const DEFAULT_ROLE_PAGES = {
+  image_reviewer: ['/image-review.html'],
   content_team: ['/content-production.html'],
   admin:       '*',
   owner:       '*',
@@ -188,6 +191,7 @@ function getRolePages() {
     if (r === 'admin' || r === 'owner') { out[r] = '*'; return; }
     // Stylists have a fixed browsing allow-list, including existing accounts.
     // Stored overrides cannot grant cleaning or other operational pages.
+    if (r === 'image_reviewer') { out[r] = ['/image-review.html']; return; }
     if (r === 'stocksearch') { out[r] = ['/rack-locations.html', '/inventory.html']; return; }
     out[r] = Array.isArray(overrides[r]) ? overrides[r] : seedPagesForRole(r);
   });
@@ -243,6 +247,7 @@ function hasUserPermission(user, permission) {
 function landingFor(role) { return ROLE_HOME[role] || '/dashboard.html'; }
 function allowedPagesFor(role) { const a = getRolePages()[role]; return a === '*' ? '*' : (a || []); }
 function roleCanAccessPath(role, p) {
+  if(role==='image_reviewer')return p==='/image-review.html';
   if(role==='content_team')return p==='/content-production.html';
   // The launcher is the shared front door — every authenticated role may
   // open it (it filters its own contents by role via /api/modules).
@@ -255,6 +260,7 @@ function roleCanAccessPath(role, p) {
 // Union access across all of a user's roles.
 function isPrashant(user) { return String(user && user.username || '').trim().toLowerCase() === PRASHANT_USER; }
 function userCanAccessPath(user, p) {
+  if(rolesOf(user).length===1&&rolesOf(user)[0]==='image_reviewer')return p==='/image-review.html';
   if(rolesOf(user).length===1&&rolesOf(user)[0]==='content_team')return p==='/content-production.html';
   if (p === '/manage.html') {
     // This is only a filtered navigation hub, never a grant to its linked
