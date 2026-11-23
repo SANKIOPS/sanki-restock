@@ -1,17 +1,26 @@
 # Image Review
 
-Owner-only navigation: Inventory → Image Review (`/image-review.html`).
+Owner-only navigation: Inventory → Image Review (`/image-review.html`). Initial filters are Casuals / Women. Each row groups sizes within a product colour and displays every current Shopify gallery image, including inactive and sold-out products. Source taxonomy labels are retained when no known category applies.
 
-The catalogue is read from Shopify, including inactive and sold-out products. Each review row groups sizes within a product colour. Filters use SANKI collection/gender/category tags; source labels are retained when no known category applies. All website gallery images remain visible. Initial filters are Casuals / Women.
+## Owner workflow
 
-A row starts Not reviewed. Explicitly mark all images correct or flag it for correction. No upload does not imply approval. Original front, back and detail photos are preserved byte-for-byte with immutable versions. Proposed corrections are staged separately. A complete proposal requires explicit approval; replacing an original invalidates that approval and current proposals. Changes to the Shopify gallery invalidate earlier review decisions. Concurrent edits use revision checks.
+1. Review the numbered website images. If all are correct, explicitly mark Images correct. No upload alone does not imply approval.
+2. Upload genuine Front, Back or Detail photos only for views needing correction. One reference is sufficient. Choose the numbered website photo to replace for each uploaded view, or Add as a new photo.
+3. Create images saves the job. Tell Codex “Process the image queue” in the chat to start generation. The app cannot wake or run Codex itself.
+4. Returned AI results appear beside the originals. Revise images sends feedback back to the queue. Approve & publish replaces only the selected website photos and verifies the new gallery; other photos, product status, prices and stock remain unchanged.
 
-This release reads Shopify only. It does not generate images, replace media, delete images, change publication status, or execute approved uploads. Approval records identify a staged correction set for subsequent controlled publishing.
+The authenticated Codex operator screen handles reference download and result return; the owner does not move generated files. See `docs/image-review-codex.md` for its workflow and publishing recovery details. No paid generation service is integrated.
 
-Persist `image-review.json` and `image-review-files/` alongside the directory containing DATA_PATH. Include both in backups. Never expose the directory as public static files. The authenticated API serves only files linked to review records. Corrupt review state fails closed instead of being overwritten. Exports include review history and photo links; photo bytes remain in authenticated storage.
+Original bytes, historical versions, returned results and publish receipts are retained. Replacing a reference invalidates its queued job. Website gallery changes invalidate old decisions and block approval. Per-product publishing locks and optimistic record revisions prevent conflicting actions. Existing photos are backed up before removal, and retries retain successful uploads rather than duplicating them. Shared multi-colour photos cannot be selected for replacement.
 
-Validation: node --test test/image-review.test.js test/catalogue-images.test.js test/auth-authorization.test.js test/manage-navigation.test.js
+## Operation
 
-## Per-view workflow revision
+Persist `image-review.json` and `image-review-files/` alongside the directory containing DATA_PATH. Include both in backups. Do not expose this directory as static files: the owner-authenticated API serves only linked files. Corrupt review state fails closed without overwriting it. Exports include review history, jobs, photo links and publish receipts.
 
-The owner screen has only Front, Back and Detail reference slots. Each is optional. Uploading any one view makes the item ready for correction; unchanged views need no upload. Uploads save automatically. The former separate proposed correction upload and approval controls are hidden from this screen. Existing proposal records and audit history are retained. The backend accepts staged corrections only for referenced views and requires only those views before staged approval. Finished-image approval and Shopify publication remain subsequent controlled steps; uploading a reference never replaces live media.
+Viewer controls support repeated zoom up to 800%, mouse-wheel/pinch zoom, drag panning and Fit whole product.
+
+Validation:
+
+`node --test test/image-review-queue.test.js test/image-review.test.js test/catalogue-images.test.js test/auth-authorization.test.js test/manage-navigation.test.js`
+
+Publishing integration tests use a mocked Shopify client. Production publishing is first exercised on an actual owner-approved result set, never dummy catalogue media.
