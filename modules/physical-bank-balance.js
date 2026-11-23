@@ -14,28 +14,39 @@ const calendarDate = value => {
 // an accounting opening anchor, but it is still the safest basis for the
 // read-only bank-balance display. Otherwise a shared account falls back to one
 // entity's ledger arithmetic and can show a wildly false balance.
-function pendingStatementAnchor(book = {}, beforeValue) {
-  const before=calendarDate(beforeValue),candidates=(book.imports||[]).flatMap(record=>{
-    const summary=record&&record.statementSummary||{},date=calendarDate(record&&record.to||summary.to);
+function pendingStatementAnchor(book = {}, beforeValue, pendingStatements = []) {
+  const before=calendarDate(beforeValue),sources=[];
+  (book.imports||[]).forEach(record=>sources.push({record,summary:record&&record.statementSummary||{},provisional:false}));
+  (pendingStatements||[]).forEach(record=>sources.push({record,summary:record&&record.summary||record&&record.statementSummary||{},provisional:true}));
+  const candidates=sources.flatMap(source=>{
+    const {record,summary,provisional}=source,date=calendarDate(record&&record.to||summary.to);
     const closing=summary.closingBalance;
     if(!before||!date||date>=before||summary.validated!==true||closing==null
       ||String(closing).trim()===''||!Number.isFinite(Number(closing)))return[];
-    return[{record,date,closing:money(closing)}];
+    return[{record,date,closing:money(closing),provisional}];
   });
   const cutoffDate=candidates.map(candidate=>candidate.date).sort().at(-1);
   if(!cutoffDate)return null;
   const latest=candidates.filter(candidate=>candidate.date===cutoffDate),amounts=new Set(latest.map(candidate=>Math.round(candidate.closing*100)));
-  if(amounts.size!==1)return null;
-  const selected=latest.slice().sort((a,b)=>String(a.record.id||'').localeCompare(String(b.record.id||'')))[0];
-  return{cutoffDate,previousClosing:selected.closing,anchorSource:'pending_statement',anchorRecordId:String(selected.record.id||''),balancePending:true};
+  if(amounts.size!==1)return{anchorConflict:{type:'conflicting_validated_statement_closings',date:cutoffDate,message:'Validated bank statements for '+cutoffDate+' have different closing balances. Review the conflicting statement evidence before displaying a physical bank balance.'}};
+  // A finalized import is stronger than an otherwise identical active draft.
+  const selected=latest.slice().sort((a,b)=>Number(a.provisional)-Number(b.provisional)||String(a.record.id||'').localeCompare(String(b.record.id||'')))[0];
+  return{cutoffDate,previousClosing:selected.closing,anchorSource:selected.provisional?'validated_temporary_statement':'pending_statement',anchorRecordId:String(selected.record.id||''),balancePending:true,provisionalStatement:selected.provisional};
 }
 // A physical bank close covers ALL entities. Never add an entity opening or
 // replay its old source payments on top of that same verified close.
-function project({book = {}, movements = [], opening = 0, openingDate = '', to, allowPendingBankAnchor = false}) {
+function project({book = {}, movements = [], opening = 0, openingDate = '', to, allowPendingBankAnchor = false, pendingStatements = []}) {
   let anchor = verifiedReconciliationAnchor(book, {before:nextDay(to), nature:'SAMAST',account:'IndusInd Bank 7883'});
+  const pending=allowPendingBankAnchor&&pendingStatementAnchor(book,nextDay(to),pendingStatements);
+  if(pending&&pending.anchorConflict)throw Object.assign(Error(pending.anchorConflict.message),{status:409});
   if(anchor.anchorConflict){
-    const pending=allowPendingBankAnchor&&pendingStatementAnchor(book,nextDay(to));
     if(!pending)throw Object.assign(Error(anchor.anchorConflict.message), {status:409});
+    anchor=pending;
+  }else if(pending&&(!anchor.cutoffDate||pending.cutoffDate>anchor.cutoffDate)){
+    // A validated saved preview is the latest direct evidence of the physical
+    // bank close even if bookkeeping finalization is blocked by an older
+    // opening-anchor conflict. It is display-only and never becomes an
+    // accounting opening anchor.
     anchor=pending;
   }
   const cutoff = anchor.cutoffDate || '', hasAnchor = anchor.previousClosing != null;
@@ -51,9 +62,10 @@ function project({book = {}, movements = [], opening = 0, openingDate = '', to, 
   const base = {id:'OPENING',kind:'opening',date:cutoff||openingDate,description:hasAnchor?'Verified bank closing brought forward · '+cutoff:'Physical bank opening',credit:Math.max(0,balance),debit:Math.max(0,-balance),balance,editable:false};
   for(const row of rows) { balance=money(balance+Number(row.credit||0)-Number(row.debit||0)); }
   if(!hasAnchor) warnings.push('No verified bank closing is available for this date. Balance uses the recorded physical opening and entries.');
-  if(anchor.balancePending)warnings.push('Bank statement closing used through '+cutoff+'; its ledger difference is still pending review. Later recorded movements are included once.');
+  if(anchor.provisionalStatement)warnings.push('Validated temporary bank statement closing used through '+cutoff+'; final reconciliation is still pending. Later recorded movements are included once.');
+  else if(anchor.balancePending)warnings.push('Bank statement closing used through '+cutoff+'; its ledger difference is still pending review. Later recorded movements are included once.');
   else if(hasAnchor && to>cutoff) warnings.push('Bank verified through '+cutoff+'. Later recorded movements are included but are not a bank-verified closing.');
-  const basis=anchor.balancePending?'Validated bank statement closing (ledger balance pending) plus later recorded movements':hasAnchor?'Verified bank closing plus later recorded movements':'Recorded physical opening plus movements';
+  const basis=anchor.provisionalStatement?'Validated temporary bank statement closing (final reconciliation pending) plus later recorded movements':anchor.balancePending?'Validated bank statement closing (ledger balance pending) plus later recorded movements':hasAnchor?'Verified bank closing plus later recorded movements':'Recorded physical opening plus movements';
   return {balance:money(balance),statementBalance:money(balance),openingEntry:base,rows,anchor:hasAnchor?anchor:null,reconciledThrough:cutoff,warnings,basis,verified:hasAnchor&&!anchor.balancePending&&to===cutoff};
 }
 module.exports={project,money};

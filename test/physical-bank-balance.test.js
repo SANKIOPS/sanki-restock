@@ -42,3 +42,21 @@ test('pending statement display anchor remains unavailable when latest closings 
  ]};
  assert.throws(()=>project({book:pending,to:'2026-11-18',allowPendingBankAnchor:true}),/deferred|unreconciled|different closing|conflict/i);
 });
+test('latest validated temporary statement closing fixes display while historical opening evidence remains blocked',()=>{
+ const finalized={reconciledThrough:'2026-11-15',lastReconciliation:{through:'2026-11-15',closingBalance:109402.35,balanceReconciled:false,closingBalanceDeferred:true,balanceDifference:-328232,draftId:'DRAFT-OLD'},imports:[{id:'BST-OLD',draftId:'DRAFT-OLD',to:'2026-11-15',balanceReconciled:false,closingBalanceDeferred:true,statementSummary:{to:'2026-11-15',closingBalance:109402.35,validated:true}}]};
+ const draft={id:'BRD-CURRENT',account,to:'2026-11-18',summary:{to:'2026-11-18',openingBalance:109402.35,totalDebits:80892,totalCredits:136200,closingBalance:164710.35,validated:true}};
+ const result=project({book:finalized,pendingStatements:[draft],movements:[row('posted-rent','2026-11-18',136200,'SAMAST'),row('posted-expenses','2026-11-18',-4160,'PERSONAL')],to:'2026-11-23',allowPendingBankAnchor:true});
+ assert.equal(result.balance,164710.35);
+ assert.equal(result.reconciledThrough,'2026-11-18');
+ assert.equal(result.anchor.anchorRecordId,'BRD-CURRENT');
+ assert.equal(result.anchor.provisionalStatement,true);
+ assert.match(result.basis,/temporary bank statement/i);
+ assert.match(result.warnings[0],/final reconciliation is still pending/i);
+});
+test('conflicting temporary statement closings do not manufacture a physical balance',()=>{
+ const drafts=[
+  {id:'A',to:'2026-11-18',summary:{to:'2026-11-18',closingBalance:100,validated:true}},
+  {id:'B',to:'2026-11-18',summary:{to:'2026-11-18',closingBalance:200,validated:true}}
+ ];
+ assert.throws(()=>project({book,pendingStatements:drafts,to:'2026-11-23',allowPendingBankAnchor:true}),/different closing balances/i);
+});
