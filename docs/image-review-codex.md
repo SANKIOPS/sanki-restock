@@ -30,3 +30,5 @@ New jobs plan `outputViews` in this order: front, detail, angle, back, product. 
 On revisions, `feedbackByView` records comments against exact view IDs. `generationViews` lists only commented and missing views. Uncommented generated results remain attached to the job. Complete/publish verifies every output view exists. The worker upload controls list generationViews; do not regenerate unaffected views. The normal review panel shows all five slots, with side-by-side originals only for the three source views. Owner approval/publishing remains separate.
 
 Detail crop: focus on the waistband/fastening/pleats and pocket construction down to the upper thigh. Avoid the earlier long crop toward the knee: show roughly half to at most three quarters of that previous detail coverage.
+
+Enlarged review is paired by view: original + matching AI front, original + AI detail, AI-only angle, original + AI back, AI-only product. Prev/Next and Fit-level swipe move between view pairs, not an unrelated sequence of originals and results. The AI-only views explicitly identify their shared-reference origin. Revision fields in the viewer synchronize with the same view's card comment.
