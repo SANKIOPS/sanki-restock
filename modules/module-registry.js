@@ -55,7 +55,7 @@ const MODULES = [
 
   { key: 'inventory-dashboard', title: 'Dashboard', desc: 'Search, filter and locate every resolved product', icon: '▦', href: '/inventory.html', section: 'Inventory', status: 'live', roles: ['admin', 'inventory', 'warehouse', 'sales', 'stocksearch'] },
   { key: 'inventory-care', title: 'Dry cleaning & miscellaneous', desc: 'Cleaning batches, partial returns and pieces not for sale', icon: '🧺', href: '/inventory-care.html', section: 'Inventory', status: 'live', roles: ['admin', 'inventory', 'warehouse'] },
-  { key: 'image-review', title: 'Image Review', desc: 'Review website galleries and upload original garment references by product colour', icon: '▧', href: '/image-review.html', section: 'Inventory', status: 'live', roles: ['owner'], ownerOnly: true },
+  { key: 'image-review', title: 'Image Review', desc: 'Review website galleries and upload original garment references by product colour', icon: '▧', href: '/image-review.html', section: 'Inventory', status: 'live', roles: ['owner','image_reviewer'], ownerOnly: true },
 
   { key: 'orders',       title: 'Orders',                desc: 'Every Shopify sale (POS + Website) + dispatch tracking', icon: '🧾', href: '/orders.html',                section: 'Sales',     status: 'live',   roles: ['admin', 'sales', 'revenue', 'warehouse'] },
   // Retired: manual POS entry duplicated Shopify POS. Superseded by Orders (read-only Shopify mirror). Kept hidden.
@@ -105,7 +105,7 @@ function visibleFor(user) {
   const allowed = isPrashant ? allowedPagesForUser(user) : (isAdmin || isOwner) ? '*' : allowedPagesForUser(user);
   const canSee = (m) => m.delegatedPermission && hasUserPermission(user, m.delegatedPermission) ? true : m.navigationOnly ? userCanAccessPath(user, modulePath(m.href)) : isPrashant
     ? Array.isArray(allowed) && allowed.includes(modulePath(m.href))
-    : m.ownerOnly ? isOwner : (allowed === '*' || (Array.isArray(allowed) && allowed.includes(modulePath(m.href))));
+    : m.ownerOnly ? isOwner || (m.key==='image-review' && rolesOf(user).includes('image_reviewer')) : (allowed === '*' || (Array.isArray(allowed) && allowed.includes(modulePath(m.href))));
   return MODULES
     .filter(m => m.status !== 'hidden')
     .filter(canSee)

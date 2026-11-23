@@ -1,3 +1,4 @@
+const imageReviewAccess = require('./modules/image-review-access');
 // ═══════════════════════════════════════════════════════════════
 // auth.js — authentication gate for SANKI Business OS
 // Fixes audit findings #1–#4:
@@ -169,6 +170,7 @@ function apiAllowedForUser(user, p, method='GET') {
     return allowed.some(prefix => p === prefix || p.startsWith(prefix));
   }
   const userRoles = rolesOf(user);
+  if(p==='/api/image-review'||p.startsWith('/api/image-review/'))return imageReviewAccess.canAccess(user,p,method);
   // Rack assignment, catalogue refresh and RIS synchronization are Owner-only.
   // Search itself stays available to the dedicated view-only Stylists role.
   const ownerOnlyStockAction = p.startsWith('/api/racks') || p === '/api/stock-search/refresh';
@@ -248,10 +250,12 @@ function gate(req, res, next) {
 
   // The Money Picture and its capital/OD APIs are private to the Owner role,
   // even when another account has ordinary Admin access.
-  if ((p === '/owner.html' || p === '/rentals.html' || p === '/catalogue-images.html' || p === '/image-review.html' || p.startsWith('/api/owner/') || p.startsWith('/api/catalogue-images') || p.startsWith('/api/image-review')) && !rolesOf(user).includes('owner') && !(isPrashant(user) && p === '/rentals.html')) {
+  if ((p === '/owner.html' || p === '/rentals.html' || p === '/catalogue-images.html' || p.startsWith('/api/owner/') || p.startsWith('/api/catalogue-images')) && !rolesOf(user).includes('owner') && !(isPrashant(user) && p === '/rentals.html')) {
     if (p.startsWith('/api/')) return res.status(403).json({ success: false, error: 'Owner only.' });
     return res.redirect(302, landingForUser(user));
   }
+
+  if(p==='/image-review.html'&&!imageReviewAccess.canReview(user))return res.redirect(302,landingForUser(user));
 
   // Never redirect a role-less account to the dashboard when the dashboard is
   // also its fallback destination; that creates an infinite self-redirect.
