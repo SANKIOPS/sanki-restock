@@ -48,7 +48,7 @@
   function wirePictures(root){const buttons=[...root.querySelectorAll('[data-image]')];buttons.forEach(b=>b.addEventListener('click',()=>{
     const view=b.dataset.resultView||b.dataset.originalView;
     if(view&&selected?.review.job&&latest(selected.review.proposals,view)){
-      const list=outputOrder.filter(v=>latest(selected.review.proposals,v)).map(v=>({view:v,src:latest(selected.review.proposals,v).src,originalSrc:latest(selected.review.originals,v)?.src,label:viewNames[v]}));
+      const list=outputOrder.filter(v=>latest(selected.review.proposals,v)).map(v=>({view:v,src:latest(selected.review.proposals,v).src||latest(selected.review.proposals,v).url,originalSrc:latest(selected.review.originals,v)?.src||latest(selected.review.originals,v)?.url,label:viewNames[v]}));
       enlarge(list,list.findIndex(x=>x.view===view));return;
     }
     const group=[...(b.closest('.review-section')||root).querySelectorAll('[data-image]')].filter(x=>!x.dataset.resultView);const list=group.map(x=>({src:x.dataset.image,label:x.dataset.imageLabel||'Original / website photo'}));enlarge(list,group.indexOf(b));
