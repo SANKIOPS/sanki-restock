@@ -47,14 +47,32 @@
     $('reviewBody').innerHTML=`<section class="review-section"><h3>Current website gallery</h3><p class="section-intro">All current gallery images are shown. Check the selected colour in every view.</p><div class="gallery">${i.images.map((m,n)=>'<figure>'+picture(m)+'<figcaption>Photo '+(n+1)+'</figcaption></figure>').join('')||'<p>No website images.</p>'}</div></section><section class="review-section"><h3>Upload photos for the views that need fixing</h3><p class="section-intro">Upload a genuine photo of this exact garment and colour only where a correction is needed. Front, Back and Detail are optional: one photo is enough to start. Leave correct views empty; they will stay unchanged. Each photo saves automatically as a reference for preparing the finished website image.</p><div class="photo-grid">${['front','back','detail'].map(v=>slot(v)).join('')}</div></section>${resultPanel()}<label class="notes">Review notes<textarea id="notes" rows="3" placeholder="For example: wrong collar, pocket shape or sold components">${esc(i.review.notes)}</textarea></label><p id="reviewMessage" class="review-message" role="status"></p><div class="decisions"><button class="primary" id="queueJob">Create images</button><button data-decision="correct">All website images correct</button><button data-decision="needs_correction">Needs correction / save notes</button><button data-decision="unreviewed">Return to not reviewed</button></div>`;
     if(i.review.job){$('queueJob').hidden=true;$('reviewBody').querySelectorAll('[data-decision],[data-target]').forEach(e=>{if(e.dataset.decision)e.hidden=true;else e.disabled=true;});}
     $('queueJob').disabled=!!i.review.job&&['queued','processing','publishing','publish_failed'].includes(i.review.job.status)||!i.review.originals.length||i.review.pendingViews?.length===0;
-    $('queueJob').addEventListener('click',()=>{const targets={};$('reviewBody').querySelectorAll('[data-target]').forEach(select=>targets[select.dataset.target]=select.value);mutate('/queue',json({...base(),targets}));});
+    $('queueJob').addEventListener('click',()=>{
+      const targets={},selects=[...$('reviewBody').querySelectorAll('[data-target]')],used=new Set();
+      for(const select of selects){
+        select.removeAttribute('aria-invalid');
+        const view=select.dataset.target;
+        if(!select.value||select.value!=='add'&&used.has(select.value)){
+          select.setAttribute('aria-invalid','true');
+          const text=!select.value?`Choose a website photo to replace for ${view}, or choose “Add as a new photo”.`:'Each view needs a different website photo. Choose another photo or “Add as a new photo”.';
+          $('reviewMessage').textContent=text;$('reviewMessage').classList.add('error');
+          select.parentElement.querySelector('.target-error')?.remove();
+          const hint=document.createElement('small');hint.className='target-error error';hint.textContent=text;select.after(hint);
+          select.scrollIntoView({block:'center',behavior:'smooth'});select.focus({preventScroll:true});return;
+        }
+        targets[view]=select.value;if(select.value!=='add')used.add(select.value);
+      }
+      $('reviewMessage').textContent='Submitting to the image queue…';$('reviewMessage').classList.remove('error');
+      mutate('/queue',json({...base(),targets}));
+    });
+    $('reviewBody').querySelectorAll('[data-target]').forEach(select=>select.addEventListener('change',()=>{select.removeAttribute('aria-invalid');select.parentElement.querySelector('.target-error')?.remove();}));
     if($('publishJob'))$('publishJob').addEventListener('click',()=>mutate('/publish',json({...base(),jobId:selected.review.job.id})));
     if($('reviseJob'))$('reviseJob').addEventListener('click',()=>mutate('/revise',json({...base(),jobId:selected.review.job.id,feedback:$('feedback').value})));
     wirePictures($('reviewBody'));$('reviewBody').querySelectorAll('[data-decision]').forEach(b=>b.addEventListener('click',()=>decision(b.dataset.decision)));$('reviewBody').querySelectorAll('input[type=file]').forEach(input=>input.addEventListener('change',()=>upload(input)));
 
   }
   function setBusy(value){busy=value;$('reviewBody').querySelectorAll('button,input,textarea').forEach(e=>e.disabled=value);$('closeReview').disabled=value;if(!value&&selected?.review.job)$('reviewBody').querySelectorAll('[data-target]').forEach(e=>e.disabled=true);}
-  async function mutate(path,options){if(busy)return;setBusy(true);try{const d=await api('/items/'+encodeURIComponent(selected.id)+path,options);selected=d.item;renderReview();$('reviewMessage').textContent=selected.review.job?.status==='published'?'Published and verified in Shopify.':'Saved.';}catch(e){if(e.item){selected=e.item;renderReview();}$('reviewMessage').textContent=e.message;$('reviewMessage').classList.add('error');}finally{setBusy(false);const j=selected.review.job;if($('queueJob'))$('queueJob').disabled=!!j&&['queued','processing','publishing','publish_failed'].includes(j.status)||!selected.review.originals.length||selected.review.pendingViews?.length===0;}}
+  async function mutate(path,options){if(busy)return;setBusy(true);try{const d=await api('/items/'+encodeURIComponent(selected.id)+path,options);selected=d.item;renderReview();$('reviewMessage').textContent=selected.review.job?.status==='published'?'Published and verified in Shopify.':path==='/queue'?'Added to the queue. Tell Codex “Process the image queue” to start generation.':'Saved.';}catch(e){if(e.item){selected=e.item;renderReview();}$('reviewMessage').textContent=e.message;$('reviewMessage').classList.add('error');}finally{setBusy(false);const j=selected.review.job;if($('queueJob'))$('queueJob').disabled=!!j&&['queued','processing','publishing','publish_failed'].includes(j.status)||!selected.review.originals.length||selected.review.pendingViews?.length===0;}}
   const json=body=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const base=()=>({revision:selected.review.revision,fingerprint:selected.fingerprint,notes:$('notes').value});
   function decision(value){mutate('',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({...base(),decision:value,notes:$('notes').value})});}
