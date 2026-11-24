@@ -55,6 +55,7 @@ test('0992 controls expose one report plus explicit income, operating-expense an
   assert.match(reportHtml,/value="SEWAK_PARK_HOTEL">Sewak Park Hotel \(0992\)/);
   assert.match(reportJs,/p\.set\('unit',HOTEL\)/);
   assert.match(reportJs,/entity:isHotel\?'PERSONAL':selectedReport/);
+  assert.match(reportJs,/reportBasis\.id='basis'/, 'report script must create the basis element before loading data');
 
   assert.match(expensesHtml,/id="biReceiptType"[\s\S]*value="hotel_income">Sewak Park Hotel income/);
   assert.match(expensesHtml,/id="beHotelTreatment"[\s\S]*value="operating_expense">Sewak Park Hotel operating expense[\s\S]*value="personal_use">Personal expense using hotel money/);
