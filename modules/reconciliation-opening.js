@@ -83,6 +83,25 @@ function reconciliationBankCoverageIds(record = {}) {
   return ids;
 }
 
+// A deferred ledger comparison does not invalidate an otherwise complete bank
+// statement forever.  When the *next* validated statement starts at exactly
+// this physical bank closing, the two independent statement periods establish
+// bank continuity.  Keep this deliberately strict: explicit complete physical
+// row coverage, a validated closing, and an exact next-opening match are all
+// required.  The old ledger difference remains in history; this only prevents
+// it from poisoning every later opening anchor.
+function validatedBankContinuityClosing(record = {}, options = {}) {
+  const summary = record.statementSummary || {};
+  if (summary.validated !== true || record.reconciliationBankCoverageComplete !== true
+    || !reconciliationBankCoverageIds(record).size) return null;
+  const closing = summary.closingBalance, nextOpening = options.statementOpening;
+  if (!['number', 'string'].includes(typeof closing) || String(closing).trim() === ''
+    || !Number.isFinite(Number(closing)) || !['number', 'string'].includes(typeof nextOpening)
+    || String(nextOpening).trim() === '' || !Number.isFinite(Number(nextOpening))
+    || cents(Number(closing)) !== cents(Number(nextOpening))) return null;
+  return cents(Number(closing)) / 100;
+}
+
 // A later upload/finalization timestamp cannot prove a fuller bank period.
 // Require a successful validated statement plus explicit combined-import
 // lineage, or a strict superset of the persisted physical bank transaction IDs.
@@ -154,9 +173,15 @@ function verifiedEarlierReconciliationAnchor(book = {}, beforeValue, options = {
   // must not defeat the complete statement, even if its timestamp is newer.
   const lastSuperseded = lastMatches.length > 0 && lastMatches.every(item => !remaining.includes(item));
   const considerLast = lastDate === cutoffDate && financialEvidence(last) && !lastSuperseded;
+  const bankContinuityRecords = remaining.filter(item =>
+    validatedBankContinuityClosing(item.record, options) != null);
+  const lastBankContinuity = considerLast && lastClosing != null && lastMatches.some(item =>
+    remaining.includes(item) && validatedBankContinuityClosing(item.record, options) != null
+      && cents(lastClosing) === cents(options.statementOpening));
   if (!remaining.length && atCutoff.length) return conflict('Historical reconciliation supersession evidence is circular or ambiguous. Review the finalized statements before finalizing.');
-  if (remaining.some(item => reconciliationRecordBalanceFailed(item.record, options))
-    || considerLast && reconciliationRecordBalanceFailed(last, options)) {
+  if (remaining.some(item => reconciliationRecordBalanceFailed(item.record, options)
+      && !bankContinuityRecords.includes(item))
+    || considerLast && reconciliationRecordBalanceFailed(last, options) && !lastBankContinuity) {
     return conflict('The latest earlier statement still has a deferred or unreconciled closing balance. Resolve that historical balance before using it as an opening anchor.');
   }
   const amounts = remaining.map(item => item.closing);
@@ -168,7 +193,8 @@ function verifiedEarlierReconciliationAnchor(book = {}, beforeValue, options = {
   const selected = lastImport || remaining.slice().sort((a, b) => String(a.record.id || '').localeCompare(String(b.record.id || '')))[0];
   return { cutoffDate, previousClosing: amounts[0],
     anchorSource: considerLast && lastClosing != null ? 'last_reconciliation' : 'finalized_import',
-    anchorRecordId: String(selected && selected.record.id || '') };
+    anchorRecordId: String(selected && selected.record.id || ''),
+    ...(bankContinuityRecords.length || lastBankContinuity ? { historicalLedgerGapIsolated: true } : {}) };
 }
 
 /**

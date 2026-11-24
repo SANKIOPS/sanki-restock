@@ -29,6 +29,7 @@ function harness() {
   }
   const context = { el: id => nodes[id] ||= node(), fmt: value => '₹' + Number(value || 0).toFixed(2), bankNature: 'SANKI', bankStatementLoadGeneration: 0,
     bankDraftId: '', bankReconView: null, cfg: { isOwner: true }, SankiNavigation: { set() {} }, ReconciliationStatus: { bank: () => '' }, bankDraftSwitcher: () => '',
+    setTimeout: callback => { callback(); return 1; },
     bankAmountAuthorityHtml: () => '', bankDisplayParts: bank => ({ particulars: bank.description }),
     bankReconRow: id => context.bankReconView.rows.find(row => row.id === id), bankReconAmount: row => Number(row?.bank?.debit || row?.bank?.credit || 0),
     showBankReconForm: form => openedForms.push(form), saveBankReconForm() {}, confirm: text => { confirms.push(text); return true; },

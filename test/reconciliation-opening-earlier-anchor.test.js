@@ -181,6 +181,49 @@ for (const failure of [{ balanceReconciled: false }, { reconciled: false },
   });
 }
 
+test('exact next-statement opening isolates a deferred ledger gap when complete validated bank evidence proves continuity', () => {
+  const bankIds = ['BTX-13', 'BTX-14', 'BTX-15'];
+  const prior = { id: 'BST-NOV15', draftId: 'BRD-NOV15', to: '2026-11-15',
+    balanceReconciled: false, reconciled: false, closingBalanceDeferred: true,
+    balanceDifference: -328232, ledgerClosingBalance: 437634.35,
+    reconciliationBankCoverageComplete: true, reconciliationBankTransactionIds: bankIds,
+    statementSummary: { from: '2026-11-13', to: '2026-11-15', openingBalance: 119909.35,
+      closingBalance: 109402.35, totalDebits: 101000, totalCredits: 90493, validated: true } };
+  const book = { reconciledThrough: '2026-11-15', imports: [prior], lastReconciliation: {
+    draftId: prior.draftId, through: '2026-11-15', closingBalance: 109402.35,
+    ledgerClosingBalance: 437634.35, balanceReconciled: false, reconciled: false,
+    closingBalanceDeferred: true, balanceDifference: -328232,
+  } };
+  const before = JSON.stringify(book);
+  const anchor = verifiedReconciliationAnchor(book, { before: '2026-11-16',
+    statementOpening: 109402.35, nature: 'SAMAST', account: 'IndusInd Bank 7883' });
+  assert.equal(anchor.previousClosing, 109402.35);
+  assert.equal(anchor.cutoffDate, '2026-11-15');
+  assert.equal(anchor.anchorRecordId, 'BST-NOV15');
+  assert.equal(anchor.historicalLedgerGapIsolated, true);
+  assert.equal(anchor.anchorConflict, undefined);
+  assert.equal(JSON.stringify(book), before, 'the old difference and physical evidence stay unchanged');
+});
+
+test('deferred bank evidence still blocks when next-opening continuity is not exact and complete', () => {
+  const base = { id: 'BST-NOV15', draftId: 'BRD-NOV15', to: '2026-11-15',
+    balanceReconciled: false, closingBalanceDeferred: true, balanceDifference: -328232,
+    reconciliationBankCoverageComplete: true, reconciliationBankTransactionIds: ['BTX-15'],
+    statementSummary: { to: '2026-11-15', closingBalance: 109402.35, validated: true } };
+  for (const mutate of [
+    record => { record.statementSummary.closingBalance = 109402.34; },
+    record => { record.reconciliationBankCoverageComplete = false; },
+    record => { record.reconciliationBankTransactionIds = []; },
+    record => { record.statementSummary.validated = false; },
+  ]) {
+    const record = JSON.parse(JSON.stringify(base)); mutate(record);
+    const book = { reconciledThrough: '2026-11-15', imports: [record] };
+    const anchor = verifiedReconciliationAnchor(book, { before: '2026-11-16', statementOpening: 109402.35 });
+    assert.equal(anchor.previousClosing, null);
+    assert.match(anchor.anchorConflict.message, /deferred or unreconciled/);
+  }
+});
+
 function sameDayPartialAndComplete({ explicitCombined = false, completeIds = true } = {}) {
   const partial = { id: 'I18-PARTIAL', draftId: 'D18-PARTIAL', to: '2026-10-18', balanceReconciled: true,
     balanceDifference: 0, finalizedAt: '2026-10-23T18:00:00Z', statementSummary: {

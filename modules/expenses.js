@@ -6292,10 +6292,10 @@ function draftReconciliationBase(s,draft,options={}){
   // close without weakening conflicts that genuinely predate its opening.
   const spansCutoff=statement.from&&statement.to&&continuityCutoff>=statement.from&&continuityCutoff<statement.to;
   const anchorBefore=spansCutoff?statement.to:statement.from;
-  let openingAnchor=anchorBefore?verifiedReconciliationAnchor(book,{before:anchorBefore,nature:draft.nature,account:draft.account}):latestAnchor;
+  let openingAnchor=anchorBefore?verifiedReconciliationAnchor(book,{before:anchorBefore,nature:draft.nature,account:draft.account,statementOpening:statement.openingBalance}):latestAnchor;
   if(spansCutoff&&openingAnchor.anchorConflict&&openingAnchor.anchorConflict.cutoffDate>=statement.from
     &&/deferred or unreconciled closing balance/i.test(String(openingAnchor.anchorConflict.message||''))){
-    openingAnchor=verifiedReconciliationAnchor(book,{before:statement.from,nature:draft.nature,account:draft.account});
+    openingAnchor=verifiedReconciliationAnchor(book,{before:statement.from,nature:draft.nature,account:draft.account,statementOpening:statement.openingBalance});
   }
   const effectiveFrom=openingAnchor.cutoffDate&&(!statement.to||openingAnchor.cutoffDate<statement.to)?openingAnchor.cutoffDate:'',priorLinkedIds=new Set();
   (book.imports||[]).forEach(record=>[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).forEach(x=>(x.linkedRecordIds||[]).forEach(id=>priorLinkedIds.add(id))));
@@ -6369,6 +6369,7 @@ function draftReconciliationBase(s,draft,options={}){
   if(openingAnchor.anchorConflict)reconciliationConflicts.push({...openingAnchor.anchorConflict,bankRowIds:[]});
   openingContinuity.openingAnchorSource=openingAnchor.anchorSource;
   openingContinuity.openingAnchorRecordId=openingAnchor.anchorRecordId;
+  openingContinuity.historicalLedgerGapIsolated=openingAnchor.historicalLedgerGapIsolated===true;
   const allFinalizedCoverage=finalizedMovementCoverageIds(s,book);
   openingContinuity.carryForwardMovements.forEach(movement=>{movement.bankEvidencePending=![movement.id].concat(movement.sourceIds||[]).some(id=>allFinalizedCoverage.has(id));});
   const currentOpening=openingContinuity.currentOpening,openingResolutionStale=!!draft.openingResolution&&(draft.openingResolution.previousAmount==null||Math.abs(num(draft.openingResolution.previousAmount)-currentOpening)>.005);

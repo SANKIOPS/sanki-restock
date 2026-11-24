@@ -31,7 +31,8 @@ function harness() {
   }
   const context = { el: id => nodes[id] ||= node(), fmt: value => '₹' + Number(value || 0).toFixed(2),
     bankStatementLoadGeneration: 0, bankDraftId: '', bankReconView: null, cfg: { isOwner: true },
-    SankiNavigation: { set() {} }, ReconciliationStatus: { bank: () => '' }, bankDraftSwitcher: () => '' };
+    SankiNavigation: { set() {} }, ReconciliationStatus: { bank: () => '' }, bankDraftSwitcher: () => '',
+    setTimeout: callback => { callback(); return 1; } };
   vm.createContext(context);
   const escapeSource = html.split('\n').find(line => line.includes('var esc = function('));
   assert.ok(escapeSource, 'use the page escape function, not a test replacement');
@@ -63,6 +64,16 @@ test('balance UI scripts compile and show statement date, opening, posted net an
   assert.match(table.innerHTML, /account card may use a later date and deduct blocked funds/);
   const anchored = harness().render(view({ openingSource: 'previous_reconciliation', openingBaselineDate: '2026-10-17' }));
   assert.match(anchored.innerHTML, /Verified closing at 2026-10-17 plus uncovered carry-forward/);
+});
+
+test('exact physical statement continuity explains the isolated legacy ledger gap without inventing an adjustment', () => {
+  const table = harness().render(view({ openingSource: 'previous_reconciliation',
+    openingBaselineDate: '2026-11-15', historicalLedgerGapIsolated: true }));
+  assert.match(table.innerHTML, /Physical bank continuity verified/);
+  assert.match(table.innerHTML, /previous validated bank closing exactly matches this statement opening/);
+  assert.match(table.innerHTML, /older ledger-only difference remains preserved in reconciliation history/);
+  assert.match(table.innerHTML, /no opening adjustment or balancing entry was created/i);
+  assert.match(table.innerHTML, /✓ balances agree/);
 });
 
 test('balance dates, carried movement details and conflict evidence are escaped as text', () => {
