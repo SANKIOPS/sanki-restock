@@ -55,3 +55,19 @@ test('five-view jobs use three raw references and preserve uncommented results o
  await post('revise',{feedback:'legacy reset'});await post('queue',{fullSet:false,targets:{front:'add',back:'add',detail:'add'}});await post('claim');for(const view of ['front','back','detail'])await upload('proposal',view);await post('complete',{qa:'legacy checked'});
  assert.equal((await post('revise',{fullSet:true})).status,200);assert.deepEqual(item.review.job.generationViews,['angle','product']);assert.equal(item.review.proposals.length,3);
 });
+
+test('full recreation snapshots a selected website reference without changing originals or publishing',async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'review-recreate-')),png=await sharp({create:{width:80,height:100,channels:3,background:'#765544'}}).png().toBuffer();
+ const p={id:71,title:'Brown trousers',handle:'brown',tags:'SANKI Collection: SANKI Casuals, SANKI Gender: Women',options:[{name:'Color'}],variants:[{id:2,title:'Brown',option1:'Brown',sku:'BROWN'}],images:[{id:9,src:'https://cdn.shopify.com/reference.png',variant_ids:[2]}]};let writes=0,downloads=0;
+ const client={request:async(url,opts={})=>{if(opts.method)writes++;return{ok:true,status:200,headers:{get:()=>null},json:async()=>/products\/71\.json/.test(url)?{product:p}:{products:[p]}};}};
+ const app=express();app.use(express.json());app.use((req,res,next)=>{req.user={username:'owner',roles:['owner']};next();});app.use(createImageReviewRouter({root,store:'test.myshopify.com',client,fetchImage:async()=>{downloads++;return{ok:true,buffer:async()=>png};}}));const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(()=>{server.close();fs.rmSync(root,{recursive:true,force:true});});const base='http://127.0.0.1:'+server.address().port+'/api/image-review';
+ let item=(await(await fetch(base+'/catalogue')).json()).items[0];
+ async function post(action,extra={}){const r=await fetch(base+'/items/'+item.id+'/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:item.review.revision,fingerprint:item.fingerprint,jobId:item.review.job?.id,...extra})});const d=await r.json();if(d.item)item=d.item;return r.status;}
+ assert.equal(await post('queue',{recreateAll:true,sourceImageId:'missing'}),400);assert.equal(downloads,0);
+ assert.equal(await post('queue',{recreateAll:true,sourceImageId:'9',fullSet:false}),200);
+ assert.equal(item.review.originals.length,0);assert.equal(item.review.job.referenceSource,'website_product_only');assert.equal(item.review.job.references[0].kind,'website_reference');assert.deepEqual(item.review.job.outputViews,['front','detail','angle','back','product']);assert.ok(Object.values(item.review.job.targets).every(v=>v==='add'));
+ const packet=await(await fetch(base+'/items/'+item.id+'/packet')).json();assert.match(packet.instructions,/not a raw garment photo/);assert.deepEqual(Buffer.from(packet.originals[0].base64,'base64'),png);
+ assert.equal((await fetch(base+'/files/'+packet.originals[0].file)).status,200);
+ assert.equal(await post('queue',{recreateAll:true,sourceImageId:'9'}),409);assert.equal(downloads,1);
+ assert.equal(await post('claim'),200);assert.equal(await post('publish'),409);assert.equal(writes,0);
+});

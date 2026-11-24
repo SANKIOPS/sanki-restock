@@ -6,25 +6,40 @@ const fail=(message,status=409)=>Object.assign(new Error(message),{status});
 module.exports=function installQueue({router,wrap,context,read,save,persist,present,catalogue,client,store,directory,fetchImage=require('node-fetch'),updateProduct}){
  const publishing=new Set();
  const latestRefs=r=>VIEWS.filter(v=>!r.pendingViews||r.pendingViews.includes(v)).map(v=>[...(r.originals||[])].reverse().find(f=>f.view===v)).filter(Boolean);
- function validJob(record,id){const j=record.job;if(!j||j.id!==id)throw fail('This job was replaced. Reopen the product.');if(j.referenceKey!==JSON.stringify(latestRefs(record).map(f=>f.id)))throw fail('Reference photos changed. Create images again.');return j;}
+ function validJob(record,id){const j=record.job;if(!j||j.id!==id)throw fail('This job was replaced. Reopen the product.');if(j.referenceSource!=='website_product_only'&&j.referenceKey!==JSON.stringify((j.recreateAll?VIEWS.map(v=>[...(record.originals||[])].reverse().find(f=>f.view===v)).filter(Boolean):latestRefs(record)).map(f=>f.id)))throw fail('Reference photos changed. Create images again.');return j;}
  router.get('/api/image-review/queue',wrap(async(req,res)=>{const items=await catalogue(),state=read();res.json({success:true,items:items.filter(i=>state.records[i.id]?.job&&['queued','processing','ready','publish_failed','publishing'].includes(state.records[i.id].job.status)).map(i=>present(i,state.records[i.id]))});}));
  router.get('/api/image-review/items/:id',wrap(async(req,res)=>{const item=(await catalogue()).find(i=>i.id===req.params.id);if(!item)throw fail('Product not found.',404);res.json({success:true,item:present(item,read().records[item.id])});}));
  router.post('/api/image-review/items/:id/queue',wrap(async(req,res)=>{
   const {item,state,record}=await context(req,true);if(publishing.has(item.productId)||record.job?.status==='publishing')throw fail('Publishing is in progress.');
-  const refs=latestRefs(record);if(!refs.length)throw fail('Upload at least one photo for a view that needs fixing.');
+  const recreate=req.body.recreateAll===true;
+  if(recreate&&['queued','processing'].includes(record.job?.status))throw fail('This product already has an active image job.');
+  let refs=recreate?VIEWS.map(v=>[...(record.originals||[])].reverse().find(f=>f.view===v)).filter(Boolean):latestRefs(record);
+  let referenceSource='originals';
+  if(recreate&&req.body.sourceImageId){
+   const image=item.images.find(i=>i.id===String(req.body.sourceImageId));if(!image)throw fail('Choose a current product-only photo.',400);
+   const own=new Set(item.variants.map(v=>v.id));
+   if(image.variantIds.some(id=>!own.has(id))||(!image.variantIds.length&& (await catalogue()).some(i=>i.productId===item.productId&&i.id!==item.id)))throw fail('Choose a photo assigned to this colour.');
+   const source=new URL(image.src);if(source.protocol!=='https:'||source.hostname!=='cdn.shopify.com')throw fail('Reference must be a Shopify CDN photo.');
+   const response=await fetchImage(source.toString(),{redirect:'error',size:20*1024*1024,timeout:30000});if(!response.ok)throw fail('Could not save the reference photo. Try again.');
+   const bytes=await response.buffer();if(bytes.length>20*1024*1024)throw fail('Reference photo is too large.');
+   const meta=await require('sharp')(bytes,{limitInputPixels:80000000}).metadata();await require('sharp')(bytes,{limitInputPixels:80000000}).stats();if(!['jpeg','png','webp'].includes(meta.format)||!meta.width||!meta.height)throw fail('Reference photo format is unsupported.');
+   fs.mkdirSync(directory,{recursive:true});const id=crypto.randomUUID(),file=id+'.'+(meta.format==='jpeg'?'jpg':meta.format);fs.writeFileSync(path.join(directory,file),bytes,{flag:'wx'});
+   refs=[{id,file,view:'front',kind:'website_reference',sourceImageId:image.id,sourceUrl:image.src,confirmedBy:req.user.username,uploadedAt:new Date().toISOString(),sha256:crypto.createHash('sha256').update(bytes).digest('hex')}];referenceSource='website_product_only';
+  }
+  if(!refs.length)throw fail('Upload at least one photo for a view that needs fixing.');
   const targets={};const all=await catalogue();
-  for(const ref of refs){const target=String(req.body.targets?.[ref.view]||'');if(target!=='add'){
+  for(const ref of refs){const target=recreate?'add':String(req.body.targets?.[ref.view]||'');if(target!=='add'){
    const image=item.images.find(i=>i.id===target);if(!image)throw fail('Choose which website photo to replace for '+ref.view+'.');
    const own=new Set(item.variants.map(v=>v.id)),others=all.some(i=>i.productId===item.productId&&i.id!==item.id);
    if(image.variantIds.some(id=>!own.has(id))||(others&&!image.variantIds.length))throw fail('This website photo is shared with another colour. Choose Add new photo or resolve its colour assignment first.');
    if(Object.values(targets).includes(target))throw fail('Choose a different website photo for each corrected view.');
   }targets[ref.view]=target;}
-  const plannedViews=req.body.fullSet===false?refs.map(f=>f.view):OUTPUT_VIEWS;
+  const plannedViews=!recreate&&req.body.fullSet===false?refs.map(f=>f.view):OUTPUT_VIEWS;
   for(const view of plannedViews)if(!targets[view])targets[view]='add';
   if(record.job)record.history.push({event:'job-replaced',job:record.job,at:new Date().toISOString()});
   if(record.proposals.length)record.history.push({event:'proposals-superseded',files:record.proposals,at:new Date().toISOString()});
   record.proposals=[];record.approvedAt=null;record.approvedProposalRevision=null;
-  record.job={id:crypto.randomUUID(),status:'queued',createdAt:new Date().toISOString(),referenceKey:JSON.stringify(refs.map(f=>f.id)),references:refs.map(f=>({...f})),outputViews:plannedViews,generationViews:plannedViews,targets,fingerprint:item.fingerprint,notes:String(req.body.notes||''),gallery:item.images,receipts:[]};
+  record.job={id:crypto.randomUUID(),status:'queued',createdAt:new Date().toISOString(),referenceSource,recreateAll:recreate,referenceKey:JSON.stringify(refs.map(f=>f.id)),references:refs.map(f=>({...f})),outputViews:plannedViews,generationViews:plannedViews,targets,fingerprint:item.fingerprint,notes:String(req.body.notes||''),gallery:item.images,receipts:[]};
   record.decision='needs_correction';res.json({success:true,item:persist(item,state,record,req,'job-queued')});
  }));
  router.post('/api/image-review/items/:id/claim',wrap(async(req,res)=>{
@@ -38,7 +53,7 @@ module.exports=function installQueue({router,wrap,context,read,save,persist,pres
  router.get('/api/image-review/items/:id/packet',wrap(async(req,res)=>{
   const item=(await catalogue()).find(i=>i.id===req.params.id),record=read().records[req.params.id];if(!item||!record?.job)throw fail('Queue job not found.',404);
   const job=validJob(record,record.job.id);if(job.fingerprint!==item.fingerprint)throw fail('The website gallery changed. Requeue after reviewing it.');
-  res.set('Cache-Control','private, no-store');res.attachment('image-job-'+job.id+'.json').json({version:1,item:present(item,record),job,originals:job.references.map(f=>({...f,base64:fs.readFileSync(path.join(directory,f.file)).toString('base64')})),instructions:'Use the attached genuine references as design evidence. Generate every outputViews entry, using these three originals as shared design evidence; no separate raw angle/product photo is needed. On revisions regenerate only generationViews and retain other results. feedbackByView identifies the exact photo correction. Preserve exact colour, construction, pockets, trims, texture and sold components. Follow the current approved SANKI image/style SOP. Do not infer missing garment details from old generated website images. Return each generated view to this job with its lease, then complete only after visual fidelity checks. Never publish from the worker.'});
+  res.set('Cache-Control','private, no-store');res.attachment('image-job-'+job.id+'.json').json({version:1,item:present(item,record),job,originals:job.references.map(f=>({...f,base64:fs.readFileSync(path.join(directory,f.file)).toString('base64')})),instructions:(job.referenceSource==='website_product_only'?'The attached reference is an existing website product-only image explicitly selected as correct by the reviewer, not a raw garment photo. Preserve visible design exactly; if a requested view requires unseen construction, flag it for original evidence rather than inventing it. ':'')+'Use the attached references as design evidence. Generate every outputViews entry, using these three originals as shared design evidence; no separate raw angle/product photo is needed. On revisions regenerate only generationViews and retain other results. feedbackByView identifies the exact photo correction. Preserve exact colour, construction, pockets, trims, texture and sold components. Follow the current approved SANKI image/style SOP. Do not infer missing garment details from old generated website images. Return each generated view to this job with its lease, then complete only after visual fidelity checks. Never publish from the worker.'});
  }));
  router.post('/api/image-review/items/:id/complete',wrap(async(req,res)=>{
   const {item,state,record}=await context(req,true),job=validJob(record,req.body.jobId);

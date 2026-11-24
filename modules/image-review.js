@@ -173,7 +173,7 @@ function createImageReviewRouter(options = {}) {
   require('./image-review-queue')({router,wrap,context,read,save,persist,present,catalogue,client,store,directory,fetchImage:options.fetchImage,updateProduct:product=>{const rows=catalogueRows([product]);cache=(cache||[]).filter(i=>i.productId!==String(product.id)).concat(rows).sort((a,b)=>String(b.publishedAt||'').localeCompare(String(a.publishedAt||'')));return rows;}});
   router.get('/api/image-review/files/:name',wrap(async(req,res)=>{
     const name=req.params.name;if(!/^[a-f0-9-]{36}\.(?:jpg|png|webp)$/.test(name))return res.sendStatus(404);
-    const state=read();const linked=Object.values(state.records).some(r=>[...(r.originals||[]),...(r.proposals||[]),...(r.job?.receipts||[]).map(x=>x.backup).filter(Boolean),...(r.history||[]).flatMap(h=>[...(h.files||[]),...(h.job?.receipts||[]).map(x=>x.backup).filter(Boolean)])].some(f=>f.file===name));
+    const state=read();const linked=Object.values(state.records).some(r=>[...(r.originals||[]),...(r.proposals||[]),...(r.job?.references||[]),...(r.job?.receipts||[]).map(x=>x.backup).filter(Boolean),...(r.history||[]).flatMap(h=>[...(h.files||[]),...(h.job?.references||[]),...(h.job?.receipts||[]).map(x=>x.backup).filter(Boolean)])].some(f=>f.file===name));
     if(!linked)return res.sendStatus(404);res.set('Cache-Control','private, no-store');res.set('X-Content-Type-Options','nosniff');res.sendFile(path.join(directory,name));
   }));
   router.get('/api/image-review/export',wrap(async(req,res)=>{
