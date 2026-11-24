@@ -2709,7 +2709,8 @@ router.use((req,res,next)=>{if(req.method!=='GET'||!['/api/expenses/bank-stateme
 router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{
   const s=loadStore(),draft=(s.bankReconciliationDrafts||{})[String(req.body&&req.body.draftId||'')];
   if(!draft||!canAccessBankDraft(req,s,draft))return next();
-  if(repairMissingReceiptReportingEvidence(s,draft,req))saveStore(s);
+  const reportingEvidenceRepaired=repairMissingReceiptReportingEvidence(s,draft,req),tenantFees=require('./tenant-reconciliation-fees'),fingerprintRepairs=tenantFees.repairReportingEvidenceFingerprint(s,draft,{actor:req.user&&req.user.username||'system',now:new Date().toISOString()});
+  if(reportingEvidenceRepaired||fingerprintRepairs.length){fingerprintRepairs.forEach(item=>audit(s,req,'TENANT_FEE_REPORTING_FINGERPRINT_UPGRADED','receipt',item.receiptId,{nature:item.reportingNature,account:draft.account,before:{sourceFingerprint:item.before},after:{sourceFingerprint:item.after,sourceFingerprintVersion:2},draftId:draft.id,bankRowId:item.rowId,note:'Refreshed only after the paired reporting-entity metadata upgrade matched the original tenant-fee receipt hash and immutable bank evidence.'}));saveStore(s);}
   const receiptIssue=receiptReportingEvidenceError(s,draft,true)||receiptAccountEvidenceError(s,draft,req,true);
   if(receiptIssue&&typeof receiptIssue==='object'){const identify=[receiptIssue.date,receiptIssue.amount?'₹'+receiptIssue.amount:'',receiptIssue.reference,receiptIssue.description].filter(Boolean).join(' · ');return res.status(409).json({success:false,error:receiptIssue.message+(identify?' Affected transaction: '+identify+'.':'')+' Open Review / Resolve for '+receiptIssue.rowId+' and save its correct entity again. Nothing was posted.',affectedRows:[receiptIssue]});}
   const error=stagedOwnerPersonalTransferError(draft,s,req);

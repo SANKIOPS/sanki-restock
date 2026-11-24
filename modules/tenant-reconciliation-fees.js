@@ -180,6 +180,51 @@ function undo(store, context) {
   draft.decisionAudit = list(draft.decisionAudit); draft.decisionAudit.push({ action: 'undo_tenant_fee', rowId, previous: clone(resolution), reason: String(reason).trim(), by: actor, at: now });
   return { before, fee: clone(fee), appId };
 }
+function repairReportingEvidenceFingerprint(store, draft, context = {}) {
+  const repaired = [], fees = list(store.rentals && store.rentals.fees), receipts = list(store.receipts);
+  for (const [rowId, resolution] of Object.entries(draft && draft.resolutions || {})) {
+    if (!resolution || resolution.action !== 'create_receipt' || !resolution.rentalFeeId || Number(resolution.reportingEvidenceVersion) !== 1 || !resolution.reportingNature) continue;
+    const matches = fees.filter(fee => active(fee) && fee.id === resolution.rentalFeeId), index = /^bank-(\d+)$/.exec(rowId), bank = index && list(draft.transactions)[Number(index[1])];
+    if (matches.length !== 1 || !bank) continue;
+    const fee = matches[0], sourceMatches = receipts.filter(receipt => receipt.id === fee.receiptId && !receipt.accountingExcluded), source = sourceMatches[0];
+    if (fee.direction !== 'receipt' || sourceMatches.length !== 1 || !source || Number(source.reportingEvidenceVersion) !== 1 || source.reportingNature !== resolution.reportingNature) continue;
+    const current = sourceHash(source);
+    if (current === fee.sourceFingerprint) continue;
+    // The paired reporting-entity upgrade is metadata only. Reconstruct the
+    // exact pre-upgrade receipt and require its original hash before replacing
+    // the fingerprint. Any other edit (money, tenant, purpose, bank evidence,
+    // source text, proof, etc.) still fails closed.
+    const beforeReportingUpgrade = clone(source);
+    delete beforeReportingUpgrade.reportingNature;
+    delete beforeReportingUpgrade.reportingEvidenceVersion;
+    const evidence = fee.bankReconciliationEvidence;
+    if (sourceHash(beforeReportingUpgrade) !== fee.sourceFingerprint ||
+      resolution.appId !== source.id || resolution.receiptId !== source.id ||
+      resolution.tenancyId !== fee.tenancyId || resolution.rentalKind !== fee.kind ||
+      resolution.postingNature !== fee.nature || source.nature !== fee.nature ||
+      source.tenancyId !== fee.tenancyId || source.rentalFeeId !== fee.id || source.rentalKind !== fee.kind ||
+      source.account !== ACCOUNT || source.date !== bank.date || Number(source.amount) !== Number(fee.amount) ||
+      !evidence || evidence.draftId !== draft.id || evidence.rowId !== rowId || evidence.bankSignature !== bankIdentity(bank) ||
+      Number(source.amount) !== Number(bank.credit)) continue;
+    const previous = fee.sourceFingerprint;
+    fee.sourceFingerprint = current;
+    fee.sourceFingerprintVersion = 2;
+    fee.sourceFingerprintUpgrade = {
+      reason: 'paired_reporting_evidence_v1',
+      from: previous,
+      to: current,
+      by: String(context.actor || 'system'),
+      at: String(context.now || new Date().toISOString())
+    };
+    repaired.push({ feeId: fee.id, receiptId: source.id, rowId, before: previous, after: current, reportingNature: source.reportingNature });
+  }
+  if (repaired.length && store.rentals) {
+    store.rentals.activity = list(store.rentals.activity);
+    repaired.forEach(item => store.rentals.activity.push({ at: String(context.now || new Date().toISOString()), by: String(context.actor || 'system'), action: 'upgrade_tenant_fee_reporting_fingerprint', tenancyId: fees.find(fee => fee.id === item.feeId).tenancyId, feeId: item.feeId, detail: item.receiptId + ' · reporting entity ' + item.reportingNature }));
+    store.rentals.revision = (Number(store.rentals.revision) || 0) + 1;
+  }
+  return repaired;
+}
 function evidenceError(store, draft) {
   const savedFees = list(store.rentals && store.rentals.fees).filter(fee => active(fee) && fee.bankReconciliationEvidence && fee.bankReconciliationEvidence.draftId === draft.id);
   const resolutions = Object.entries(draft.resolutions || {}).filter(([, resolution]) => resolution && resolution.rentalFeeId);
@@ -195,4 +240,4 @@ function evidenceError(store, draft) {
   }
   return '';
 }
-module.exports = { ACCOUNT, SPECS, PURPOSES, isFeeKind, bankIdentity, assertDraftWritable, record, undo, evidenceError };
+module.exports = { ACCOUNT, SPECS, PURPOSES, isFeeKind, bankIdentity, assertDraftWritable, record, undo, repairReportingEvidenceFingerprint, evidenceError };

@@ -2,7 +2,7 @@
 // Isolated synthetic accounting store only. No application server, production
 // records, retained bank statement files, or external services are contacted.
 const test = require('node:test'), assert = require('node:assert/strict');
-const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), crypto = require('node:crypto');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-tenant-fees-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
 fs.writeFileSync(path.join(tempDir, 'expenses.json'), '{}');
@@ -83,6 +83,21 @@ for (const direction of ['payment', 'receipt']) test('tenant fee ' + direction +
   assert.equal(direction === 'payment' ? Object.keys(after.expenses).length : after.receipts.length, 1);
   assert.equal(after.bankStatements[source.ACCOUNT].imports.at(-1).reconciliationRows.length, 1);
   const repeated = invoke('POST', '/api/expenses/bank-statements/create-rental', { body: f.body }); assert.equal(repeated.status, 404);
+});
+test('tenant receipt finalization upgrades paired reporting metadata without demanding another review', async () => {
+  const f = setup('pass_through', 'receipt'), prepared = JSON.parse(fs.readFileSync(file)), draft = prepared.bankReconciliationDrafts[f.id], bank = draft.transactions[0];
+  draft.entityAssignments = { 'bank-0': { nature: 'SAMAST', reason: 'Reviewed tenant receipt entity', bankSignature: crypto.createHash('sha256').update(JSON.stringify(bank)).digest('hex') } };
+  fs.writeFileSync(file, JSON.stringify(prepared));
+  const created = invoke('POST', '/api/expenses/bank-statements/create-rental', { body: f.body, role: 'admin' });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const requested = await invokeRouter('POST', '/api/expenses/bank-statements/finalize', { body: { draftId: f.id, deferClosingBalance: true }, role: 'admin' });
+  assert.equal(requested.status, 202, JSON.stringify(requested.body)); assert.equal(requested.body.approvalPending, true);
+  const saved = JSON.parse(fs.readFileSync(file)), receipt = saved.receipts.find(item => item.id === created.body.receipt.id), fee = saved.rentals.fees.find(item => item.id === created.body.fee.id);
+  assert.equal(receipt.reportingNature, 'SAMAST'); assert.equal(receipt.reportingEvidenceVersion, 1);
+  assert.equal(saved.bankReconciliationDrafts[f.id].resolutions['bank-0'].reportingNature, 'SAMAST');
+  assert.equal(fee.sourceFingerprintVersion, 2); assert.equal(fee.sourceFingerprintUpgrade.reason, 'paired_reporting_evidence_v1');
+  assert.ok(saved.auditLog.some(event => event.action === 'TENANT_FEE_REPORTING_FINGERPRINT_UPGRADED' && event.subjectId === receipt.id));
+  assert.equal(source.evidenceError(saved, saved.bankReconciliationDrafts[f.id]), '');
 });
 test('finalization fails closed if a tenant fee link changes after review', async () => {
   const f = setup('documentation_fee', 'receipt'), result = invoke('POST', '/api/expenses/bank-statements/create-rental', { body: f.body });

@@ -130,6 +130,27 @@ test('fee finalization evidence rejects a foreign claim added after fee creation
   const f = fixture(); fees.record(f.store, f.context); const other = clone(f.context.draft); other.id = 'BRD-OTHER'; other.resolutions = { 'bank-0': { action: 'exclude' } }; f.store.bankReconciliationDrafts[other.id] = other;
   const before = JSON.stringify(f.store); assert.match(fees.evidenceError(f.store, f.context.draft), /saved review/); assert.equal(JSON.stringify(f.store), before);
 });
+test('paired reporting-entity metadata upgrade refreshes only the tenant receipt fingerprint', () => {
+  const f = fixture('pass_through', 'receipt'), result = fees.record(f.store, f.context), receipt = result.receipt, resolution = f.context.draft.resolutions['bank-0'];
+  receipt.reportingNature = 'SAMAST'; receipt.reportingEvidenceVersion = 1;
+  resolution.reportingNature = 'SAMAST'; resolution.reportingEvidenceVersion = 1;
+  assert.match(fees.evidenceError(f.store, f.context.draft), /changed after review/);
+  const repaired = fees.repairReportingEvidenceFingerprint(f.store, f.context.draft, { actor: 'owner-test', now: '2098-06-03T10:30:00.000Z' });
+  assert.equal(repaired.length, 1); assert.equal(repaired[0].receiptId, receipt.id);
+  assert.equal(f.store.rentals.fees[0].sourceFingerprintVersion, 2);
+  assert.equal(f.store.rentals.fees[0].sourceFingerprintUpgrade.reason, 'paired_reporting_evidence_v1');
+  assert.equal(fees.evidenceError(f.store, f.context.draft), '');
+  assert.doesNotThrow(() => fees.undo(f.store, { draft: f.context.draft, rowId: 'bank-0', actor: 'owner-test', now: '2098-06-03T11:00:00.000Z', reason: 'Discard reviewed receipt' }));
+});
+test('reporting metadata cannot conceal any tenant receipt source change', () => {
+  const f = fixture('pass_through', 'receipt'), result = fees.record(f.store, f.context), receipt = result.receipt, resolution = f.context.draft.resolutions['bank-0'];
+  receipt.reportingNature = 'SAMAST'; receipt.reportingEvidenceVersion = 1; receipt.source = 'Changed tenant source';
+  resolution.reportingNature = 'SAMAST'; resolution.reportingEvidenceVersion = 1;
+  const before = f.store.rentals.fees[0].sourceFingerprint;
+  assert.deepEqual(fees.repairReportingEvidenceFingerprint(f.store, f.context.draft), []);
+  assert.equal(f.store.rentals.fees[0].sourceFingerprint, before);
+  assert.match(fees.evidenceError(f.store, f.context.draft), /changed after review/);
+});
 for (const [label, dependent] of [
   ['refund', (store, result) => { store.expenseRefunds = [{ id: 'RF-1', status: 'received', sources: [{ expenseId: result.expense.id }] }]; }],
   ['another draft', (store, result) => { store.bankReconciliationDrafts.OTHER = { id: 'OTHER', resolutions: { 'bank-1': { appId: result.expense.id + '/PAY-001' } } }; }],
