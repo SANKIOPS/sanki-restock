@@ -23,7 +23,16 @@ const sourceVersions=x=>{
   if(prior.baseRent===x.baseRent&&prior.floor===x.floor)return [first];
   return [first,{...first,effectiveMonth:rentalSource.baseRentEffectiveMonth||'2026-11',baseRent:x.baseRent,netRent:x.netRent}];
 };
-const sourceDeposits=()=>rentalSource.rows.flatMap(x=>(x.securityDeposits||[]).map(d=>({id:d.id,tenancyId:x.id,amount:d.amount,date:d.date,reason:'Owner revised security sheet · '+(d.payer||x.tenant),payer:d.payer||x.tenant,source:'owner_security_sheet_2026_11_24',createdAt:rentalSource.asOf+'T00:00:00.000Z'})));
+const revisedDepositSource='owner_security_sheet_2026_11_24';
+const sourceDeposits=()=>rentalSource.rows.flatMap(x=>(x.securityDeposits||[]).map(d=>({id:d.id,tenancyId:x.id,amount:d.amount,date:d.date,reason:'Owner revised security sheet · '+(d.payer||x.tenant),payer:d.payer||x.tenant,source:revisedDepositSource,createdAt:rentalSource.asOf+'T00:00:00.000Z'})));
+function reconcileSourceDeposits(r,now){
+  const revised=sourceDeposits(),sourceIds=new Set(revised.map(item=>item.id));
+  for(const item of active(r.deposits))if(item.source===revisedDepositSource||sourceIds.has(item.id))Object.assign(item,{reversedAt:now,reversedBy:'owner instruction',reversalReason:'Rebalanced to the revised security sheet without duplicating same-day bank evidence.'});
+  for(const deposit of revised){
+    const alreadyRecorded=sum(active(r.deposits).filter(item=>item.tenancyId===deposit.tenancyId&&item.date===deposit.date)),amount=money(deposit.amount-alreadyRecorded);
+    if(amount)r.deposits.push({...deposit,id:deposit.id+'-balanced',amount,reason:deposit.reason+' · revised total '+money(deposit.amount)+' less same-day evidence '+alreadyRecorded});
+  }
+}
 // The owner explicitly made the revised six base-rent rows and nine dated
 // security receipts authoritative. Tax rates stay explicit so all reporting
 // starts from base rent rather than reverse-calculating a bank credit.
@@ -54,8 +63,8 @@ function applySourceOverride(s,now){
       t.versions=t.versions.filter(v=>v.effectiveMonth!==effective);t.versions.push(version);
       Object.assign(t,{tenant:sourceTenant.tenant,floor:sourceTenant.floor,baseRent:sourceTenant.baseRent,netRent:sourceTenant.netRent,cgst:9,sgst:9,tds:10,startDate:sourceTenant.startDate,endDate:sourceTenant.endDate,status:sourceTenant.status,source:sourceTenant.source,securityOpening:null,securityOpeningDate:''});
     }
-    for(const deposit of sourceDeposits())if(!active(r.deposits).some(item=>item.id===deposit.id||(item.tenancyId===deposit.tenancyId&&item.date===deposit.date&&money(item.amount)===money(deposit.amount))))r.deposits.push(deposit);
-    r.activity.push({at:now,by:'owner instruction',action:'source_revision',detail:'Updated six agreed base rents from November 2026 and replaced aggregate security openings with nine dated receipts totalling ₹10,20,000. Existing invoices, allocations, receipts and manual records were preserved.'});r.revision=revision;s.rentals=r;
+    reconcileSourceDeposits(r,now);
+    r.activity.push({at:now,by:'owner instruction',action:'source_revision',detail:'Updated six agreed base rents from November 2026 and reconciled the nine security-sheet rows to ₹10,20,000 without duplicating same-day bank evidence. Existing invoices, allocations, receipts and manual records were preserved.'});r.revision=revision;s.rentals=r;
   }
   s.rentalSourceImport=rentalSource.id;return true;
 }
