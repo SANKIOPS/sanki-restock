@@ -25,7 +25,7 @@ function read(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'))
 function products(){
  const physical=require('../public/inventory-data.json'),snapshot=read(process.env.INVENTORY_SNAPSHOT_PATH||path.join(dir(),'inventory-snapshot.json'),null);
  const list=snapshot?require('./inventory-state').catalog(snapshot,physical):physical;
- return list.map(p=>({id:p.handle,title:p.title,image:p.image||p.images?.[0]||'',category:p.category||'',collection:p.collection||'',skus:(p.variants||[]).map(v=>v.sku).filter(Boolean),colours:[...new Set((p.variants||[]).map(v=>v.colour&& !/see product/i.test(v.colour)?v.colour:String(v.variant||'').split('/')[0].trim()).filter(Boolean))]}));
+ return list.map(p=>({id:p.handle,title:p.title,description:[p.description||p.bodyHtml||p.body_html,p.productType,p.fit,p.sleeves,p.gender,p.design,p.fabric,p.category,p.collection].filter(Boolean).join(' ').replace(/<[^>]*>/g,' ').slice(0,5000),image:p.image||p.images?.[0]||'',category:p.category||'',collection:p.collection||'',skus:(p.variants||[]).map(v=>v.sku).filter(Boolean),colours:[...new Set((p.variants||[]).map(v=>v.colour&& !/see product/i.test(v.colour)?v.colour:String(v.variant||'').split('/')[0].trim()).filter(Boolean))]}));
 }
 function meta(){return read(process.env.META_ADS_PATH||path.join(dir(),'meta-ads.json'),{ads:[],adSets:[],campaigns:[],results:[]});}
 function shoots(){const s=read(path.join(dir(),'expenses.json'),{}),m=s.modelCalendar||{};return (m.shoots||[]).filter(x=>x.status!=='cancelled').map(x=>({id:x.id,date:x.date,status:x.status,model:(m.contracts||[]).find(c=>c.id===x.contractId)?.name||''}));}
