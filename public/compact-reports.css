@@ -29,7 +29,14 @@
 .samast-inline-detail th:first-child,.samast-inline-detail td:first-child{text-align:left;min-width:190px;font-weight:650;white-space:normal}
 .samast-inline-detail th:last-child,.samast-inline-detail td:last-child{text-align:left;min-width:250px;white-space:normal}
 .rent-receipt-list{display:grid;gap:6px}.rent-receipt-evidence{border:1px solid var(--line);background:#faf9f1;padding:7px 9px}.rent-receipt-evidence summary{cursor:pointer;color:var(--green);font-weight:650;white-space:nowrap}.rent-receipt-evidence p{margin:6px 0;white-space:normal;overflow-wrap:anywhere}.rent-receipt-evidence .proof-links{margin-top:6px}
+.actual-rent-summary{display:grid;gap:3px;white-space:normal!important;text-align:right!important;line-height:1.35}.actual-rent-summary strong{font-size:14px}.actual-rent-summary small,.tax-summary small,.overview-summary small{display:block;color:var(--muted);font-size:11px;font-weight:500;line-height:1.45;white-space:normal}.tax-summary,.overview-summary{display:grid;gap:2px;text-align:right;white-space:normal}
 @media(max-width:850px){.samast-monthly-table{min-width:1080px}}
 .tds-status-form{display:grid;grid-template-columns:minmax(220px,1.5fr) minmax(150px,.8fr) minmax(220px,1fr) auto;gap:12px;align-items:center;padding:14px;margin:10px 0}.tds-status-form h3,.tds-status-form p{margin:0}.tds-status-form input,.tds-status-form select{min-height:42px}@media(max-width:800px){.tds-status-form{grid-template-columns:1fr}}
 
 #expenses .drill{font-weight:600}#operatingCategorySection{margin-top:18px}#operatingCategories{max-height:none}.cost-review-notice{padding:14px 18px;background:#f4eedc;border:1px solid #d9c99b;color:var(--ink);font-size:13px}
+
+/* Profit highlighting follows the labelled row; SAMAST has more overview rows. */
+#cards tbody tr:nth-child(3){background:inherit;color:inherit;font-weight:inherit}
+#cards tbody tr:nth-child(3) td{border-top:0;border-bottom:1px solid #e3e5da}
+#cards tr.profit-total{background:#eaf0e4;font-weight:700}
+#cards tr.profit-total td{border-top:2px solid #a7bea5;border-bottom:2px solid #a7bea5}

@@ -25,6 +25,10 @@ test('tenant pass-through collections and payments remain balance-sheet movement
  s.expenses.PASS={id:'PASS',nature:'PERSONAL',status:'paid',date:'2026-10-02',amount:4800,ledger:'Tenant Pass-through',tenantPassThrough:true,balanceSheetOnly:true,nonExpenseReimbursement:true,payments:[{id:'PAY',date:'2026-10-02',amount:4800,account:'IndusInd Bank 7883'}]};
  const r=build(src,options);assert.equal(r.totals.income,0);assert.equal(r.totals.expenses,0);assert.equal(r.transactions.length,0);assert.equal(r.paidFrom.length,0);
 });
+test('balance-sheet-only transfers remain visible for both participating entities and selected dates',()=>{
+ const src=sources();src.expenses.transfers=[{id:'VISIBLE-TRANSFER',date:'2026-11-01',amount:25000,fromNature:'PERSONAL',toNature:'SAMAST',fromAccount:'ICICI Bank 0993',toAccount:'IndusInd Bank 7883',classification:'internal_transfer',balanceSheetOnly:true},{id:'OUTSIDE',date:'2026-11-14',amount:1,fromNature:'PERSONAL',toNature:'SAMAST',balanceSheetOnly:true}];
+ const personal=build(src,options),samast=build(src,{...options,entity:'SAMAST'});assert.deepEqual(personal.transfers.map(x=>x.id),['VISIBLE-TRANSFER']);assert.deepEqual(samast.transfers.map(x=>x.id),['VISIBLE-TRANSFER']);assert.equal(personal.totals.income,0);assert.equal(samast.totals.income,0);
+});
 test('date boundaries and entity names are validated',()=>{for(const change of [{entity:'unknown'},{from:'2026-08-21'},{to:'2026-11-14'},{from:'2026-11-13',to:'2026-11-12'}])assert.throws(()=>build(sources(),{...options,...change}),/valid dates/);});
 
 test('legacy card/EMI categories are disclosed for review, never counted as new costs or silently treated as profit',()=>{

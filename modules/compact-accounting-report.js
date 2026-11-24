@@ -5,6 +5,10 @@ const {money}=require('./physical-bank-balance');
 const hotel=require('./sewak-park-reporting');
 const START='2026-08-22', list=v=>Array.isArray(v)?v:Object.values(v||{}), nature=v=>String(v||'SANKI').toUpperCase();
 const active=r=>r&&!r.accountingExcluded&&!r.balanceSheetOnly&&!r.voided&&!r.voidedAt&&!r.reversedAt&&r.status!=='voided';
+// Transfers are balance-sheet movements by definition. `balanceSheetOnly`
+// excludes them from income/expense, but must never hide them from the
+// Transfers report.
+const activeTransfer=r=>r&&!r.accountingExcluded&&!r.voided&&!r.voidedAt&&!r.reversedAt&&r.status!=='voided';
 const inRange=(r,from,to)=>r.date>=from&&r.date<=to;
 const incomeTypes=new Set(['rental_income','hotel_income','sewak_park_hotel_income','other_income','bank_interest','bank_interest_received','asset_sale','product_sale','rental_dealer_commission','rental_documentation_fee','other']);
 const balanceCost=/security|deposit|loan principal|salary advance|gst payment|gst paid|capital|asset purchase|credit[ -]?card|card repayment|\bemi\b|loan repayment|owner withdrawal|owner contribution|internal transfer/i;
@@ -60,7 +64,7 @@ function buildHotel(sources,{entity,from,to,accounts=[]}){
   }
 
   const transfers=[];
-  for(const transfer of list(s.transfers).filter(r=>active(r)&&inRange(r,from,to))){
+  for(const transfer of list(s.transfers).filter(r=>activeTransfer(r)&&inRange(r,from,to))){
     const base={id:transfer.id,date:transfer.date,from:transfer.fromAccount,to:transfer.toAccount,fromEntity:nature(transfer.fromNature||transfer.nature),toEntity:nature(transfer.toNature||transfer.nature),amount:money(transfer.amount)};
     if(hotel.isHotelInternalTransfer(transfer)){
       const row={...base,classification:'hotel_internal_transfer'};hotelInternalTransfers.push(row);transfers.push(row);
@@ -140,15 +144,18 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
     if(entity==='SAMAST'){
       samastProfit=require('./samast-profit').build(s,{from,to,receipts:profitRentReceipts,costs:report.transactions.filter(r=>r.expenses),salary:salary||{}});
       for(const month of samastProfit.months.filter(item=>item.unassignedRent>0))warnings.push('Rent '+month.month+': select the tenant for '+money(month.unassignedRent)+' of bank rent receipts before using their base rent, GST, TDS or profit.');
+      if(samastProfit.totals.gstLiability>0)warnings.push('GST reconciliation: '+money(samastProfit.totals.gstLiability)+' remains payable until a recorded government payment and supporting document are matched.');
+      if(samastProfit.totals.gstEvidencePending>0)warnings.push('GST reconciliation: payment evidence is still pending for '+money(samastProfit.totals.gstEvidencePending)+' of recorded GST government payments.');
+      if(samastProfit.totals.tdsPending>0)warnings.push('TDS reconciliation: '+money(samastProfit.totals.tdsPending)+' remains pending until tenant evidence / 26AS is verified.');
       result=samastProfit.totals.profit;resultLabel='Profit before income tax';
-      basis='Actual rent received is the bank amount. Rental income is its base-rent component, excluding GST and reflecting TDS deducted by tenants. Profit before income tax = rental income − Samast expenses − salaries.';
+      basis='Rent, GST and TDS come from each floor’s agreed base rent. Actual rent received is only the linked bank amount. Profit before income tax = the base-rent portion earned from received rent − Samast expenses − live attendance-based Payroll salary.';
     }else{
       result=money(income-expenses);resultLabel='Cash surplus / deficit';
       basis='Recorded income received minus approved paid costs. Transfers, loan principal and refundable security are excluded. This is a cash management view, not earned or tax-adjusted profit.';
     }
   }
   const transfers=[];
-  for(const r of list(s.transfers).filter(r=>active(r)&&inRange(r,from,to))){
+  for(const r of list(s.transfers).filter(r=>activeTransfer(r)&&inRange(r,from,to))){
     const outgoing=nature(r.fromNature||r.nature)===entity,incoming=nature(r.toNature||r.nature)===entity;if(!outgoing&&!incoming)continue;
     transfers.push({id:r.id,date:r.date,from:r.fromAccount,to:r.toAccount,fromEntity:nature(r.fromNature||r.nature),toEntity:nature(r.toNature||r.nature),classification:r.classification||'internal_transfer',amount:money(r.amount)});
   }
@@ -158,9 +165,8 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
     const r=s.rentals||{};
     for(const t of list(r.tenancies)){
       const opening=t.securityOpeningDate&&t.securityOpeningDate<=to?Number(t.securityOpening)||0:0;
-      const deposits=list(r.deposits).filter(x=>active(x)&&x.tenancyId===t.id&&x.date<=to).reduce((n,x)=>n+Number(x.amount||0),0);
-      const used=list(r.allocations).filter(x=>active(x)&&x.tenancyId===t.id&&x.kind==='security'&&x.date<=to).reduce((n,x)=>n+Number(x.amount||0),0);
-      const amount=money(opening+deposits-used);if(amount)security.push({id:t.id,description:t.tenant||t.name||t.unit||t.id,amount});
+      const depositRows=list(r.deposits).filter(x=>active(x)&&x.tenancyId===t.id&&x.date<=to),allocationRows=list(r.allocations).filter(x=>active(x)&&x.tenancyId===t.id&&x.kind==='security'&&x.date<=to),deposits=depositRows.reduce((n,x)=>n+Number(x.amount||0),0),used=allocationRows.reduce((n,x)=>n+Number(x.amount||0),0);
+      const amount=money(opening+deposits-used);if(amount)security.push({id:t.id,description:t.tenant||t.name||t.unit||t.id,amount,evidence:[...(opening?[{date:t.securityOpeningDate,amount:opening,reference:'Opening security'}]:[]),...depositRows.map(x=>({date:x.date,amount:x.amount,reference:x.payer||x.reason||x.id})),...allocationRows.map(x=>({date:x.date,amount:-Number(x.amount||0),reference:'Applied to rent · '+(x.reason||x.id)}))]});
     }
     if(!s.rentals)warnings.push('Rental security register is unavailable; security owed is not assumed to be zero.');
   }

@@ -1,10 +1,16 @@
 {
-  "id": "rent-numbers-2026-09-30-final-v1",
-  "file": "RENT.numbers",
+  "id": "owner-rent-and-security-2026-11-24-v2",
+  "file": "RENT.numbers + owner screenshots 2026-11-24",
   "sheet": "Sheet1",
   "range": "A12:Y17",
-  "asOf": "2026-09-30",
+  "asOf": "2026-11-24",
+  "baseRentEffectiveMonth": "2026-11",
+  "previousSourceId": "rent-numbers-2026-09-30-final-v1",
   "sha256": "067efc7352f655cf24902525036a9eda532470d18096b3837fe85fab71de5f3c",
+  "revisionEvidenceSha256": {
+    "baseRent": "f27202117086974afdc6cd80b19c218124abfa15e5e907f98f3639e9fc3f7f86",
+    "securityDeposits": "c148149de37e9780e6ed57661c42a8251b81ff17651415831c3ec2054d53eb55"
+  },
   "rows": [
     {
       "id": "sheet-top",
@@ -14,6 +20,9 @@
       "baseRent": 58000.0,
       "netRent": 62640.0,
       "security": 116000.0,
+      "securityDeposits": [
+        {"id": "source-security-prabhleen-2026-10-05", "payer": "Prabhleen", "amount": 116000.0, "date": "2026-10-05"}
+      ],
       "ownerName": "Ajaybir Singh",
       "ownerPhone": "9540099001",
       "contactPerson": "",
@@ -39,10 +48,14 @@
       "id": "sheet-third",
       "sourceRow": 13,
       "tenant": "Amty Global",
-      "floor": "3rd Floor",
-      "baseRent": 76000.0,
-      "netRent": 82080.0,
-      "security": 150000.0,
+      "floor": "4th Floor",
+      "baseRent": 83790.0,
+      "netRent": 90493.2,
+      "security": 152000.0,
+      "securityDeposits": [
+        {"id": "source-security-amty-2024-06-24", "payer": "AMTY Global", "amount": 76000.0, "date": "2024-06-24"},
+        {"id": "source-security-amty-2024-07-12", "payer": "AMTY Global", "amount": 76000.0, "date": "2024-07-12"}
+      ],
       "ownerName": "Yuvraj Notwani",
       "ownerPhone": "7359797006",
       "contactPerson": "Kavita (Floor Manager)",
@@ -71,7 +84,10 @@
       "floor": "2nd Floor",
       "baseRent": 81000.0,
       "netRent": 87480.0,
-      "security": null,
+      "security": 162000.0,
+      "securityDeposits": [
+        {"id": "source-security-only-2026-10-12", "payer": "Only", "amount": 162000.0, "date": "2026-10-12"}
+      ],
       "ownerName": "Akash Lakhan",
       "ownerPhone": "",
       "contactPerson": "",
@@ -97,10 +113,14 @@
       "id": "sheet-first",
       "sourceRow": 15,
       "tenant": "Luj O Fab",
-      "floor": "1st Floor",
-      "baseRent": 85000.0,
-      "netRent": 91800.0,
+      "floor": "2nd Floor",
+      "baseRent": 93712.0,
+      "netRent": 101208.96,
       "security": 170000.0,
+      "securityDeposits": [
+        {"id": "source-security-luj-first-2024-09-09", "payer": "Luj O Fab", "amount": 25000.0, "date": "2024-09-09"},
+        {"id": "source-security-luj-first-2024-09-10", "payer": "Luj O Fab", "amount": 145000.0, "date": "2024-09-10"}
+      ],
       "ownerName": "Karandeep Singh Bedi",
       "ownerPhone": "447897023458",
       "contactPerson": "Prageet Nagar(Manager)",
@@ -110,7 +130,7 @@
       "lockInPeriod": "6 Months",
       "noticePeriod": "",
       "startDate": "2024-10-07",
-      "endDate": "2026-09-06",
+      "endDate": "",
       "increaseMonth": "Sep-25",
       "increasePercent": "",
       "increasedRent": "Sep-25",
@@ -130,6 +150,9 @@
       "baseRent": 106500.0,
       "netRent": 115020.0,
       "security": 200000.0,
+      "securityDeposits": [
+        {"id": "source-security-nvikk-2026-08-25", "payer": "Nvikk", "amount": 200000.0, "date": "2026-08-25"}
+      ],
       "ownerName": "Nandita Malik",
       "ownerPhone": "9899222001",
       "contactPerson": "Raj(Floor Manager)",
@@ -158,7 +181,11 @@
       "floor": "Basement",
       "baseRent": 72975.0,
       "netRent": 78813.0,
-      "security": 139000.0,
+      "security": 220000.0,
+      "securityDeposits": [
+        {"id": "source-security-lujo-basement-2025-08-18", "payer": "Luj O Fab", "amount": 21000.0, "date": "2025-08-18"},
+        {"id": "source-security-lujo-basement-2025-08-20", "payer": "Luj O Fab", "amount": 199000.0, "date": "2025-08-20"}
+      ],
       "ownerName": "Karandeep Singh Bedi",
       "ownerPhone": "447897023458",
       "contactPerson": "Prageet Nagar(Manager)",

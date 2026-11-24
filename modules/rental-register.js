@@ -10,22 +10,53 @@ const daysBetween=(a,b)=>Math.round((Date.parse(b)-Date.parse(a))/86400000);
 const active=rows=>(rows||[]).filter(x=>!x.reversedAt&&!x.voidedAt), sum=rows=>money(rows.reduce((n,x)=>n+Number(x.amount||0),0)), id=p=>p+'-'+randomUUID();
 const fields=['baseRent','dueDay','cgst','sgst','tds','escalationDate','escalationPercent','escalationEveryMonths','netRent'];
 const rentalSource=require('./rental-source.json');
-// The owner explicitly made the final six floor rows authoritative.
+const previousTerms={
+ 'sheet-top':{floor:'Top Floor',baseRent:58000,netRent:62640},
+ 'sheet-third':{floor:'3rd Floor',baseRent:76000,netRent:82080},
+ 'sheet-second':{floor:'2nd Floor',baseRent:81000,netRent:87480},
+ 'sheet-first':{floor:'1st Floor',baseRent:85000,netRent:91800},
+ 'sheet-upper-ground':{floor:'Upper Ground',baseRent:106500,netRent:115020},
+ 'sheet-basement':{floor:'Basement',baseRent:72975,netRent:78813}
+};
+const sourceVersions=x=>{
+  const prior=previousTerms[x.id]||x,first={effectiveMonth:'2026-09',baseRent:prior.baseRent,netRent:prior.netRent,dueDay:null,cgst:9,sgst:9,tds:10,escalationDate:'',escalationPercent:0,escalationEveryMonths:0};
+  if(prior.baseRent===x.baseRent&&prior.floor===x.floor)return [first];
+  return [first,{...first,effectiveMonth:rentalSource.baseRentEffectiveMonth||'2026-11',baseRent:x.baseRent,netRent:x.netRent}];
+};
+const sourceDeposits=()=>rentalSource.rows.flatMap(x=>(x.securityDeposits||[]).map(d=>({id:d.id,tenancyId:x.id,amount:d.amount,date:d.date,reason:'Owner revised security sheet · '+(d.payer||x.tenant),payer:d.payer||x.tenant,source:'owner_security_sheet_2026_11_24',createdAt:rentalSource.asOf+'T00:00:00.000Z'})));
+// The owner explicitly made the revised six base-rent rows and nine dated
+// security receipts authoritative. Tax rates stay explicit so all reporting
+// starts from base rent rather than reverse-calculating a bank credit.
 const seeds=()=>rentalSource.rows.map(x=>({
   id:x.id,tenant:x.tenant,floor:x.floor,property:'Kirti Nagar',baseRent:x.baseRent,netRent:x.netRent,
   startMonth:'2026-09',trackingFrom:'2026-09',startDate:x.startDate,endDate:x.endDate,
-  dueDay:null,cgst:0,sgst:0,tds:0,history:[],autoEnabled:false,openingConfirmed:false,
+  dueDay:null,cgst:9,sgst:9,tds:10,history:[],versions:sourceVersions(x),autoEnabled:false,openingConfirmed:false,
   confirmedAt:rentalSource.asOf+'T00:00:00.000Z',status:x.startDate>rentalSource.asOf?'upcoming':'active',
   phone:x.contactPhone?'+'+(x.contactPhone.length===10?'91':'')+x.contactPhone:x.ownerPhone?'+'+(x.ownerPhone.length===10?'91':'')+x.ownerPhone:'',email:'',
   source:{...x,file:rentalSource.file,sheet:rentalSource.sheet,asOf:rentalSource.asOf},
-  securityOpening:x.security,securityOpeningDate:rentalSource.asOf,
-  note:x.id==='sheet-first'?'The sheet records an end date of 6 Sep 2026, a two-year term and remarks ending 7 Oct 2025; these disagree. Increased Rent contains “Sep-25”, not an amount.':x.id==='sheet-third'?'The sheet records a 5% increase in Jul 2025 without an increased-rent amount or recurrence. Base and net rent are kept exactly as written.':''
+  securityOpening:null,securityOpeningDate:'',
+  note:x.id==='sheet-first'?'The Owner’s 24 Nov base-rent revision supersedes the prior conflicting end-date and increased-rent fields.':x.id==='sheet-third'?'The Owner’s 24 Nov base-rent revision supplies the current amount; no recurring escalation was assumed.':''
 }));
 function applySourceOverride(s,now){
   if(s.rentalSourceImport===rentalSource.id)return false;
-  if(s.rentals){s.rentalArchives=s.rentalArchives||[];s.rentalArchives.push({at:now,reason:'Owner replaced the rental register with RENT.numbers final rows A12:Y17.',register:JSON.parse(JSON.stringify(s.rentals))});}
-  const revision=(s.rentals&&s.rentals.revision||0)+1;
-  s.rentals={tenancies:seeds(),invoices:[],deposits:[],allocations:[],credits:[],reminders:[],activity:[{at:now,by:'owner instruction',action:'source_replacement',detail:'Replaced previous rental records with the six final floor rows in RENT.numbers. Previous register archived; bank receipts unchanged.'}],revision,automation:{}};
+  if(s.rentals){s.rentalArchives=s.rentalArchives||[];s.rentalArchives.push({at:now,reason:'Owner revised six base rents and supplied nine dated security receipts on 24 Nov 2026.',register:JSON.parse(JSON.stringify(s.rentals))});}
+  const revision=(s.rentals&&s.rentals.revision||0)+1,previousId=rentalSource.previousSourceId,hasImportedRows=!!s.rentals&&rentalSource.rows.some(row=>(s.rentals.tenancies||[]).some(t=>t.id===row.id));
+  if(!s.rentals||s.rentalSourceImport!==previousId&&!hasImportedRows){
+    s.rentals={tenancies:seeds(),invoices:[],deposits:sourceDeposits(),allocations:[],credits:[],reminders:[],activity:[{at:now,by:'owner instruction',action:'source_replacement',detail:'Imported the revised six base-rent rows and nine dated security receipts. Previous register archived; bank receipts unchanged.'}],revision,automation:{}};
+  }else{
+    const r=state(s),seeded=new Map(seeds().map(t=>[t.id,t]));
+    for(const [id,sourceTenant] of seeded){
+      const t=r.tenancies.find(item=>item.id===id);
+      if(!t){r.tenancies.push(sourceTenant);continue;}
+      t.history=t.history||[];t.history.push({at:now,by:'owner instruction',action:'source_revision',before:{tenant:t.tenant,floor:t.floor,baseRent:t.baseRent,netRent:t.netRent,securityOpening:t.securityOpening,securityOpeningDate:t.securityOpeningDate}});
+      if(!Array.isArray(t.versions)||!t.versions.length)t.versions=sourceVersions({...sourceTenant,baseRent:previousTerms[id]?.baseRent||t.baseRent,netRent:previousTerms[id]?.netRent||t.netRent,floor:previousTerms[id]?.floor||t.floor});
+      const effective=rentalSource.baseRentEffectiveMonth||'2026-11',version={effectiveMonth:effective,...Object.fromEntries(fields.map(k=>[k,sourceTenant[k]]))};
+      t.versions=t.versions.filter(v=>v.effectiveMonth!==effective);t.versions.push(version);
+      Object.assign(t,{tenant:sourceTenant.tenant,floor:sourceTenant.floor,baseRent:sourceTenant.baseRent,netRent:sourceTenant.netRent,cgst:9,sgst:9,tds:10,startDate:sourceTenant.startDate,endDate:sourceTenant.endDate,status:sourceTenant.status,source:sourceTenant.source,securityOpening:null,securityOpeningDate:''});
+    }
+    for(const deposit of sourceDeposits())if(!active(r.deposits).some(item=>item.id===deposit.id||(item.tenancyId===deposit.tenancyId&&item.date===deposit.date&&money(item.amount)===money(deposit.amount))))r.deposits.push(deposit);
+    r.activity.push({at:now,by:'owner instruction',action:'source_revision',detail:'Updated six agreed base rents from November 2026 and replaced aggregate security openings with nine dated receipts totalling ₹10,20,000. Existing invoices, allocations, receipts and manual records were preserved.'});r.revision=revision;s.rentals=r;
+  }
   s.rentalSourceImport=rentalSource.id;return true;
 }
 function state(s){const r=s.rentals||{tenancies:seeds()};for(const k of ['invoices','deposits','allocations','credits','reminders','activity','tdsEvidence'])if(!Array.isArray(r[k]))r[k]=[];r.revision=r.revision||0;r.automation=r.automation||{};return r;}
@@ -72,7 +103,8 @@ function manualMonth(t,m){
 }
 function makeInvoice(r,t,month,base,reason,now,automatic=false){
   const v=termsAt(t,month),cgst=money(base*v.cgst/100),sgst=money(base*v.sgst/100),tds=money(base*v.tds/100);
-  const i={id:id('RENT'),tenancyId:t.id,month,baseRent:base,cgst,sgst,tds,taxBreakdownUnknown:v.netRent!=null,gross:v.netRent!=null?null:money(base+cgst+sgst),bankDue:v.netRent!=null?money(v.netRent*base/v.baseRent):money(base+cgst+sgst-tds),dueDate:v.dueDay?month+'-'+String(Math.min(v.dueDay,daysInMonth(month))).padStart(2,'0'):'',reason,createdAt:now,automatic};r.invoices.push(i);return i;
+  const hasTaxRates=Number(v.cgst||0)+Number(v.sgst||0)+Number(v.tds||0)>0,taxBreakdownUnknown=v.netRent!=null&&!hasTaxRates;
+  const i={id:id('RENT'),tenancyId:t.id,month,baseRent:base,cgst,sgst,tds,taxBreakdownUnknown,gross:taxBreakdownUnknown?null:money(base+cgst+sgst),bankDue:taxBreakdownUnknown?money(v.netRent*base/v.baseRent):money(base+cgst+sgst-tds),dueDate:v.dueDay?month+'-'+String(Math.min(v.dueDay,daysInMonth(month))).padStart(2,'0'):'',reason,createdAt:now,automatic};r.invoices.push(i);return i;
 }
 function generate(r,today,now){
   let count=0;
@@ -88,7 +120,7 @@ function generate(r,today,now){
 }
 function snapshot(s,today=indiaDate()){
   // Fee history is a read-only projection, not a migration or rent allocation.
-  const stored=state(s),r={...stored,fees:(Array.isArray(stored.fees)?stored.fees:[]).map(f=>({...f}))},month=today.slice(0,7),alerts=[],followups=[];
+  const stored=state({...s,rentals:s.rentals?{...s.rentals}:undefined}),r={...stored,fees:(Array.isArray(stored.fees)?stored.fees:[]).map(f=>({...f}))},month=today.slice(0,7),alerts=[],followups=[];
   const invoices=active(r.invoices).map(i=>{
     const left=outstanding(r,i),cash=sum(active(r.allocations).filter(a=>a.invoiceId===i.id&&['receipt','credit'].includes(a.kind))),security=sum(active(r.allocations).filter(a=>a.invoiceId===i.id&&a.kind==='security'));
     const status=left<=0?'Paid':!i.dueDate?'Due date not set':i.dueDate<today?(cash+security>0?'Part-paid · overdue':'Overdue'):cash+security>0?'Part-paid':'Due';
