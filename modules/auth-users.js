@@ -499,7 +499,7 @@ function userSummary(username) {
 
 // Content assignments need names only, never credentials or financial permissions.
 function listContentPeople() {
-  return loadUsers().users.filter(u => normalizeRoles(u).some(r => ['owner','admin','content_team'].includes(r)))
+  return loadUsers().users.filter(u => String(u.username).trim().toLowerCase() !== 'lokesh' && normalizeRoles(u).some(r => ['owner','admin','content_team'].includes(r)))
     .map(u => ({ username: u.username }));
 }
 
