@@ -2,6 +2,7 @@
 const fs=require('fs'),path=require('path'),crypto=require('crypto');
 const VIEWS=['front','back','detail'];
 const {OUTPUT_VIEWS,outputViews}=require('./image-review-views');
+const {applyPresentation}=require('./image-review-presentation');
 const fail=(message,status=409)=>Object.assign(new Error(message),{status});
 module.exports=function installQueue({router,wrap,context,read,save,persist,present,catalogue,client,store,directory,fetchImage=require('node-fetch'),updateProduct}){
  const publishing=new Set();
@@ -97,7 +98,8 @@ module.exports=function installQueue({router,wrap,context,read,save,persist,pres
    // On retries, verify the gallery matches our last saved checkpoint; do not overwrite outside edits.
    if(job.receipts.length||job.status==='publish_failed'||job.status==='publishing'){
     const targets=new Set(Object.values(job.targets)),made=new Set(job.receipts.map(r=>r.newId));
-    const comparable=images=>images.filter(i=>!targets.has(i.id)&&!made.has(i.id)&&!i.alt.startsWith('SANKI review '+job.id+' ')).map(i=>({id:i.id,src:i.src,alt:i.alt,variantIds:i.variantIds})).sort((a,b)=>a.id.localeCompare(b.id));
+    const assigned=new Set(job.presentation?.variantIds||[]);
+    const comparable=images=>images.filter(i=>!targets.has(i.id)&&!made.has(i.id)&&!i.alt.startsWith('SANKI review '+job.id+' ')).map(i=>({id:i.id,src:i.src,alt:i.alt,variantIds:i.variantIds.filter(id=>!assigned.has(id))})).sort((a,b)=>a.id.localeCompare(b.id));
     if(JSON.stringify(comparable(job.gallery))!==JSON.stringify(comparable(item.images)))throw fail('Other website images changed. Review before retrying.');
     for(const old of job.gallery.filter(i=>targets.has(i.id))){const live=item.images.find(i=>i.id===old.id);if(live&&(live.src!==old.src||JSON.stringify(live.variantIds)!==JSON.stringify(old.variantIds)))throw fail('A selected replacement photo changed. Review before retrying.');}
    }
@@ -125,8 +127,8 @@ module.exports=function installQueue({router,wrap,context,read,save,persist,pres
      receipt.stage='replaced';job.expectedFingerprint=(await current()).fingerprint;checkpoint(job,'publish-replaced:'+output.view);
     }
    }
-   const verified=await current();for(const receipt of job.receipts){const image=verified.images.find(i=>i.id===receipt.newId);if(!image||JSON.stringify([...image.variantIds].sort())!==JSON.stringify([...receipt.variantIds].sort())||receipt.oldId&&verified.images.some(i=>i.id===receipt.oldId))throw fail('Shopify gallery verification is incomplete.');}
-   job.status='published';job.publishedAt=new Date().toISOString();job.expectedFingerprint=verified.fingerprint;
+   const verified=await applyPresentation({item,job,shopify,current,checkpoint,fetchPage:fetchImage,store});for(const receipt of job.receipts){const image=verified.images.find(i=>i.id===receipt.newId);if(!image||JSON.stringify([...image.variantIds].sort())!==JSON.stringify([...receipt.variantIds].sort())||receipt.oldId&&verified.images.some(i=>i.id===receipt.oldId))throw fail('Shopify gallery verification is incomplete.');}
+   job.status='published';delete job.error;job.publishedAt=new Date().toISOString();job.expectedFingerprint=verified.fingerprint;
    const state=read(),r=state.records[item.id];r.job=job;r.pendingViews=[];r.decision='unreviewed';r.approvedAt=job.approvedAt;r.approvedProposalRevision=r.proposalRevision;
    res.json({success:true,item:persist(verified,state,r,req,'job-published')});
   }catch(error){if(started){const state=read(),r=state.records[req.params.id];r.job.status='publish_failed';r.job.error=error.message;r.revision++;save(state);try{const fresh=(await catalogue(true)).find(i=>i.id===req.params.id);if(fresh)error.item=present(fresh,r);}catch{}}throw error;}finally{publishing.delete(initial.productId);}

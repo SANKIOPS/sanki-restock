@@ -1,0 +1,20 @@
+  # SANKI_APPROVED_IMAGE_REVIEW_V1: publishing supplies this mapping; no per-product theme edits.
+  assign sk_review_variant_key = v.id | append: ''
+  assign sk_review_entry = product.metafields.sanki.image_review_gallery.value.variants[sk_review_variant_key]
+  assign sk_review_front = nil
+  assign sk_review_detail = nil
+  assign sk_review_verified_job = ''
+  if sk_review_entry.jobId != blank
+    for media in product.media
+      if media.alt == sk_review_entry.front
+        assign sk_review_front = media
+      elsif media.alt == sk_review_entry.detail
+        assign sk_review_detail = media
+      endif
+    endfor
+    if sk_review_front != nil and sk_review_detail != nil
+      assign primary = sk_review_front
+      assign secondary = sk_review_detail
+      assign sk_review_verified_job = sk_review_entry.jobId
+    endif
+  endif
