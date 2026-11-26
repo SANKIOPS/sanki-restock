@@ -95,12 +95,12 @@ function build(store,{from,to,viewer='',spendingRows=[],accounts=[],transfers=[]
   spending.sort((a,b)=>displayDate(b).localeCompare(displayDate(a))||Number(b.amount||0)-Number(a.amount||0)||String(a.id||'').localeCompare(String(b.id||'')));
   const budgets=categories.map(category=>{const actual=money(monthActual.get(category)||0),budget=Object.prototype.hasOwnProperty.call(savedBudgets,category)?money(savedBudgets[category]):null,remaining=budget==null?null:money(budget-actual);return{group:groupOf(category),category,periodActual:money(periodActual.get(category)||0),actual,budget,remaining,status:budget==null?'Set budget':remaining<0?'Over budget':'Within budget'};});
 
-  const permanentRows=[],review=[],transferReview=[],transferSettlements=[],transferDueToBusiness={},transferDueFromBusiness={};
+  const receivedRows=[],personalUseRows=[],review=[],transferReview=[],transferSettlements=[],transferDueToBusiness={},transferDueFromBusiness={};
   for(const original of transfers.filter(row=>(row.toEntity==='PERSONAL')!==(row.fromEntity==='PERSONAL'))){
     const allocated=money(loanUsage.businessTransferAllocations[original.id]||0),transfer=allocated?{...original,amount:money(original.amount-allocated),loanAllocated:allocated}:original;if(!(transfer.amount>0))continue;
     const inbound=transfer.toEntity==='PERSONAL',business=inbound?transfer.fromEntity:transfer.toEntity,decision=transferTreatment(store,transfer);
     if(!decision){transferReview.push({...transfer,direction:inbound?'Business to personal':'Personal to business',business,note:transfer.note||'',options:inbound?[{value:'permanent_withdrawal',label:'Permanent personal withdrawal — nothing to return'},{value:'business_repayment',label:'Business repaid money it owed you'},{value:'temporary_due_to_business',label:'Temporary business money — you must return it'}]:[{value:'permanent_contribution',label:'Permanent contribution to business — nothing to return'},{value:'personal_repayment',label:'You repaid money owed to business'},{value:'temporary_due_from_business',label:'Temporary personal money — business must return it'}]});continue;}
-    if(decision.treatment==='permanent_withdrawal')permanentRows.push({id:transfer.id,date:transfer.date,source:business,label:'Taken permanently from '+business,account:transfer.from+' → '+transfer.to,description:transfer.note||'',amount:money(transfer.amount),treatment:'Confirmed permanent — nothing to return'});
+    if(decision.treatment==='permanent_withdrawal')receivedRows.push({id:transfer.id,date:transfer.date,source:business,label:'Received permanently from '+business,account:transfer.from+' → '+transfer.to,description:transfer.note||'',amount:money(transfer.amount),treatment:'Confirmed permanent — nothing to return'});
     if(decision.treatment==='temporary_due_to_business')transferDueToBusiness[business]=money((transferDueToBusiness[business]||0)+transfer.amount);
     if(decision.treatment==='temporary_due_from_business')transferDueFromBusiness[business]=money((transferDueFromBusiness[business]||0)+transfer.amount);
     if(['business_repayment','personal_repayment'].includes(decision.treatment))transferSettlements.push({id:transfer.id,date:transfer.date,entity:business,direction:decision.treatment==='business_repayment'?'Business repaid you':'You repaid business',amount:money(transfer.amount),note:transfer.note||'',reason:decision.reason||''});
@@ -110,11 +110,11 @@ function build(store,{from,to,viewer='',spendingRows=[],accounts=[],transfers=[]
     let source=saved;
     if(!source&&expense&&hotel.isHotelPersonalUse(expense))source=hotel.UNIT;
     if(!source&&payment?.payment?.crossEntityCompanyPayment&&SANKI_ACCOUNTS.has(payment.account))source='SANKI';
-    if(source&&source!=='PERSONAL'&&!source.startsWith('LOAN:'))permanentRows.push({id:row.id,date:row.date,source,label:source===hotel.UNIT?'Personal use of Sewak Park money':'Taken permanently from '+source,account:row.account,category:row.category,description:row.description,amount:money(row.amount),treatment:'Permanent — nothing to return'});
+    if(source&&source!=='PERSONAL'&&!source.startsWith('LOAN:'))personalUseRows.push({...row,source,label:source===hotel.UNIT?'Personal expense using Sewak Park money':'Personal expense using '+source+' money',account:row.account||payment&&payment.account||'',category:row.category,description:row.description,treatment:'Used for a personal expense'});
     // A posted PERSONAL expense is already personal spending. The paying
     // account does not require a second funding-source decision here.
   }
-  const takenBySource=permanentRows.reduce((out,row)=>(out[row.source]=money((out[row.source]||0)+row.amount),out),{});
+  const bySource=rows=>rows.reduce((out,row)=>(out[row.source]=money((out[row.source]||0)+Number(row.amount||0)),out),{}),receivedBySource=bySource(receivedRows),personalUseBySource=bySource(personalUseRows);
 
   const owesYou=[];const you=String(viewer||'').trim().toLowerCase();
   for(const expense of list(store.expenses).filter(row=>active(row)&&['SANKI','SAMAST'].includes(nature(row.nature))&&String(row.date||'')<=to&&claimant(row)===you)){
@@ -130,7 +130,15 @@ function build(store,{from,to,viewer='',spendingRows=[],accounts=[],transfers=[]
   return{
     basis:'Personal spending is counted once. For a business loan received in a Personal account: amount transferred from that receiving account to the borrowing business is the business allocation; principal repaid is separate; the remainder is the Personal portion. The account closing check shows whether the bank ledger matches.',
     spending:{total:money(spending.reduce((sum,row)=>sum+Number(row.amount||0),0)),entries:spending,budgetMonth,budgetFrom:monthFrom,budgetTo:to,budgets,budgetTotal:money(budgets.reduce((sum,row)=>sum+Number(row.budget||0),0)),budgetActual:money(budgets.reduce((sum,row)=>sum+Number(row.actual||0),0)),overBudget:money(budgets.reduce((sum,row)=>sum+Math.max(0,-Number(row.remaining||0)),0))},
-    moneyTaken:{permanentRows,bySource:takenBySource,permanentTotal:total(permanentRows),loanPersonalTotal:money(loanUsage.loans.reduce((sum,row)=>sum+Number(row.personalPortion||0),0))},
+    moneyTaken:{
+      receivedRows,receivedBySource,receivedTotal:total(receivedRows),
+      personalUseRows,personalUseBySource,personalUseTotal:total(personalUseRows),
+      // Compatibility names now mean permanent money received only. Personal
+      // expenses are deliberately separate so the two figures cannot be
+      // accidentally added together or presented as the same thing.
+      permanentRows:receivedRows,bySource:receivedBySource,permanentTotal:total(receivedRows),
+      loanPersonalTotal:money(loanUsage.loans.reduce((sum,row)=>sum+Number(row.personalPortion||0),0))
+    },
     settlements:{businessOwesYou:owesYou,businessOwesYouTotal:total(owesYou),youOweBusiness:oweRows,youOweBusinessTotal:total(oweRows),recordedSettlements:transferSettlements},
     loanUsage:loanUsage.loans,
     accounts,transfers,

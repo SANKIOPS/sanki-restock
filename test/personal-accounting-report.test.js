@@ -58,7 +58,7 @@ test('owner withdrawal label alone is not proof that a transfer is permanent',()
   assert.deepEqual(result.review.rows,[],'personal expenses do not need a second funding-source classification');
   store.personalReporting.transferTreatments['TR-TAKEN']={treatment:'permanent_withdrawal',reason:'Owner confirmed permanent'};
   const confirmed=report.build(store,{from:'2026-10-01',to:'2026-10-31',viewer:'owner',spendingRows:spending(),transfers:transfers(store)});
-  assert.equal(confirmed.moneyTaken.permanentTotal,100000);assert.equal(confirmed.moneyTaken.bySource.SANKI,100000);assert.deepEqual(confirmed.review.transferRows,[]);
+  assert.equal(confirmed.moneyTaken.receivedTotal,100000);assert.equal(confirmed.moneyTaken.receivedBySource.SANKI,100000);assert.equal(confirmed.moneyTaken.personalUseTotal,0);assert.deepEqual(confirmed.review.transferRows,[]);
 });
 
 test('legacy funding-source labels do not change bank-backed loan allocation',()=>{
@@ -66,7 +66,9 @@ test('legacy funding-source labels do not change bank-backed loan allocation',()
   store.personalReporting.movementSources['P3/PAY-001']={source:'SEWAK_PARK_HOTEL',reason:'Owner confirmed'};
   const result=report.build(store,{from:'2026-10-01',to:'2026-10-31',viewer:'owner',spendingRows:spending(),transfers:transfers(store)});
   assert.equal(result.review.rows.length,0);
-  assert.equal(result.moneyTaken.bySource.SEWAK_PARK_HOTEL,10000);
+  assert.equal(result.moneyTaken.receivedTotal,0);
+  assert.equal(result.moneyTaken.personalUseBySource.SEWAK_PARK_HOTEL,10000);
+  assert.deepEqual(result.moneyTaken.personalUseRows.map(row=>row.id),['P3/PAY-001']);
   assert.deepEqual(result.loanUsage.map(row=>row.businessUse),[500000,0]);
   assert.equal(JSON.stringify({expenses:store.expenses,transfers:store.transfers,receipts:store.receipts}),before);
 });
@@ -80,14 +82,15 @@ test('a saved repayment note is recognized without a second owner decision',()=>
 
 test('Personal report UI keeps the agreed simple labels and inline corrections',()=>{
   const read=file=>fs.readFileSync(path.join(__dirname,'..',file),'utf8'),html=read('public/compact-reports.html'),js=read('public/compact-reports.js'),css=read('public/compact-reports.css');
-  for(const label of ['Spending &amp; Budget','Money Taken &amp; Settle','Loans &amp; Transfers','Review Decisions','Business has to return to you','You have to return to business'])assert.match(html,new RegExp(label.replace(/[&]/g,'&')));
+  for(const label of ['Spending &amp; Budget','Money Taken from Entities','Money to Settle','Loans and Their Use','Personal Accounts and Transfers','Review Decisions','Business has to return to you','You have to return to business'])assert.match(html,new RegExp(label.replace(/[&]/g,'&')));
+  assert.match(js,/Personal Overview/);assert.match(js,/personal-settle/);assert.match(js,/personal-accounts/);
   assert.match(js,/personal-report\/budget/);assert.match(js,/personal-report\/source/);assert.doesNotMatch(js,/personal-report\/loan-allocation/);assert.match(js,/personal-report\/transfer-treatment/);assert.match(js,/Personal portion/);assert.match(js,/Sent to business/);
   assert.doesNotMatch(js,/\['Business-loan personal portion'/,'the loan personal portion must not be shown twice in the overview');assert.match(js,/\['You have to return to business'.*View breakdown/);
   assert.match(js,/\['Expense group','Selected-period spending','This month'/);assert.match(js,/\['Category','Selected-period spending','This month'/);assert.match(js,/showGroup:true/);
   assert.match(html,/Spending by group and category/);assert.match(html,/Individual spending entries/);
   assert.match(js,/newest date first/);assert.match(js,/renderPersonalBudgetGroups/);assert.match(js,/View categories ↓/);assert.match(js,/personal-group-categories/);assert.match(js,/personal-category-expenses/);assert.match(js,/View expenses ↓/);assert.doesNotMatch(js,/function personalSpendingDetails/);
   assert.match(js,/Bill \/ invoice and saved notes/);assert.match(js,/Expense-level payment proofs/);assert.match(js,/Bank \/ payment reference/);assert.match(css,/\.app-entry-table td:last-child/);assert.match(css,/white-space:nowrap/);
-  assert.match(html,/Confirmed permanent money taken by source/);assert.match(js,/renderPersonalMoneyTaken/);for(const source of ['SANKI','SAMAST','Sewak Park'])assert.match(js,new RegExp(source));assert.match(js,/personal-money-source-detail-row/);
+  assert.match(html,/Business money received and used personally/);assert.match(html,/Received \/ taken/);assert.match(html,/Used personally/);assert.match(js,/renderPersonalMoneyTaken/);for(const source of ['SANKI','SAMAST','Sewak Park'])assert.match(js,new RegExp(source));assert.match(js,/personal-money-source-detail-row/);assert.match(js,/Business money used personally/);
   assert.match(html,/Sent to business is calculated only from actual transfers/);assert.doesNotMatch(html,/Oldest available loan money|Unallocated/);
   assert.match(css,/--ivory:#faf7ee/);assert.match(css,/\.personal-source-edit/);
 });

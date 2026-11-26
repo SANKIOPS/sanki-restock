@@ -22,7 +22,7 @@ test('personal report settings are owner-only and never edit financial movements
 
 test('compact PERSONAL response exposes the simple personal workbook',async()=>{
  const response=await invoke('GET','/api/expenses/compact-report',{query:{entity:'PERSONAL',from:'2026-10-01',to:'2026-10-31'}});assert.equal(response.status,200,JSON.stringify(response.body));
- assert.equal(response.body.personal.spending.total,50000);assert.equal(response.body.personal.moneyTaken.bySource.SANKI,50000);assert.equal(response.body.personal.spending.budgets[0].budget,25000);assert.equal(response.body.personal.review.rows.length,0);
+ assert.equal(response.body.personal.spending.total,50000);assert.equal(response.body.personal.moneyTaken.receivedTotal,0);assert.equal(response.body.personal.moneyTaken.personalUseBySource.SANKI,50000);assert.equal(response.body.personal.spending.budgets[0].budget,25000);assert.equal(response.body.personal.review.rows.length,0);
  assert.equal(response.body.personal.loanUsage[0].businessUse,40000);assert.equal(response.body.personal.loanUsage[0].personalPortion,60000);assert.equal(response.body.personal.settlements.youOweBusinessTotal,70000);
  assert.match(response.body.personal.basis,/counted once/i);
 });
