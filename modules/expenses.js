@@ -8656,6 +8656,14 @@ const manageTransactionLookupPolicy={
   })
 };
 require('./manage-transactions').create(manageTransactionLookupPolicy).register(router);
+require('./quick-financial-search').create({
+  read:sourceCorrectionPolicy.read,
+  canSearch:req=>canApprove(req)&&access.userCanAccessPath(req.user,'/expenses.html'),
+  natures:approvalNatures,
+  canPersonal:canManagePersonalAccounting,
+  accountVisible:accountVisibleToReq,
+  canViewExpense
+}).register(router);
 router.use(modelCalendar.createRouter({loadStore,saveStore,audit}));
 
 // Registered after the named GET routes so /list, /config and other
