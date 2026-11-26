@@ -11,6 +11,12 @@ function rowCategory(row){
   }
   return'';
 }
+function rowCategoryGroup(row){
+  for(const value of [row&&row.categoryGroup,row&&row.group,row&&row.ledger&&row.ledger.categoryGroup,row&&row.ledger&&row.ledger.group]){
+    const group=text(value);if(group)return group;
+  }
+  return'';
+}
 function activePayments(expense){return list(expense&&expense.payments).filter(payment=>payment&&!payment.accountingExcluded&&!payment.voided&&Number(payment.amount)>0);}
 
 // Reporting-only precedence. A temporary Suspense label may be replaced only
@@ -27,14 +33,14 @@ function resolve(store,expense,paymentId=''){
       const linked=(row.linkedRecordIds||[]).map(String),exactMatch=!!exact&&linked.includes(exact),expenseMatch=allowExpenseLink&&linked.includes(expenseId);
       if(!exactMatch&&!expenseMatch)continue;
       const category=rowCategory(row);if(!category)continue;
-      matches.push({category,bookKey,recordId:record.id||'',rowId:row.id||'',finalizedAt:record.finalizedAt,exact:exactMatch});
+      matches.push({category,categoryGroup:rowCategoryGroup(row),bookKey,recordId:record.id||'',rowId:row.id||'',finalizedAt:record.finalizedAt,exact:exactMatch});
     }
   }
   const strongest=matches.some(match=>match.exact)?matches.filter(match=>match.exact):matches;
   const categories=[...new Set(strongest.map(match=>match.category))];
   if(categories.length!==1)return{category:original,source:'saved_expense',resolved:false,conflict:categories.length>1,matches:strongest};
   const match=strongest.slice().sort((a,b)=>String(b.finalizedAt).localeCompare(String(a.finalizedAt)))[0];
-  return{category:categories[0],source:'finalized_bank_reconciliation',resolved:true,conflict:false,evidence:match,matches:strongest};
+  return{category:categories[0],categoryGroup:match.categoryGroup||'',source:'finalized_bank_reconciliation',resolved:true,conflict:false,evidence:match,matches:strongest};
 }
 
 module.exports={isSuspense,resolve};

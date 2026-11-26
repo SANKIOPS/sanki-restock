@@ -26,9 +26,9 @@ function fixture(){
   };
 }
 const spending=()=>[
-  {id:'P1/PAY-001',date:'2026-10-17',kind:'expense',account:'ICICI Bank 0993',category:'Food',description:'P1',amount:50000},
-  {id:'P2/PAY-001',date:'2026-10-19',kind:'expense',account:'IndusInd Bank 7883',category:'Food',description:'P2',amount:100000},
-  {id:'P3/PAY-001',date:'2026-10-20',kind:'expense',account:'ICICI Bank 0992',category:'Food & Drinks',description:'P3',amount:10000}
+  {id:'P1/PAY-001',date:'2026-10-17',kind:'expense',account:'ICICI Bank 0993',categoryGroup:'Living & Lifestyle',category:'Food',description:'P1',amount:50000},
+  {id:'P2/PAY-001',date:'2026-10-19',kind:'expense',account:'IndusInd Bank 7883',categoryGroup:'Living & Lifestyle',category:'Food',description:'P2',amount:100000},
+  {id:'P3/PAY-001',date:'2026-10-20',kind:'expense',account:'ICICI Bank 0992',categoryGroup:'Living & Lifestyle',category:'Food & Drinks',description:'P3',amount:10000}
 ];
 const transfers=s=>s.transfers.map(row=>({id:row.id,date:row.date,from:row.fromAccount,to:row.toAccount,fromEntity:row.fromNature,toEntity:row.toNature,classification:row.classification,amount:row.amount,note:row.note||''}));
 
@@ -42,6 +42,9 @@ test('SANKI loans use actual transfers from the receiving account',()=>{
     ['TR-BUSINESS',500000,'Allocated to SANKI'],['REC-00200/PERSONAL',500000,'Personal portion']
   ]);
   assert.equal(result.spending.total,160000,'spending is counted once, not again as loan use');
+  assert.equal(result.spending.budgets.find(row=>row.category==='Food').group,'Living & Lifestyle');
+  assert.deepEqual(result.spending.budgets.map(row=>row.category),['Food','Food & Drinks'],'categories are highest-spending first inside the group');
+  assert.deepEqual(result.spending.entries.map(row=>row.id),['P2/PAY-001','P1/PAY-001','P3/PAY-001'],'individual entries are highest-amount first inside the group');
   assert.equal(result.settlements.youOweBusinessTotal,1500000);
   assert.deepEqual(result.settlements.youOweBusiness,[{entity:'SANKI',reason:'Business loan personal portion',amount:1500000}]);
 });
@@ -80,6 +83,9 @@ test('Personal report UI keeps the agreed simple labels and inline corrections',
   for(const label of ['Spending &amp; Budget','Money Taken &amp; Settle','Loans &amp; Transfers','Review Decisions','Business has to return to you','You have to return to business'])assert.match(html,new RegExp(label.replace(/[&]/g,'&')));
   assert.match(js,/personal-report\/budget/);assert.match(js,/personal-report\/source/);assert.doesNotMatch(js,/personal-report\/loan-allocation/);assert.match(js,/personal-report\/transfer-treatment/);assert.match(js,/Personal portion/);assert.match(js,/Sent to business/);
   assert.doesNotMatch(js,/\['Business-loan personal portion'/,'the loan personal portion must not be shown twice in the overview');assert.match(js,/\['You have to return to business'.*View breakdown/);
+  assert.match(js,/\['Group','Category','Selected-period spending'/);assert.match(js,/showGroup:true/);
+  assert.match(html,/Spending by group and category/);assert.match(html,/Individual spending entries/);assert.match(js,/personalSpendingDetails/);
+  assert.match(js,/highest amount first/);assert.match(js,/personalSpendingDetails\(row,true\)/);
   assert.match(html,/Sent to business is calculated only from actual transfers/);assert.doesNotMatch(html,/Oldest available loan money|Unallocated/);
   assert.match(css,/--ivory:#faf7ee/);assert.match(css,/\.personal-source-edit/);
 });

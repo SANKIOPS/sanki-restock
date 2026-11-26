@@ -1,5 +1,10 @@
 'use strict';
 // Add app identity to existing report rows; never replace amounts or bank dates.
+const groupManagement=require('./expense-category-groups');
+function categoryGroup(store,record,category,direct=''){
+ const key=String(category||'').trim().toLowerCase(),definitions=[...(Array.isArray(store.sankiCategoryCatalog&&store.sankiCategoryCatalog.categories)?store.sankiCategoryCatalog.categories:[]),...Object.values(store.customLedgers||{})],definition=definitions.find(row=>String(row&&row.name||'').trim().toLowerCase()===key);
+ return groupManagement.resolveGroupName(store,direct||definition&&definition.group||record&&record.categoryGroup||record&&record.group)||'';
+}
 function enrich(store,row,resolver){
  if(row.kind==='income'){
   const records=Array.isArray(store.receipts)?store.receipts:Object.values(store.receipts||{}),refs=[row.reference,row.id,String(row.id||'').replace(/^(?:RECEIPT|MANUAL-RECEIPT)\//,'')];
@@ -11,10 +16,10 @@ function enrich(store,row,resolver){
  if(!['expense','personal_use','unclassified'].includes(row.kind))return row;
  const refs=[row.reference,row.id].filter(Boolean);
  const reconciled=(Array.isArray(store.reconciliationExpenses)?store.reconciliationExpenses:Object.values(store.reconciliationExpenses||{})).find(e=>refs.some(ref=>String(ref)===e.id||String(ref).startsWith(e.id+'/'))&&!e.accountingExcluded&&String(e.nature||'SANKI').toUpperCase()===row.entity);
- if(reconciled)return {...row,appRecord:{id:reconciled.id,date:reconciled.date,...require('../public/expense-report-presentation').present({...reconciled,ledger:reconciled.category}),source:'Reconciliation expense'}};
+ if(reconciled)return {...row,categoryGroup:categoryGroup(store,reconciled,reconciled.category||reconciled.ledger),appRecord:{id:reconciled.id,date:reconciled.date,...require('../public/expense-report-presentation').present({...reconciled,ledger:reconciled.category}),categoryGroup:categoryGroup(store,reconciled,reconciled.category||reconciled.ledger),source:'Reconciliation expense'}};
  for(const ref of refs){const id=String(ref).split('/')[0],e=store.expenses?.[id];if(!e||e.accountingExcluded||String(e.reportingNature||e.nature||'SANKI').toUpperCase()!==row.entity)continue;
  const paymentId=String(ref).startsWith(id+'/')?String(ref).slice(id.length+1):'',classification=require('./finalized-report-classification').resolve(store,e,paymentId);
- return {...row,appExpense:{id:e.id,date:e.date,...(resolver||require('./report-description-recovery').createResolver(store))(e),savedCategory:e.ledger||e.category||'',ledger:classification.category,category:classification.category,classificationSource:classification.source,classificationEvidence:classification.evidence||null,status:e.status||'',amount:e.amount,searchNarration:[e.narration,e.note,e.reconciliationSource?.bankDescription].filter(Boolean).join(' ')}};
+ const group=categoryGroup(store,e,classification.category,classification.categoryGroup);return {...row,categoryGroup:group,appExpense:{id:e.id,date:e.date,...(resolver||require('./report-description-recovery').createResolver(store))(e),savedCategory:e.ledger||e.category||'',ledger:classification.category,category:classification.category,categoryGroup:group,classificationSource:classification.source,classificationEvidence:classification.evidence||null,status:e.status||'',amount:e.amount,searchNarration:[e.narration,e.note,e.reconciliationSource?.bankDescription].filter(Boolean).join(' ')}};
  }return row;
 }
 function evidence(store,expense,{canAccess,bookKey,natureForAccount=(nature)=>nature}){

@@ -5,6 +5,7 @@
 const loans=require('./expense-loans');
 const refunds=require('./expense-refunds');
 const hotel=require('./sewak-park-reporting');
+const groupManagement=require('./expense-category-groups');
 
 const KNOWN_SANKI_LOANS=new Set(['REC-00200','REC-00201']);
 const SANKI_ACCOUNTS=new Set(['Axis Bank 3448','Tiana 0425','Tiana Traders IndusInd 0437','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash','Services']);
@@ -83,12 +84,15 @@ function allocateLoanUsage(store,{from,to,accountChecks={}}){
 function build(store,{from,to,viewer='',spendingRows=[],accounts=[],transfers=[],loanAccountChecks={}}){
   const settings=state(store),movementSources=settings.movementSources||{},loanUsage=allocateLoanUsage(store,{from,to,accountChecks:loanAccountChecks});
   const paymentByKey=new Map(paymentRows(store,to).map(row=>[row.key,row]));
-  const spending=spendingRows.filter(row=>row.kind==='expense');
+  const spending=spendingRows.filter(row=>row.kind==='expense').map(row=>{const category=row.appExpense&&row.appExpense.category||row.appRecord&&row.appRecord.category||row.category||'Unclassified',group=groupManagement.resolveGroupName(store,row.appExpense&&row.appExpense.categoryGroup||row.appRecord&&row.appRecord.categoryGroup||row.categoryGroup);return{...row,category,categoryGroup:group||'Ungrouped'};});
   const budgetMonth=to.slice(0,7),monthStart=budgetMonth+'-01',monthFrom=from>monthStart?from:monthStart;
-  const monthActual=new Map(),periodActual=new Map();
-  for(const row of spending){const category=row.category||'Unclassified';periodActual.set(category,money((periodActual.get(category)||0)+Number(row.amount||0)));if(String(row.date||'').startsWith(budgetMonth))monthActual.set(category,money((monthActual.get(category)||0)+Number(row.amount||0)));}
-  const savedBudgets=settings.budgets?.[budgetMonth]||{},categories=[...new Set([...periodActual.keys(),...Object.keys(savedBudgets)])].sort((a,b)=>a.localeCompare(b));
-  const budgets=categories.map(category=>{const actual=money(monthActual.get(category)||0),budget=Object.prototype.hasOwnProperty.call(savedBudgets,category)?money(savedBudgets[category]):null,remaining=budget==null?null:money(budget-actual);return{category,periodActual:money(periodActual.get(category)||0),actual,budget,remaining,status:budget==null?'Set budget':remaining<0?'Over budget':'Within budget'};});
+  const monthActual=new Map(),periodActual=new Map(),groupByCategory=new Map();
+  for(const expense of list(store.expenses)){const category=String(expense.ledger||expense.category||'').trim(),group=groupManagement.resolveGroupName(store,expense.categoryGroup||expense.group);if(category&&group&&!groupByCategory.has(category))groupByCategory.set(category,group);}
+  for(const row of spending){const category=row.category||'Unclassified',group=groupManagement.resolveGroupName(store,row.categoryGroup||row.appExpense&&row.appExpense.categoryGroup||row.appRecord&&row.appRecord.categoryGroup);if(group)groupByCategory.set(category,group);periodActual.set(category,money((periodActual.get(category)||0)+Number(row.amount||0)));if(String(row.date||'').startsWith(budgetMonth))monthActual.set(category,money((monthActual.get(category)||0)+Number(row.amount||0)));}
+  const savedBudgets=settings.budgets?.[budgetMonth]||{},groupOf=category=>groupByCategory.get(category)||'Ungrouped',groupTotals=new Map();for(const [category,amount] of periodActual)groupTotals.set(groupOf(category),money((groupTotals.get(groupOf(category))||0)+amount));
+  const categories=[...new Set([...periodActual.keys(),...Object.keys(savedBudgets)])].sort((a,b)=>(groupTotals.get(groupOf(b))||0)-(groupTotals.get(groupOf(a))||0)||groupOf(a).localeCompare(groupOf(b))||(periodActual.get(b)||0)-(periodActual.get(a)||0)||a.localeCompare(b));
+  spending.sort((a,b)=>(groupTotals.get(b.categoryGroup)||0)-(groupTotals.get(a.categoryGroup)||0)||String(a.categoryGroup).localeCompare(String(b.categoryGroup))||Number(b.amount||0)-Number(a.amount||0)||String(b.date||'').localeCompare(String(a.date||''))||String(a.id||'').localeCompare(String(b.id||'')));
+  const budgets=categories.map(category=>{const actual=money(monthActual.get(category)||0),budget=Object.prototype.hasOwnProperty.call(savedBudgets,category)?money(savedBudgets[category]):null,remaining=budget==null?null:money(budget-actual);return{group:groupOf(category),category,periodActual:money(periodActual.get(category)||0),actual,budget,remaining,status:budget==null?'Set budget':remaining<0?'Over budget':'Within budget'};});
 
   const permanentRows=[],review=[],transferReview=[],transferSettlements=[],transferDueToBusiness={},transferDueFromBusiness={};
   for(const original of transfers.filter(row=>(row.toEntity==='PERSONAL')!==(row.fromEntity==='PERSONAL'))){
