@@ -99,7 +99,7 @@
 </section>
 <section id="view-personal-loans" role="tabpanel" aria-labelledby="tab-personal-loans" hidden>
 <div class="section-heading"><h2>Loans and their use</h2></div>
-<p class="muted section-note">Only an owner-confirmed split is used. “Unallocated” means the split is not confirmed; it is not cash still available and it is not a bank balance.</p>
+<p class="muted section-note">Sent to business is calculated only from actual transfers out of the loan’s receiving Personal account to the borrowing business. Principal repaid is separate. Personal portion = loan received − principal repaid − sent to business.</p>
 <div id="personalLoans" class="panel scroll"></div>
 <h3>Accounts</h3><div id="personalAccounts" class="panel scroll"></div>
 <h3>Transfers</h3><div id="personalTransfers" class="panel scroll"></div>
@@ -109,8 +109,7 @@
 <p class="muted section-note">This changes only the Personal management report. It never changes the bank entry, amount, date or reconciliation.</p>
 <h3>Transfers needing a purpose</h3><p class="muted section-note">Choose whether the money is permanent, temporary, or a repayment. The old owner-withdrawal label alone is not treated as proof.</p>
 <div id="personalTransferReview" class="personal-review-list"></div>
-<h3>Loans needing a confirmed split</h3><p class="muted section-note">Enter totals used for business and personally. The remainder stays “Unallocated”; no FIFO assumption is used.</p>
-<div id="personalLoanReview" class="personal-review-list"></div>
+<div id="personalLoanReview" class="personal-review-list" hidden></div>
 <h3>Payments needing a funding source</h3>
 <div id="personalSourceReview" class="personal-review-list"></div>
 <h3>Other accounting checks</h3><div id="personalWarnings" class="panel scroll"></div>

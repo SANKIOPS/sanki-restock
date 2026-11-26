@@ -30,45 +30,55 @@ const spending=()=>[
   {id:'P2/PAY-001',date:'2026-10-19',kind:'expense',account:'IndusInd Bank 7883',category:'Food',description:'P2',amount:100000},
   {id:'P3/PAY-001',date:'2026-10-20',kind:'expense',account:'ICICI Bank 0992',category:'Food & Drinks',description:'P3',amount:10000}
 ];
-const transfers=s=>s.transfers.map(row=>({id:row.id,date:row.date,from:row.fromAccount,to:row.toAccount,fromEntity:row.fromNature,toEntity:row.toNature,classification:row.classification,amount:row.amount}));
+const transfers=s=>s.transfers.map(row=>({id:row.id,date:row.date,from:row.fromAccount,to:row.toAccount,fromEntity:row.fromNature,toEntity:row.toNature,classification:row.classification,amount:row.amount,note:row.note||''}));
 
-test('SANKI loans use confirmed splits and never present FIFO suggestions as facts',()=>{
-  const store=fixture(),result=report.build(store,{from:'2026-10-01',to:'2026-10-31',viewer:'owner',spendingRows:spending(),transfers:transfers(store)});
+test('SANKI loans use actual transfers from the receiving account',()=>{
+  const store=fixture(),result=report.build(store,{from:'2026-10-01',to:'2026-10-31',viewer:'owner',spendingRows:spending(),transfers:transfers(store),loanAccountChecks:{'ICICI Bank 0993':{matched:true,reconciledThrough:'2026-10-31'}}});
   assert.deepEqual(result.loanUsage.map(row=>row.owner),['SANKI','SANKI']);
-  assert.deepEqual(result.loanUsage.map(row=>[row.id,row.businessUse,row.personalUse,row.remaining,row.allocationStatus]),[
-    ['REC-00200',500000,500000,0,'Confirmed'],['REC-00201',null,null,1000000,'Needs allocation']
+  assert.deepEqual(result.loanUsage.map(row=>[row.id,row.businessUse,row.personalPortion,row.allocationStatus]),[
+    ['REC-00200',500000,500000,'Account matched'],['REC-00201',0,1000000,'Account matched']
   ]);
-  assert.ok(result.loanUsage[0].suggestedPersonalUse!==result.loanUsage[0].personalUse,'automatic bank-flow suggestion remains separate');
+  assert.deepEqual(result.loanUsage[0].events.map(row=>[row.id,row.amount,row.use]),[
+    ['TR-BUSINESS',500000,'Allocated to SANKI'],['REC-00200/PERSONAL',500000,'Personal portion']
+  ]);
   assert.equal(result.spending.total,160000,'spending is counted once, not again as loan use');
-  assert.equal(result.settlements.youOweBusinessTotal,500000);
-  assert.deepEqual(result.settlements.youOweBusiness,[{entity:'SANKI',reason:'Business loan used personally',amount:500000}]);
+  assert.equal(result.settlements.youOweBusinessTotal,1500000);
+  assert.deepEqual(result.settlements.youOweBusiness,[{entity:'SANKI',reason:'Business loan personal portion',amount:1500000}]);
 });
 
 test('owner withdrawal label alone is not proof that a transfer is permanent',()=>{
   const store=fixture(),result=report.build(store,{from:'2026-10-01',to:'2026-10-31',viewer:'owner',spendingRows:spending(),transfers:transfers(store)});
   assert.equal(result.moneyTaken.permanentTotal,0);
-  assert.deepEqual(result.review.transferRows.map(row=>row.id),['TR-BUSINESS','TR-TAKEN']);
+  assert.deepEqual(result.review.transferRows.map(row=>row.id),['TR-TAKEN']);
   assert.equal(result.settlements.businessOwesYouTotal,3000);
   assert.equal(result.spending.budgets.find(row=>row.category==='Food').remaining,10000);
-  assert.deepEqual(result.review.rows.map(row=>row.id),['P3/PAY-001']);
+  assert.deepEqual(result.review.rows,[],'personal expenses do not need a second funding-source classification');
   store.personalReporting.transferTreatments['TR-TAKEN']={treatment:'permanent_withdrawal',reason:'Owner confirmed permanent'};
   const confirmed=report.build(store,{from:'2026-10-01',to:'2026-10-31',viewer:'owner',spendingRows:spending(),transfers:transfers(store)});
-  assert.equal(confirmed.moneyTaken.permanentTotal,100000);assert.equal(confirmed.moneyTaken.bySource.SANKI,100000);assert.deepEqual(confirmed.review.transferRows.map(row=>row.id),['TR-BUSINESS']);
+  assert.equal(confirmed.moneyTaken.permanentTotal,100000);assert.equal(confirmed.moneyTaken.bySource.SANKI,100000);assert.deepEqual(confirmed.review.transferRows,[]);
 });
 
-test('a report-only source correction removes review without changing financial records',()=>{
+test('legacy funding-source labels do not change bank-backed loan allocation',()=>{
   const store=fixture(),before=JSON.stringify({expenses:store.expenses,transfers:store.transfers,receipts:store.receipts});
   store.personalReporting.movementSources['P3/PAY-001']={source:'SEWAK_PARK_HOTEL',reason:'Owner confirmed'};
   const result=report.build(store,{from:'2026-10-01',to:'2026-10-31',viewer:'owner',spendingRows:spending(),transfers:transfers(store)});
   assert.equal(result.review.rows.length,0);
   assert.equal(result.moneyTaken.bySource.SEWAK_PARK_HOTEL,10000);
+  assert.deepEqual(result.loanUsage.map(row=>row.businessUse),[500000,0]);
   assert.equal(JSON.stringify({expenses:store.expenses,transfers:store.transfers,receipts:store.receipts}),before);
+});
+
+test('a saved repayment note is recognized without a second owner decision',()=>{
+  const store=fixture();store.transfers.push({id:'TR-REPAID',date:'2026-10-25',fromNature:'SANKI',toNature:'PERSONAL',fromAccount:'Axis Bank 3448',toAccount:'ICICI Bank 0993',classification:'owner_withdrawal',amount:25000,note:'Payng Back amount used for business'});
+  const result=report.build(store,{from:'2026-10-01',to:'2026-10-31',viewer:'owner',spendingRows:spending(),transfers:transfers(store)});
+  assert.ok(result.settlements.recordedSettlements.some(row=>row.id==='TR-REPAID'&&row.direction==='Business repaid you'));
+  assert.ok(!result.review.transferRows.some(row=>row.id==='TR-REPAID'));
 });
 
 test('Personal report UI keeps the agreed simple labels and inline corrections',()=>{
   const read=file=>fs.readFileSync(path.join(__dirname,'..',file),'utf8'),html=read('public/compact-reports.html'),js=read('public/compact-reports.js'),css=read('public/compact-reports.css');
   for(const label of ['Spending &amp; Budget','Money Taken &amp; Settle','Loans &amp; Transfers','Review Decisions','Business has to return to you','You have to return to business'])assert.match(html,new RegExp(label.replace(/[&]/g,'&')));
-  assert.match(js,/personal-report\/budget/);assert.match(js,/personal-report\/source/);assert.match(js,/personal-report\/loan-allocation/);assert.match(js,/personal-report\/transfer-treatment/);assert.match(js,/A personal expense appears once in spending/);assert.match(js,/SANKI loan used personally/);
-  assert.match(html,/Unallocated.*not cash still available/s);assert.doesNotMatch(html,/Oldest available loan money/);
+  assert.match(js,/personal-report\/budget/);assert.match(js,/personal-report\/source/);assert.doesNotMatch(js,/personal-report\/loan-allocation/);assert.match(js,/personal-report\/transfer-treatment/);assert.match(js,/Personal portion/);assert.match(js,/Sent to business/);
+  assert.match(html,/Sent to business is calculated only from actual transfers/);assert.doesNotMatch(html,/Oldest available loan money|Unallocated/);
   assert.match(css,/--ivory:#faf7ee/);assert.match(css,/\.personal-source-edit/);
 });

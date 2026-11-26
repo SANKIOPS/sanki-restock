@@ -177,12 +177,12 @@ function build(sources,{entity,from,to,today,accounts=[],unit='',viewer=''}){
   const transactions=require('./report-expense-entries').enrichMany(s,rows).sort((a,b)=>b.date.localeCompare(a.date));
   const response={success:true,entity,from,to,basis,resultLabel,otherMovements,...(unitEconomics?{unitEconomics}:{}),...(samastProfit?{samastProfit}:{}),totals:{income:income==null?null:money(income),expenses:money(expenses),costOfSales:money(cogs),result:result==null?null:money(result)},accounts,transactions,transfers,paidFrom:Object.entries(usage).map(([account,amount])=>({account,amount})),obligations:{loans:loanRows,security,securityKnown:entity!=='SAMAST'||!!s.rentals,loanTotal:money(loanRows.reduce((n,r)=>n+r.outstanding,0)),securityTotal:money(security.reduce((n,r)=>n+r.amount,0))},warnings:[...new Set(warnings)],note:'Account balances cover all money held in those accounts, including borrowed money and deposits. Shared bank money is not allocated to an entity by this report. Personal spending by paying account does not prove that rental income funded it. Transfers are shown once and are not additional expenses. No automatic debts are created.'};
   if(entity==='PERSONAL'){
-    response.personal=require('./personal-accounting-report').build(s,{from,to,viewer,spendingRows:transactions,accounts,transfers});
+    const loanAccountChecks=Object.fromEntries(accounts.map(row=>[row.name,{matched:row.balance!=null&&!row.warnings?.length&&String(row.reconciledThrough||'')>=to,reconciledThrough:row.reconciledThrough||'',closingBalance:row.balance,warnings:row.warnings||[]} ]));
+    response.personal=require('./personal-accounting-report').build(s,{from,to,viewer,spendingRows:transactions,accounts,transfers,loanAccountChecks});
     response.basis=response.personal.basis;
     response.note='Personal spending is counted once. Permanent owner withdrawals stay separate from repayable business money. Source reviews affect this management report only; bank evidence, amounts, dates and reconciliations remain unchanged.';
     if(response.personal.review.rows.length)response.warnings.unshift(response.personal.review.rows.length+' personal payment source(s) need review before money taken by entity is complete.');
     if(response.personal.review.transferRows.length)response.warnings.unshift(response.personal.review.transferRows.length+' cross-entity transfer purpose(s) need confirmation; none were assumed permanent.');
-    if(response.personal.review.loanRows.length)response.warnings.unshift(response.personal.review.loanRows.length+' business loan allocation(s) need an owner-confirmed split; no FIFO suggestion was used as fact.');
   }
   return response;
 }

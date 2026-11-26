@@ -35,7 +35,7 @@ function terms(body, receivedDate) {
   if (!['person', 'company', 'entity'].includes(lenderKind)) fail('Choose whether the lender is a person, company or other entity.');
   if (dueDate && (!validDate(dueDate) || dueDate < receivedDate)) fail('The repayment due date must be on or after the loan receipt date.');
   const method = text(b.interestMethod || 'none').toLowerCase();
-  if (!['none', 'flat', 'reducing'].includes(method)) fail('Choose flat or reducing-balance interest.');
+  if (!['none', 'flat', 'reducing', 'interest_only'].includes(method)) fail('Choose reducing, flat, or interest-only with principal at maturity.');
   const result = { lenderKind, dueDate, lenderReference: text(b.lenderReference), interestMethod: method };
   if (method === 'none') return result;
   const annualRate = Number(b.annualRate), frequency = text(b.frequency || 'monthly').toLowerCase();
@@ -58,24 +58,26 @@ function addInstallments(value, count, frequency) {
   }
   return d.toISOString().slice(0, 10);
 }
-function configured(loan) { return loan && loan.loanTerms && ['flat', 'reducing'].includes(loan.loanTerms.interestMethod); }
+function configured(loan) { return loan && loan.loanTerms && ['flat', 'reducing', 'interest_only'].includes(loan.loanTerms.interestMethod); }
 function schedule(loan) {
   if (!configured(loan)) return [];
   const t = loan.loanTerms, n = Number(t.installmentCount), principalCents = cents(loan.amount);
   const periods = t.frequency === 'daily' ? 365 : 12, rate = Number(t.annualRate) / 100 / periods;
   let paymentCents;
   if (cents(t.installmentAmount) > 0) paymentCents = cents(t.installmentAmount);
+  else if (t.interestMethod === 'interest_only') paymentCents = cents(t.installmentAmount) > 0 ? cents(t.installmentAmount) : Math.round(principalCents * rate);
   else if (t.interestMethod === 'flat') paymentCents = Math.round((principalCents + principalCents * rate * n) / n);
   else paymentCents = rate === 0 ? Math.round(principalCents / n) : Math.round(principalCents * rate * Math.pow(1 + rate, n) / (Math.pow(1 + rate, n) - 1));
   let balance = principalCents, rows = [];
   for (let i = 0; i < n && balance > 0; i++) {
-    const interest = t.interestMethod === 'flat' ? Math.round(principalCents * rate) : Math.round(balance * rate);
-    let principal = Math.max(0, paymentCents - interest);
-    if (i === n - 1 || principal >= balance) principal = balance;
-    if (!principal && balance) fail('The instalment amount must be greater than the calculated interest.');
+    const interest = t.interestMethod === 'interest_only' || t.interestMethod === 'flat' ? Math.round(principalCents * rate) : Math.round(balance * rate);
+    let principal = t.interestMethod === 'interest_only' ? (i === n - 1 ? balance : 0) : Math.max(0, paymentCents - interest);
+    if (t.interestMethod !== 'interest_only' && (i === n - 1 || principal >= balance)) principal = balance;
+    if (!principal && balance && t.interestMethod !== 'interest_only') fail('The instalment amount must be greater than the calculated interest.');
     balance -= principal;
     rows.push({ number: i + 1, dueDate: addInstallments(t.firstPaymentDate, i, t.frequency),
-      principal: principal / 100, interest: interest / 100, amount: (principal + interest) / 100, balance: balance / 100 });
+      principal: principal / 100, interest: interest / 100, amount: (principal + interest) / 100, balance: balance / 100,
+      paymentKind: t.interestMethod === 'interest_only' ? (principal ? 'final_principal_and_interest' : 'interest_only') : 'principal_and_interest' });
   }
   if (balance > 0) fail('The manual instalment amount does not repay the loan within the selected number of instalments.');
   return rows;
