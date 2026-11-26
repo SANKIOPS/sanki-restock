@@ -151,6 +151,7 @@ function apiRuleFor(p) {
 }
 
 function apiAllowedForUser(user, p, method='GET') {
+  if (p === '/api/daily-sop' || p.startsWith('/api/daily-sop/')) return isPrashant(user) || rolesOf(user).includes('owner');
   // Meta Ads is independently delegated per person. Grant the complete
   // section only while the Owner-controlled switch is on.
   if (p === '/api/marketing/meta' || p.startsWith('/api/marketing/meta/')) {
@@ -248,6 +249,8 @@ function gate(req, res, next) {
     return res.redirect(302, '/login.html');
   }
   req.user = user;
+
+  if (p === '/daily-sop.html' && !isPrashant(user) && !rolesOf(user).includes('owner')) return res.redirect(302, landingForUser(user));
 
   // The Money Picture and its capital/OD APIs are private to the Owner role,
   // even when another account has ordinary Admin access.

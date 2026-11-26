@@ -2818,6 +2818,7 @@ app.use(require('./modules/rack-locations').router);
 app.use(require('./modules/stock-movements').router);
 app.use(require('./modules/inventory-care').router);
 app.use(require('./modules/auth-users').router);
+app.use(require('./modules/daily-sop').router);
 app.use(require('./modules/sales').router);
 app.use(require('./modules/orders').router);
 app.use(require('./modules/procurement').router);

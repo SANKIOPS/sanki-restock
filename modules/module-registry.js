@@ -45,6 +45,7 @@ const SECTION_ORDER = ['Main', 'Sales', 'SEO', 'Inventory', 'Store Ops', 'Purcha
 // Everything starts 'hidden' (blank launcher). We turn modules 'live'
 // deliberately, one at a time, as we build/bless them together.
 const MODULES = [
+  { key: 'daily-sop', title: 'Daily SOP', desc: 'Prashant’s daily tasks and Sir’s verification', icon: '☑', href: '/daily-sop.html', section: 'Admin', status: 'live', roles: ['owner'], ownerOnly: true },
   { key: 'manage', title: 'Manage', desc: 'One place for the existing management tools you are permitted to use', icon: '⚙️', href: '/manage.html', section: 'Main', status: 'live', roles: [], navigationOnly: true },
   { key: 'sales-orders-logistics', title: 'Sales Orders and Logistics', desc: 'Orders, customer payments, shipments and settlement evidence in one screen', icon: '📦', href: '/sales-orders.html', section: 'Sales', status: 'live', roles: ['admin', 'sales', 'owner'] },
   { key: 'restock',      title: 'Restock Planner',       desc: 'Reorder fast-movers before they run out',            icon: '🔄', href: '/index.html#restock',            section: 'Main',      status: 'hidden', roles: ['admin', 'inventory'] },
@@ -103,7 +104,7 @@ function visibleFor(user) {
   // union'd across all of the user's roles. A module shows when its page path
   // is in that allow-list. Admin sees everything not hidden.
   const allowed = isPrashant ? allowedPagesForUser(user) : (isAdmin || isOwner) ? '*' : allowedPagesForUser(user);
-  const canSee = (m) => m.delegatedPermission && hasUserPermission(user, m.delegatedPermission) ? true : m.navigationOnly ? userCanAccessPath(user, modulePath(m.href)) : isPrashant
+  const canSee = (m) => m.key === 'daily-sop' ? isPrashant || isOwner : m.delegatedPermission && hasUserPermission(user, m.delegatedPermission) ? true : m.navigationOnly ? userCanAccessPath(user, modulePath(m.href)) : isPrashant
     ? Array.isArray(allowed) && allowed.includes(modulePath(m.href))
     : m.ownerOnly ? isOwner || (m.key==='image-review' && rolesOf(user).includes('image_reviewer')) : (allowed === '*' || (Array.isArray(allowed) && allowed.includes(modulePath(m.href))));
   return MODULES

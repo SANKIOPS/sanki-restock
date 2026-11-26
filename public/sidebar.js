@@ -159,6 +159,9 @@
     if (!me || !me.success) return;      // not logged in — leave optimistic render
     aside.innerHTML = render(navFromModules(mods,me), me);
     wireLogout();
+    if (String(me.username || '').toLowerCase() === 'prashant' && !document.querySelector('script[data-daily-sop-reminders]')) {
+      var sopScript = document.createElement('script'); sopScript.src = '/daily-sop-reminders.js?v=20261126'; sopScript.dataset.dailySopReminders = '1'; document.head.appendChild(sopScript);
+    }
     if (((me.roles || [me.role]).includes('owner') || String(me.username||'').toLowerCase()==='prashant') && !document.querySelector('script[data-content-deletions]')) {
       var deletionScript=document.createElement('script');deletionScript.src='/content-deletion-notifications.js?v=20261117';deletionScript.dataset.contentDeletions='1';document.head.appendChild(deletionScript);
     }

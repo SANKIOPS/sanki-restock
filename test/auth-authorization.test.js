@@ -262,7 +262,7 @@ test('Prashant sees only the requested operational workspace even with an Admin 
     'inventory-dashboard','inventory-care',
     'procurement','fresh-proc','size-tracker',
     'compact-reports','pl','rentals','expenses','salary','incentives',
-    'model-calendar','content-production'
+    'model-calendar','content-production','daily-sop'
   ]);
   for(const page of ['/inventory.html','/inventory-care.html','/procurement.html','/fresh-procurement.html','/size-tracker.html','/pnl.html','/rentals.html','/expenses.html','/salary.html','/incentives.html','/model-calendar.html']){
     assert.equal(userCanAccessPath(p,page),true,page);

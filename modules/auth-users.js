@@ -40,6 +40,7 @@ const COOKIE = 'sanki_session';
 const OWNER_USER = process.env.OWNER_USER || 'gaganlambasanki';
 const PRASHANT_USER = 'prashant';
 const PRASHANT_PAGES = [
+  '/daily-sop.html',
   '/inventory.html', '/inventory-care.html',
   '/procurement.html', '/fresh-procurement.html', '/size-tracker.html',
   '/pnl.html', '/compact-reports.html', '/rentals.html', '/expenses.html', '/salary.html', '/incentives.html',
@@ -260,6 +261,7 @@ function roleCanAccessPath(role, p) {
 // Union access across all of a user's roles.
 function isPrashant(user) { return String(user && user.username || '').trim().toLowerCase() === PRASHANT_USER; }
 function userCanAccessPath(user, p) {
+  if (p === '/daily-sop.html') return isPrashant(user) || rolesOf(user).includes('owner');
   if(rolesOf(user).length===1&&rolesOf(user)[0]==='image_reviewer')return p==='/image-review.html';
   if(rolesOf(user).length===1&&rolesOf(user)[0]==='content_team')return p==='/content-production.html';
   if (p === '/manage.html') {
