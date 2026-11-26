@@ -8629,6 +8629,34 @@ router.use(modelCalendar.createRouter({loadStore,saveStore,audit}));
 // Registered after the named GET routes so /list, /config and other
 // workspaces cannot be captured by the expense-ID detail endpoint.
 // Compact reporting is read-only and uses existing entity/account permissions.
+router.post('/api/expenses/personal-report/budget',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can change a personal budget.'});
+  const s=loadStore(),b=req.body||{},month=String(b.month||''),category=String(b.category||'').trim(),amount=Number(b.amount);
+  if(!/^\d{4}-\d{2}$/.test(month)||!category||!Number.isFinite(amount)||amount<0||amount>100000000)return res.status(400).json({success:false,error:'Choose a month, category and valid budget amount.'});
+  const personal=require('./personal-accounting-report'),settings=personal.ensureState(s),before=settings.budgets[month]&&settings.budgets[month][category];settings.budgets[month]=settings.budgets[month]||{};
+  if(amount===0)delete settings.budgets[month][category];else settings.budgets[month][category]=roundMoney(amount);
+  audit(s,req,'PERSONAL_BUDGET_UPDATED','personal_budget',month+'/'+category,{nature:'PERSONAL',before:{amount:before==null?null:before},after:{amount:amount===0?null:roundMoney(amount)},note:'Personal monthly budget only; no accounting movement changed'});saveStore(s);
+  res.json({success:true,month,category,amount:amount===0?null:roundMoney(amount)});
+});
+router.post('/api/expenses/personal-report/source',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can classify a personal funding source.'});
+  const s=loadStore(),b=req.body||{},movementId=String(b.movementId||'').trim(),reason=String(b.reason||'').trim(),parts=movementId.split('/'),expense=s.expenses&&s.expenses[parts[0]],payment=expense&&(Array.isArray(expense.payments)?expense.payments:[]).find(row=>row.id===parts[1]);
+  if(!expense||normalizedNature(expense.nature)!=='PERSONAL'||!payment)return res.status(404).json({success:false,error:'Personal payment not found.'});
+  if(reason.length<3)return res.status(400).json({success:false,error:'Enter a short reason for this source.'});
+  const personal=require('./personal-accounting-report'),source=personal.sourceChoice(s,b.source);if(!source)return res.status(400).json({success:false,error:'Choose a valid personal funding source.'});
+  const settings=personal.ensureState(s),before=settings.movementSources[movementId]||null,after={source,reason,by:req.user.username,at:new Date().toISOString()};settings.movementSources[movementId]=after;
+  audit(s,req,'PERSONAL_FUNDING_SOURCE_CLASSIFIED','expense_payment',movementId,{nature:'PERSONAL',account:payment.account||expense.account,before,after,note:reason});saveStore(s);
+  res.json({success:true,movementId,classification:after});
+});
+router.post('/api/expenses/personal-report/loan-owner',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can assign a loan to an entity.'});
+  const s=loadStore(),b=req.body||{},loanId=String(b.loanId||'').trim(),owner=normalizedNature(b.owner),reason=String(b.reason||'').trim(),loan=(s.receipts||[]).find(row=>row.id===loanId&&expenseLoans.isLoan(row)&&!row.accountingExcluded&&row.status!=='voided');
+  if(!loan)return res.status(404).json({success:false,error:'Active loan not found.'});
+  if(!NATURES.includes(owner)||reason.length<3)return res.status(400).json({success:false,error:'Choose SANKI, SAMAST or PERSONAL and enter a short reason.'});
+  const personal=require('./personal-accounting-report'),settings=personal.ensureState(s),before={owner:personal.loanOwner(s,loan)},after={owner,reason,by:req.user.username,at:new Date().toISOString()};settings.loanOwners[loanId]=owner;
+  audit(s,req,'PERSONAL_REPORT_LOAN_OWNER_UPDATED','loan',loanId,{nature:loan.nature,account:loan.account,before,after,note:reason});saveStore(s);
+  res.json({success:true,loanId,owner});
+});
 router.get('/api/expenses/compact-report',(req,res)=>{
   try{
     const allowed=approvalNatures(req),entity=String(req.query.entity||'SANKI'),requestedUnit=String(req.query.unit||'').trim(),unit=hotelReporting.normalizeReportingUnit(requestedUnit);
@@ -8646,7 +8674,7 @@ router.get('/api/expenses/compact-report',(req,res)=>{
     // Existing visibility policy also applies to every report source row.
     const visible=r=>!r.ownerOnly||isOwner(req),accountAllowed=r=>!r.account||accountVisibleToReq(req,r.account);
     sources.expenses={...s,expenses:Object.fromEntries(Object.entries(s.expenses||{}).filter(([,r])=>visible(r)&&accountAllowed(r))),receipts:(s.receipts||[]).filter(r=>visible(r)&&accountAllowed(r)),loanRepayments:(s.loanRepayments||[]).filter(accountAllowed),transfers:(s.transfers||[]).filter(r=>accountVisibleToReq(req,r.fromAccount)&&accountVisibleToReq(req,r.toAccount)&& (canManagePersonalAccounting(req)||![r.fromNature,r.toNature].includes('PERSONAL')))};
-    const report=require('./compact-accounting-report').build(sources,{entity,unit,from,to,today,accounts});const days=Math.round((Date.parse(to)-Date.parse(from))/86400000)+1,previousTo=new Date(Date.parse(from)-86400000).toISOString().slice(0,10),previousFrom=new Date(Date.parse(from)-days*86400000).toISOString().slice(0,10);if(previousTo>='2026-08-22'){const prior=require('./compact-accounting-report').build(sources,{entity,unit,from:previousFrom<'2026-08-22'?'2026-08-22':previousFrom,to:previousTo,today});report.previous={from:prior.from,to:prior.to,partial:previousFrom<'2026-08-22',totals:prior.totals,...(prior.unitEconomics?{unitEconomics:{values:prior.unitEconomics.values,stats:prior.unitEconomics.stats}}:{})};}report.allowedEntities=allowed.filter(n=>n!=='PERSONAL'||canManagePersonalAccounting(req));
+    const viewer=String(req.user&&req.user.username||''),report=require('./compact-accounting-report').build(sources,{entity,unit,from,to,today,accounts,viewer});const days=Math.round((Date.parse(to)-Date.parse(from))/86400000)+1,previousTo=new Date(Date.parse(from)-86400000).toISOString().slice(0,10),previousFrom=new Date(Date.parse(from)-days*86400000).toISOString().slice(0,10);if(previousTo>='2026-08-22'){const prior=require('./compact-accounting-report').build(sources,{entity,unit,from:previousFrom<'2026-08-22'?'2026-08-22':previousFrom,to:previousTo,today,viewer});report.previous={from:prior.from,to:prior.to,partial:previousFrom<'2026-08-22',totals:prior.totals,...(prior.unitEconomics?{unitEconomics:{values:prior.unitEconomics.values,stats:prior.unitEconomics.stats}}:{})};}report.allowedEntities=allowed.filter(n=>n!=='PERSONAL'||canManagePersonalAccounting(req));
     res.set('Cache-Control','no-store').json(report);
   }catch(error){res.status(error.status||409).json({success:false,error:error.status?error.message:'Report sources could not be read safely. No records were changed.'});}
 });

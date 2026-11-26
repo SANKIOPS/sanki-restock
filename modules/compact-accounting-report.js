@@ -98,7 +98,7 @@ function buildHotel(sources,{entity,from,to,accounts=[]}){
   };
 }
 
-function build(sources,{entity,from,to,today,accounts=[],unit=''}){
+function build(sources,{entity,from,to,today,accounts=[],unit='',viewer=''}){
   if(!['SANKI','SAMAST','PERSONAL'].includes(entity)||!validDate(from)||!validDate(to)||from<START||from>to||to>today)throw Object.assign(Error('Select an entity and valid dates from 22 August 2026 through today.'),{status:400});
   const s=sources.expenses, warnings=[], rows=[], match=r=>nature(r.reportingNature||r.nature)===entity;
   if(!s||typeof s.expenses!=='object')throw Object.assign(Error('Accounting records are unavailable. No totals were assumed.'),{status:409});
@@ -174,6 +174,14 @@ function build(sources,{entity,from,to,today,accounts=[],unit=''}){
   for(const e of list(s.expenses).filter(r=>active(r)&&match(r))){for(const p of list(e.payments).filter(p=>active(p)&&!p.provisional&&inRange(p,from,to))){const account=p.account||e.account;if(!account)continue;usage[account]=money((usage[account]||0)+Number(p.amount||0));}}
   for(const feed of sources.feeds||[])if(feed.required&&feed.status!=='ready')warnings.push(feed.name+' is '+feed.status+'. Report may be incomplete.');
   if(reviewCosts.length)result=null;
-  return {success:true,entity,from,to,basis,resultLabel,otherMovements,...(unitEconomics?{unitEconomics}:{}),...(samastProfit?{samastProfit}:{}),totals:{income:income==null?null:money(income),expenses:money(expenses),costOfSales:money(cogs),result:result==null?null:money(result)},accounts,transactions:require('./report-expense-entries').enrichMany(s,rows).sort((a,b)=>b.date.localeCompare(a.date)),transfers,paidFrom:Object.entries(usage).map(([account,amount])=>({account,amount})),obligations:{loans:loanRows,security,securityKnown:entity!=='SAMAST'||!!s.rentals,loanTotal:money(loanRows.reduce((n,r)=>n+r.outstanding,0)),securityTotal:money(security.reduce((n,r)=>n+r.amount,0))},warnings:[...new Set(warnings)],note:'Account balances cover all money held in those accounts, including borrowed money and deposits. Shared bank money is not allocated to an entity by this report. Personal spending by paying account does not prove that rental income funded it. Transfers are shown once and are not additional expenses. No automatic debts are created.'};
+  const transactions=require('./report-expense-entries').enrichMany(s,rows).sort((a,b)=>b.date.localeCompare(a.date));
+  const response={success:true,entity,from,to,basis,resultLabel,otherMovements,...(unitEconomics?{unitEconomics}:{}),...(samastProfit?{samastProfit}:{}),totals:{income:income==null?null:money(income),expenses:money(expenses),costOfSales:money(cogs),result:result==null?null:money(result)},accounts,transactions,transfers,paidFrom:Object.entries(usage).map(([account,amount])=>({account,amount})),obligations:{loans:loanRows,security,securityKnown:entity!=='SAMAST'||!!s.rentals,loanTotal:money(loanRows.reduce((n,r)=>n+r.outstanding,0)),securityTotal:money(security.reduce((n,r)=>n+r.amount,0))},warnings:[...new Set(warnings)],note:'Account balances cover all money held in those accounts, including borrowed money and deposits. Shared bank money is not allocated to an entity by this report. Personal spending by paying account does not prove that rental income funded it. Transfers are shown once and are not additional expenses. No automatic debts are created.'};
+  if(entity==='PERSONAL'){
+    response.personal=require('./personal-accounting-report').build(s,{from,to,viewer,spendingRows:transactions,accounts,transfers});
+    response.basis=response.personal.basis;
+    response.note='Personal spending is counted once. Permanent owner withdrawals stay separate from repayable business money. Source reviews affect this management report only; bank evidence, amounts, dates and reconciliations remain unchanged.';
+    if(response.personal.review.rows.length)response.warnings.unshift(response.personal.review.rows.length+' personal payment source(s) need review before money taken by entity is complete.');
+  }
+  return response;
 }
 module.exports={build,START};
