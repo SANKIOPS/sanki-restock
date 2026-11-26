@@ -26,7 +26,11 @@ function searchRank(query,fields){
   if(!q)return 99;
   if(values.includes(q))return 0;
   if(values.some(value=>value.startsWith(q)))return 1;
-  const tokens=q.split(' ').filter(Boolean);
+  // "to" and arrows describe the relationship between accounts; they are
+  // not literal saved fields. Ignoring those connector words also makes a
+  // partially typed search such as "0993 to" useful immediately.
+  const tokens=q.replace(/(?:->|→|<-|←)/g,' ').split(' ').filter(token=>token&&!['to','from'].includes(token));
+  if(!tokens.length)return 99;
   return tokens.every(token=>joined.includes(token))?2:99;
 }
 function dateAllowed(date,from,to){return(!from||date>=from)&&(!to||date<=to);}
@@ -47,10 +51,13 @@ function expenseGroup(store,expense,byCategory){
   return byCategory.get(category)||groupManagement.resolveGroupName(store,expense.categoryGroup||expense.group)||'';
 }
 function expenseFields(expense){
-  const payments=list(expense.payments);
-  return [expense.id,expense.date,expense.amount,expense.vendor,expense.particulars,expense.narration,expense.telegramNarration,expense.ledger,expense.category,expense.categoryGroup,expense.note,expense.billNo,expense.billNumber,expense.account,expense.status,...payments.flatMap(payment=>[payment&&payment.id,payment&&payment.reference,payment&&payment.bankReference,payment&&payment.account,payment&&payment.amount,payment&&payment.date,payment&&payment.note])];
+  const payments=list(expense.payments).concat(list(expense.reimbursementPayments)),reconciliation=expense.reconciliationSource||{};
+  return [expense.id,expense.date,expense.amount,expense.requestedAmount,expense.paidAmount,expense.vendor,expense.particulars,expense.narration,expense.telegramNarration,expense.telegramOcrText,expense.ledger,expense.category,expense.categoryGroup,expense.group,expense.type,expense.nature,expense.channel,expense.claimant,expense.createdBy,expense.approvedBy,expense.paidBy,expense.fundedBy,expense.note,expense.remark,expense.bill,expense.billNote,expense.billNo,expense.billNumber,expense.invoiceNo,expense.invoiceNumber,expense.account,expense.paymentType,expense.status,expense.reimbursementStatus,expense.exceptionReason,expense.exceptionEvidence,expense.billPhoto,...list(expense.billPhotos),expense.paymentProof,...list(expense.paymentProofs),expense.purchasePaymentProof,...list(expense.purchasePaymentProofs),reconciliation.bankReference,reconciliation.bankDescription,reconciliation.remark,
+    ...payments.flatMap(payment=>[payment&&payment.id,payment&&payment.reference,payment&&payment.bankReference,payment&&payment.account,payment&&payment.amount,payment&&payment.date,payment&&payment.paymentType,payment&&payment.note,payment&&payment.proof,...list(payment&&payment.proofs),payment&&payment.paidBy,payment&&payment.batchId]),
+    ...list(expense.vendorAdvanceApplications).flatMap(application=>[application&&application.vendorAdvanceId,application&&application.creditReference,application&&application.amount,application&&application.date,application&&application.reason]),
+    ...list(expense.auditHistory).flatMap(event=>[event&&event.id,event&&event.reason,event&&event.editedBy,event&&event.editedAt,...list(event&&event.changes).flatMap(change=>[change&&change.field,change&&change.before,change&&change.after])])];
 }
-function transferFields(transfer){return[transfer.id,transfer.date,transfer.amount,transfer.reference,transfer.bankReference,transfer.transactionReference,transfer.utr,transfer.fromAccount,transfer.toAccount,transfer.fromNature,transfer.toNature,transfer.nature,transfer.classification,transfer.note,transfer.intermediary];}
+function transferFields(transfer){return[transfer.id,transfer.date,transfer.amount,transfer.reference,transfer.bankReference,transfer.transactionReference,transfer.utr,transfer.fromAccount,transfer.toAccount,transfer.fromNature,transfer.toNature,transfer.nature,transfer.classification,transfer.note,transfer.intermediary,transfer.proof,...list(transfer.proofs),transfer.createdBy,transfer.createdAt,transfer.device];}
 
 function create(deps){
   for(const key of ['read','canSearch','natures','canPersonal','accountVisible','canViewExpense'])if(typeof deps[key]!=='function')throw Error('Missing quick financial search dependency: '+key);

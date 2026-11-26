@@ -4,7 +4,7 @@ const quick=require('../modules/quick-financial-search');
 
 function fixture(){return{
   expenses:{
-    'EX-00747':{id:'EX-00747',date:'2026-11-08',nature:'PERSONAL',status:'paid',amount:1250,vendor:'Home Store',particulars:'Cotton bedsheet',ledger:'Props Expenses',categoryGroup:'Content & Marketing',payments:[{id:'PAY-001',date:'2026-11-08',amount:1250,account:'ICICI Bank 0993',reference:'UPI-BEDSHEET'}]},
+    'EX-00747':{id:'EX-00747',date:'2026-11-08',nature:'PERSONAL',status:'paid',amount:1250,vendor:'Home Store',particulars:'Cotton bedsheet',ledger:'Props Expenses',categoryGroup:'Content & Marketing',billNote:'October bedroom purchase',billPhoto:'/api/expenses/photo/bedsheet-bill.jpg',payments:[{id:'PAY-001',date:'2026-11-08',amount:1250,account:'ICICI Bank 0993',reference:'UPI-BEDSHEET',proof:'/api/expenses/photo/bedsheet-payment.jpg'}]},
     'EX-HIDDEN':{id:'EX-HIDDEN',date:'2026-11-09',nature:'PERSONAL',status:'paid',amount:900,vendor:'Private hidden',particulars:'Never disclose',payments:[{id:'PAY-001',date:'2026-11-09',amount:900,account:'Hidden 0001'}]}
   },reconciliationExpenses:[],
   transfers:[
@@ -24,8 +24,12 @@ test('date filter narrows the pair total without scanning statements manually',(
   const h=harness(),result=h.service.search({user:h.user},{q:'0993 → 3448',kind:'transfer',from:'2026-11-15',to:'2026-11-30'});assert.equal(result.summary.transferCount,1);assert.equal(result.summary.totalTransferred,200000);assert.equal(result.transfers[0].id,'TR-002');
 });
 
+test('partially typed account routes and ordinary related words find transfers without exact syntax',()=>{
+  const h=harness();for(const query of ['0993 to','0993 business','ICICI 3448','TR-001']){const result=h.service.search({user:h.user},{q:query,kind:'transfer'});assert.ok(result.transfers.some(row=>row.id==='TR-001'),query);}
+});
+
 test('expense search finds reference, vendor, narration, category, account and amount',()=>{
-  const h=harness();for(const query of ['EX-00747','Home Store','cotton bedsheet','Content & Marketing','Props Expenses','0993','1250','UPI-BEDSHEET']){const result=h.service.search({user:h.user},{q:query,kind:'expense'});assert.deepEqual(result.expenses.map(row=>row.id),['EX-00747'],query);assert.equal(result.summary.totalExpenses,1250);assert.equal(result.expenses[0].group,'Content & Marketing');}
+  const h=harness();for(const query of ['EX-00747','Home Store','cotton bedsheet','Content & Marketing','Props Expenses','0993','1250','UPI-BEDSHEET','bedroom purchase','bedsheet-bill','bedsheet-payment']){const result=h.service.search({user:h.user},{q:query,kind:'expense'});assert.deepEqual(result.expenses.map(row=>row.id),['EX-00747'],query);assert.equal(result.summary.totalExpenses,1250);assert.equal(result.expenses[0].group,'Content & Marketing');}
 });
 
 test('expense group filter shows grouped spending without a text search',()=>{
@@ -42,6 +46,6 @@ test('route accepts only valid quick searches and stays read-only',()=>{
   routes[0].handler({user:h.user,query:{q:'x'}},{status(code){status=code;return this;},json(value){body=value;return this;}});assert.equal(status,400);assert.match(body.error,/two characters/i);
 });
 
-test('shared sidebar exposes one global finder with group-before-category, pair totals and safe local links',()=>{
-  const script=fs.readFileSync(path.join(__dirname,'../public/sidebar.js'),'utf8');assert.match(script,/Find expense or transfer/);assert.match(script,/0993 to 3448/);assert.match(script,/Group → Category/);assert.match(script,/qf-expense-group/);assert.match(script,/row\.group&&'Group: '/);assert.match(script,/\/api\/expenses\/quick-find/);assert.match(script,/Ctrl\/Command \+ K/);assert.match(script,/encodeURIComponent\(row\.id\)/);assert.doesNotMatch(script,/qf-results[^\n]*innerHTML/);
+test('shared sidebar exposes one global finder with flexible related-field search and safe local links',()=>{
+  const script=fs.readFileSync(path.join(__dirname,'../public/sidebar.js'),'utf8'),expenses=fs.readFileSync(path.join(__dirname,'../modules/expenses.js'),'utf8');assert.match(script,/Find expense or transfer/);assert.match(script,/0993 to 3448/);assert.match(script,/Exact wording is not required/);assert.match(script,/qf-expense-group/);assert.match(script,/row\.group&&'Group: '/);assert.match(script,/\/api\/expenses\/quick-find/);assert.match(script,/Ctrl\/Command \+ K/);assert.match(script,/encodeURIComponent\(row\.id\)/);assert.doesNotMatch(script,/qf-results[^\n]*innerHTML/);assert.match(expenses,/read:\(\)=>\(\{store:JSON\.parse\(fs\.readFileSync\(EXP_PATH,'utf8'\)\)\}\)/);
 });

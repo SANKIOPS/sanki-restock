@@ -8657,7 +8657,9 @@ const manageTransactionLookupPolicy={
 };
 require('./manage-transactions').create(manageTransactionLookupPolicy).register(router);
 require('./quick-financial-search').create({
-  read:sourceCorrectionPolicy.read,
+  // Global search needs only the expense/transfer store. Do not make this
+  // read-only lookup depend on unrelated salary, card or procurement files.
+  read:()=>({store:JSON.parse(fs.readFileSync(EXP_PATH,'utf8'))}),
   canSearch:req=>canApprove(req)&&access.userCanAccessPath(req.user,'/expenses.html'),
   natures:approvalNatures,
   canPersonal:canManagePersonalAccounting,

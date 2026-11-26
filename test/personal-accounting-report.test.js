@@ -84,8 +84,10 @@ test('Personal report UI keeps the agreed simple labels and inline corrections',
   assert.match(js,/personal-report\/budget/);assert.match(js,/personal-report\/source/);assert.doesNotMatch(js,/personal-report\/loan-allocation/);assert.match(js,/personal-report\/transfer-treatment/);assert.match(js,/Personal portion/);assert.match(js,/Sent to business/);
   assert.doesNotMatch(js,/\['Business-loan personal portion'/,'the loan personal portion must not be shown twice in the overview');assert.match(js,/\['You have to return to business'.*View breakdown/);
   assert.match(js,/\['Expense group','Selected-period spending','This month'/);assert.match(js,/\['Category','Selected-period spending','This month'/);assert.match(js,/showGroup:true/);
-  assert.match(html,/Spending by group and category/);assert.match(html,/Individual spending entries/);assert.match(js,/personalSpendingDetails/);
-  assert.match(js,/newest date first/);assert.match(js,/renderPersonalBudgetGroups/);assert.match(js,/View categories ↓/);assert.match(js,/personal-group-categories/);
+  assert.match(html,/Spending by group and category/);assert.match(html,/Individual spending entries/);
+  assert.match(js,/newest date first/);assert.match(js,/renderPersonalBudgetGroups/);assert.match(js,/View categories ↓/);assert.match(js,/personal-group-categories/);assert.match(js,/personal-category-expenses/);assert.match(js,/View expenses ↓/);assert.doesNotMatch(js,/function personalSpendingDetails/);
+  assert.match(js,/Bill \/ invoice and saved notes/);assert.match(js,/Expense-level payment proofs/);assert.match(js,/Bank \/ payment reference/);assert.match(css,/\.app-entry-table td:last-child/);assert.match(css,/white-space:nowrap/);
+  assert.match(html,/Confirmed permanent money taken by source/);assert.match(js,/renderPersonalMoneyTaken/);for(const source of ['SANKI','SAMAST','Sewak Park'])assert.match(js,new RegExp(source));assert.match(js,/personal-money-source-detail-row/);
   assert.match(html,/Sent to business is calculated only from actual transfers/);assert.doesNotMatch(html,/Oldest available loan money|Unallocated/);
   assert.match(css,/--ivory:#faf7ee/);assert.match(css,/\.personal-source-edit/);
 });
