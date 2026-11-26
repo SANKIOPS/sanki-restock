@@ -6,7 +6,7 @@
 <meta name="robots" content="noindex,nofollow">
 <title>Reports · SANKI</title>
 <link rel="stylesheet" href="/pnl.css">
-<link rel="stylesheet" href="/compact-reports.css?v=20261126-personal-report-v1">
+<link rel="stylesheet" href="/compact-reports.css?v=20261126-personal-report-v2">
 </head>
 <body>
 <main class="wrap">
@@ -46,7 +46,7 @@
 <button type="button" role="tab" id="tab-personal-spending" aria-controls="view-personal-spending" aria-selected="false" tabindex="-1" data-view="personal-spending" hidden>Spending &amp; Budget</button>
 <button type="button" role="tab" id="tab-personal-money" aria-controls="view-personal-money" aria-selected="false" tabindex="-1" data-view="personal-money" hidden>Money Taken &amp; Settle</button>
 <button type="button" role="tab" id="tab-personal-loans" aria-controls="view-personal-loans" aria-selected="false" tabindex="-1" data-view="personal-loans" hidden>Loans &amp; Transfers</button>
-<button type="button" role="tab" id="tab-personal-review" aria-controls="view-personal-review" aria-selected="false" tabindex="-1" data-view="personal-review" hidden>Review Sources</button>
+<button type="button" role="tab" id="tab-personal-review" aria-controls="view-personal-review" aria-selected="false" tabindex="-1" data-view="personal-review" hidden>Review Decisions</button>
 <button type="button" role="tab" id="tab-income" aria-controls="view-income" aria-selected="false" tabindex="-1" data-view="income">Income</button>
 <button type="button" role="tab" id="tab-expenses" aria-controls="view-expenses" aria-selected="false" tabindex="-1" data-view="expenses">Expenses</button>
 <button type="button" role="tab" id="tab-accounts" aria-controls="view-accounts" aria-selected="false" tabindex="-1" data-view="accounts">Accounts</button>
@@ -92,13 +92,14 @@
 </section>
 <section id="view-personal-money" role="tabpanel" aria-labelledby="tab-personal-money" hidden>
 <div class="section-heading"><h2>Money taken and money to settle</h2></div>
-<h3>Money taken permanently</h3><p class="muted section-note">Owner withdrawals and confirmed direct personal use. Nothing here has to be returned.</p>
+<h3>Money confirmed as permanent</h3><p class="muted section-note">Only transfers explicitly confirmed as permanent and direct personal use appear here. A transfer from business is not automatically permanent.</p>
 <div id="personalMoneyTaken" class="panel scroll"></div>
 <div class="personal-settlement-grid"><section><h3>Business has to return to you</h3><div id="personalBusinessOwes" class="panel scroll"></div></section><section><h3>You have to return to business</h3><div id="personalYouOwe" class="panel scroll"></div></section></div>
+<h3>Recorded repayments</h3><p class="muted section-note">These show repayment history. They do not reduce another balance unless the source accounting workflow links them.</p><div id="personalSettlements" class="panel scroll"></div>
 </section>
 <section id="view-personal-loans" role="tabpanel" aria-labelledby="tab-personal-loans" hidden>
 <div class="section-heading"><h2>Loans and their use</h2></div>
-<p class="muted section-note">Oldest available loan money is followed first. Moving it between personal accounts is not use; spending it or sending it to a business is.</p>
+<p class="muted section-note">Only an owner-confirmed split is used. “Unallocated” means the split is not confirmed; it is not cash still available and it is not a bank balance.</p>
 <div id="personalLoans" class="panel scroll"></div>
 <h3>Accounts</h3><div id="personalAccounts" class="panel scroll"></div>
 <h3>Transfers</h3><div id="personalTransfers" class="panel scroll"></div>
@@ -106,6 +107,11 @@
 <section id="view-personal-review" role="tabpanel" aria-labelledby="tab-personal-review" hidden>
 <div class="section-heading"><div><h2>Review funding sources</h2><p id="personalReviewSummary" class="muted"></p></div></div>
 <p class="muted section-note">This changes only the Personal management report. It never changes the bank entry, amount, date or reconciliation.</p>
+<h3>Transfers needing a purpose</h3><p class="muted section-note">Choose whether the money is permanent, temporary, or a repayment. The old owner-withdrawal label alone is not treated as proof.</p>
+<div id="personalTransferReview" class="personal-review-list"></div>
+<h3>Loans needing a confirmed split</h3><p class="muted section-note">Enter totals used for business and personally. The remainder stays “Unallocated”; no FIFO assumption is used.</p>
+<div id="personalLoanReview" class="personal-review-list"></div>
+<h3>Payments needing a funding source</h3>
 <div id="personalSourceReview" class="personal-review-list"></div>
 <h3>Other accounting checks</h3><div id="personalWarnings" class="panel scroll"></div>
 </section>
@@ -215,7 +221,7 @@
 </script>
 <script src="/report-expense-groups.js?v=20261118-expense-groups-v1">
 </script>
-<script src="/compact-reports.js?v=20261126-personal-report-v1">
+<script src="/compact-reports.js?v=20261126-personal-report-v2">
 </script>
 <script src="/sidebar.js">
 </script>

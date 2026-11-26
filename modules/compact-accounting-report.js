@@ -157,7 +157,7 @@ function build(sources,{entity,from,to,today,accounts=[],unit='',viewer=''}){
   const transfers=[];
   for(const r of list(s.transfers).filter(r=>activeTransfer(r)&&inRange(r,from,to))){
     const outgoing=nature(r.fromNature||r.nature)===entity,incoming=nature(r.toNature||r.nature)===entity;if(!outgoing&&!incoming)continue;
-    transfers.push({id:r.id,date:r.date,from:r.fromAccount,to:r.toAccount,fromEntity:nature(r.fromNature||r.nature),toEntity:nature(r.toNature||r.nature),classification:r.classification||'internal_transfer',amount:money(r.amount)});
+    transfers.push({id:r.id,date:r.date,from:r.fromAccount,to:r.toAccount,fromEntity:nature(r.fromNature||r.nature),toEntity:nature(r.toNature||r.nature),classification:r.classification||'internal_transfer',amount:money(r.amount),note:r.note||''});
   }
   const loanRows=loans.catalog(s,to).filter(match).map(r=>({id:r.id,description:r.source,account:r.account,borrowed:r.borrowed,repaid:r.repaid,outstanding:r.outstanding,interestPaid:r.interestPaid}));
   const security=[];
@@ -181,6 +181,8 @@ function build(sources,{entity,from,to,today,accounts=[],unit='',viewer=''}){
     response.basis=response.personal.basis;
     response.note='Personal spending is counted once. Permanent owner withdrawals stay separate from repayable business money. Source reviews affect this management report only; bank evidence, amounts, dates and reconciliations remain unchanged.';
     if(response.personal.review.rows.length)response.warnings.unshift(response.personal.review.rows.length+' personal payment source(s) need review before money taken by entity is complete.');
+    if(response.personal.review.transferRows.length)response.warnings.unshift(response.personal.review.transferRows.length+' cross-entity transfer purpose(s) need confirmation; none were assumed permanent.');
+    if(response.personal.review.loanRows.length)response.warnings.unshift(response.personal.review.loanRows.length+' business loan allocation(s) need an owner-confirmed split; no FIFO suggestion was used as fact.');
   }
   return response;
 }

@@ -188,6 +188,14 @@ function budgetEditor(row,month){
 function sourceEditor(row,sources){
  const form=document.createElement('div');form.className='personal-source-edit';const select=document.createElement('select'),placeholder=text('option','Choose source');placeholder.value='';select.append(placeholder,...sources.map(item=>{const option=text('option',item.label);option.value=item.value;return option;}));select.setAttribute('aria-label','Funding source for '+row.id);const reason=document.createElement('input');reason.placeholder='Short reason';reason.setAttribute('aria-label','Reason for '+row.id);const save=text('button','Save source','primary');save.type='button';save.addEventListener('click',()=>{if(!select.value||reason.value.trim().length<3){reason.setCustomValidity('Choose a source and enter a short reason.');reason.reportValidity();return;}reason.setCustomValidity('');personalPost('/api/expenses/personal-report/source',{movementId:row.id,source:select.value,reason:reason.value.trim()},save);});form.append(select,reason,save);return form;
 }
+function transferTreatmentEditor(row){
+ const form=document.createElement('div');form.className='personal-source-edit';const select=document.createElement('select'),placeholder=text('option','Choose purpose');placeholder.value='';select.append(placeholder,...row.options.map(item=>{const option=text('option',item.label);option.value=item.value;return option;}));select.setAttribute('aria-label','Purpose for '+row.id);const reason=document.createElement('input');reason.placeholder='Reason / evidence';reason.setAttribute('aria-label','Reason for '+row.id);const save=text('button','Confirm','primary');save.type='button';save.addEventListener('click',()=>{if(!select.value||reason.value.trim().length<3){reason.setCustomValidity('Choose a purpose and enter a short reason.');reason.reportValidity();return;}reason.setCustomValidity('');personalPost('/api/expenses/personal-report/transfer-treatment',{transferId:row.id,treatment:select.value,reason:reason.value.trim()},save);});form.append(select,reason,save);return form;
+}
+function loanAllocationEditor(row){
+ const form=document.createElement('div');form.className='personal-loan-edit';const business=document.createElement('input'),personal=document.createElement('input'),reason=document.createElement('input'),save=text('button','Confirm split','primary');
+ for(const [input,label,value]of[[business,'Business use',row.businessUse],[personal,'Personal use',row.personalUse]]){input.type='number';input.min='0';input.max=String(row.borrowed);input.step='.01';input.placeholder=label+' ₹';input.value=value==null?'':value;input.setAttribute('aria-label',label+' for '+row.id);}
+ reason.placeholder='Reason / confirmation';reason.value=row.allocationStatus==='Confirmed'?row.allocationReason:'';reason.setAttribute('aria-label','Allocation reason for '+row.id);save.type='button';save.addEventListener('click',()=>{const businessUse=Number(business.value||0),personalUse=Number(personal.value||0);if(businessUse<0||personalUse<0||businessUse+personalUse>row.borrowed||reason.value.trim().length<3){reason.setCustomValidity('Amounts cannot exceed the loan. Enter a short reason.');reason.reportValidity();return;}reason.setCustomValidity('');personalPost('/api/expenses/personal-report/loan-allocation',{loanId:row.id,businessUse,personalUse,reason:reason.value.trim()},save);});form.append(business,personal,reason,save);return form;
+}
 function renderPersonal(){
  const p=report.personal;if(!p)return;
  $('personalBudgetPeriod').textContent=monthLabel(p.spending.budgetMonth)+' · actual spending from '+p.spending.budgetFrom+' to '+p.spending.budgetTo;
@@ -196,13 +204,17 @@ function renderPersonal(){
  table($('personalMoneyTaken'),['Date','Source','Reference / treatment','Amount'],p.moneyTaken.permanentRows.map(row=>[row.date,row.source===HOTEL?'Sewak Park':row.source,row.id+' · '+(row.description||row.account||'')+' · '+row.treatment,drill(money(row.amount),()=>personalDetails('Money taken permanently',[row]))]),{search:true,label:'Search money taken'});
  table($('personalBusinessOwes'),['Entity','Reason / reference','Amount'],p.settlements.businessOwesYou.map(row=>[row.entity,row.id+' · '+(row.description||row.category),drill(money(row.amount),()=>personalDetails('Business has to return to you',[row]))]),{search:false});
  table($('personalYouOwe'),['Entity','Why','Amount'],p.settlements.youOweBusiness.map(row=>[row.entity,row.reason,money(row.amount)]),{search:false});
- table($('personalLoans'),['Loan / owner','Received','Used for business','Used personally','Still available','Lender balance','Details'],p.loanUsage.map(row=>[row.lender+' · '+row.id+' · '+row.owner,money(row.borrowed),money(row.businessUse),money(row.personalUse),money(row.remaining),money(row.outstanding),drill('View use →',()=>personalDetails('Loan use · '+row.id,row.events))]),{search:true,label:'Search loans'});
+ table($('personalSettlements'),['Date','Entity','Repayment direction','Amount','Note / reason'],p.settlements.recordedSettlements.map(row=>[row.date,row.entity,row.direction,money(row.amount),row.note||row.reason||'No note']),{search:true,label:'Search repayments'});
+ table($('personalLoans'),['Loan / owner','Received','Used for business','Used personally','Unallocated','Lender balance','Allocation status','Edit confirmed split','Details'],p.loanUsage.map(row=>[row.lender+' · '+row.id+' · '+row.owner,money(row.borrowed),row.businessUse==null?'— Not confirmed':money(row.businessUse),row.personalUse==null?'— Not confirmed':money(row.personalUse),money(row.remaining),money(row.outstanding),row.allocationStatus+' · '+row.allocationReason,loanAllocationEditor(row),row.events.length?drill('View confirmed use →',()=>personalDetails('Confirmed loan use · '+row.id,row.events)):'No confirmed use']),{search:true,label:'Search loans'});
  table($('personalAccounts'),['Account','Verification','Actual balance'],p.accounts.map(row=>[row.name+(row.shared?' · shared':''),(row.reconciledThrough?'Verified through '+row.reconciledThrough:'Not bank-verified')+(row.warnings?.length?' · '+row.warnings.join(' '):''),money(row.balance)]),{search:false});
  table($('personalTransfers'),['Date','From → To','Purpose','Amount'],p.transfers.map(row=>[row.date,row.from+' → '+row.to,row.classification.replaceAll('_',' '),money(row.amount)]),{search:true,label:'Search personal transfers'});
- $('personalReviewSummary').textContent=p.review.rows.length+' payments · '+money(p.review.total)+' need a funding source';
+ const reviewCount=p.review.rows.length+p.review.transferRows.length+p.review.loanRows.length;
+ $('personalReviewSummary').textContent=p.review.transferRows.length+' transfers · '+p.review.loanRows.length+' loans · '+p.review.rows.length+' payments need decisions';
+ table($('personalTransferReview'),['Date / reference','Direction','From → To','Saved note','Amount','Choose purpose'],p.review.transferRows.map(row=>[row.date+' · '+row.id,row.direction,row.from+' → '+row.to,row.note||'No saved note',money(row.amount),transferTreatmentEditor(row)]),{search:true,label:'Search transfers needing a purpose'});
+ table($('personalLoanReview'),['Loan','Received','Status','Confirm split'],p.review.loanRows.map(row=>[row.lender+' · '+row.id,money(row.borrowed),row.allocationReason,loanAllocationEditor(row)]),{search:true,label:'Search loans needing allocation'});
  table($('personalSourceReview'),['Date / reference','Account','Category / details','Amount','Choose source'],p.review.rows.map(row=>[row.date+' · '+row.id,row.account,row.category+' · '+(presentation.clean(row.description)||'No details')+' · '+row.suggestion,money(row.amount),sourceEditor(row,p.review.sources)]),{search:true,label:'Search payments needing a source'});
  table($('personalWarnings'),['No.','Accounting check'],report.warnings.map((warning,index)=>[index+1,warning]),{search:true,label:'Search accounting checks'});
- $('tab-personal-review').textContent='Review Sources'+(p.review.rows.length?' ('+p.review.rows.length+')':'');
+ $('tab-personal-review').textContent='Review Decisions'+(reviewCount?' ('+reviewCount+')':'');
 }
 function render(){renderSamast();const r=report,t=r.totals,isHotel=r.unit===HOTEL,samast=r.entity==='SAMAST'?r.samastProfit:null,personal=r.entity==='PERSONAL'&&!isHotel?r.personal:null;setPersonalMode(!!personal);
 $('overviewEntity').textContent=r.displayName||r.entity;
@@ -211,12 +223,12 @@ const taxSummary=(pairs,cls='tax-summary')=>{const host=document.createElement('
 const personalSources=personal?Object.entries(personal.moneyTaken.bySource).map(([source,amount])=>(source===HOTEL?'Sewak Park':source)+' '+money(amount)):[];
 const overview=personal?[
  ['Personal spending',money(personal.spending.total),'—',drill('View spending →',()=>selectView('personal-spending'))],
- ['Money taken permanently',taxSummary([money(personal.moneyTaken.permanentTotal),...(personalSources.length?personalSources:['No confirmed permanent withdrawals'])]),'—',drill('View money taken →',()=>selectView('personal-money'))],
+ ['Money confirmed permanent',taxSummary([money(personal.moneyTaken.permanentTotal),...(personalSources.length?personalSources:['No confirmed permanent withdrawals'])]),'—',drill('View money taken →',()=>selectView('personal-money'))],
  ['SANKI loan used personally',money(personal.moneyTaken.loanPersonalTotal),'—',drill('View loan use →',()=>selectView('personal-loans'))],
  ['Business has to return to you',money(personal.settlements.businessOwesYouTotal),'—',drill('View money to settle →',()=>selectView('personal-money'))],
  ['You have to return to business',money(personal.settlements.youOweBusinessTotal),'—',drill('View money to settle →',()=>selectView('personal-money'))],
  ['Budget over limit',money(personal.spending.overBudget),'—',drill('View budget →',()=>selectView('personal-spending'))],
- ['Funding source review',personal.review.rows.length+' payments · '+money(personal.review.total),'—',drill('Review sources →',()=>selectView('personal-review'))],
+ ['Decisions required',(personal.review.transferRows.length+personal.review.loanRows.length+personal.review.rows.length)+' items','—',drill('Review decisions →',()=>selectView('personal-review'))],
  ['Actual bank & cash money','By account','—',drill('View accounts →',()=>selectView('personal-loans'))]
 ]:samast?[
  samastRow('Agreed base rent','baseDue','View floor charges →'),
@@ -256,7 +268,7 @@ $('obligationSummary').textContent='Loans '+money(r.obligations.loanTotal)+' · 
 $('attentionSummary').textContent='Needs attention · '+r.warnings.length;table($('warnings'),['No.','Item to review'],r.warnings.map((w,i)=>[i+1,w]));
 $('tab-review').textContent='Review'+(r.warnings.length?' ('+r.warnings.length+')':'');
 $('note').textContent=r.note;
-if(personal)renderPersonal();else{for(const id of ['personalBudgets','personalSpendingEntries','personalMoneyTaken','personalBusinessOwes','personalYouOwe','personalLoans','personalAccounts','personalTransfers','personalSourceReview','personalWarnings'])$(id).replaceChildren();$('tab-personal-review').textContent='Review Sources';}
+if(personal)renderPersonal();else{for(const id of ['personalBudgets','personalSpendingEntries','personalMoneyTaken','personalBusinessOwes','personalYouOwe','personalSettlements','personalLoans','personalAccounts','personalTransfers','personalTransferReview','personalLoanReview','personalSourceReview','personalWarnings'])$(id).replaceChildren();$('tab-personal-review').textContent='Review Decisions';}
 for(const id of ['accounts','transfers','otherMovements','obligations','paidFrom','warnings']){const host=$(id),headers=[...host.querySelectorAll('th')].map(x=>x.textContent);host.querySelectorAll('tbody tr').forEach(row=>{row.tabIndex=0;row.classList.add('clickable-row');row.setAttribute('role','button');row.setAttribute('aria-label','View details: '+row.cells[0].textContent);const open=()=>{table($('detailRows'),['Field','Details'],[...row.cells].map((c,i)=>[headers[i],c.textContent]));
 $('detailTitle').textContent=row.cells[0].textContent;
 $('detail').showModal();};row.addEventListener('click',open);row.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open();}});});}
@@ -269,7 +281,7 @@ $('entity').value=selected;render();history.replaceState(null,'','?'+p);
 $('status').textContent=(data.displayName?data.displayName+' · ':'')+data.from+' to '+data.to+(data.from==='2026-08-22'?' · August is a partial month':'');}catch(error){if(current!==generation)return;report=null;
 $('personalBudgetPeriod').textContent='';
 $('personalReviewSummary').textContent='';
-for(const id of ['personalBudgets','personalSpendingEntries','personalMoneyTaken','personalBusinessOwes','personalYouOwe','personalLoans','personalAccounts','personalTransfers','personalSourceReview','personalWarnings'])$(id).replaceChildren();
+for(const id of ['personalBudgets','personalSpendingEntries','personalMoneyTaken','personalBusinessOwes','personalYouOwe','personalSettlements','personalLoans','personalAccounts','personalTransfers','personalTransferReview','personalLoanReview','personalSourceReview','personalWarnings'])$(id).replaceChildren();
 setPersonalMode(false);
 $('costReviewNotice').hidden=true;
 $('operatingCategorySection').hidden=true;

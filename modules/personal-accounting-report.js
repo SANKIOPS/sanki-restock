@@ -7,9 +7,15 @@ const refunds=require('./expense-refunds');
 const hotel=require('./sewak-park-reporting');
 
 const KNOWN_SANKI_LOANS=new Set(['REC-00200','REC-00201']);
+// This is an owner-confirmed management allocation, not a change to the loan,
+// bank receipt or reconciliation. Future corrections are saved in
+// personalReporting.loanAllocations and override this initial confirmation.
+const KNOWN_LOAN_ALLOCATIONS=new Map([['REC-00200',{businessUse:500000,personalUse:500000,reason:'Owner confirmed: ₹5,00,000 used for SANKI and ₹5,00,000 used personally.'}]]);
 const SHARED_SOURCE_ACCOUNTS=new Set(['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992']);
 const SANKI_ACCOUNTS=new Set(['Axis Bank 3448','Tiana 0425','Tiana Traders IndusInd 0437','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash','Services']);
 const VALID_SOURCES=new Set(['PERSONAL','SANKI','SAMAST',hotel.UNIT]);
+const INBOUND_TRANSFER_TREATMENTS=new Set(['permanent_withdrawal','business_repayment','temporary_due_to_business']);
+const OUTBOUND_TRANSFER_TREATMENTS=new Set(['permanent_contribution','personal_repayment','temporary_due_from_business']);
 const list=value=>Array.isArray(value)?value:Object.values(value||{});
 const nature=value=>String(value||'').trim().toUpperCase();
 const money=value=>Math.round(Number(value||0)*100)/100;
@@ -32,6 +38,19 @@ function sourceChoice(store,value){
   }
   return '';
 }
+function confirmedLoanAllocation(store,loan){
+  const saved=state(store).loanAllocations?.[loan.id],candidate=saved||KNOWN_LOAN_ALLOCATIONS.get(loan.id);
+  if(!candidate)return null;
+  const businessUse=money(candidate.businessUse),personalUse=money(candidate.personalUse),borrowed=money(loan.borrowed==null?loan.amount:loan.borrowed);
+  if(businessUse<0||personalUse<0||money(businessUse+personalUse)>borrowed)return null;
+  return{businessUse,personalUse,reason:String(candidate.reason||'Owner confirmed allocation'),by:candidate.by||'',at:candidate.at||'',source:saved?'saved':'owner_confirmation'};
+}
+function transferTreatment(store,transfer){
+  const record=state(store).transferTreatments?.[transfer.id];
+  if(record&&[...INBOUND_TRANSFER_TREATMENTS,...OUTBOUND_TRANSFER_TREATMENTS].includes(record.treatment))return record;
+  if(transfer.classification==='inter_entity_loan')return{treatment:transfer.toEntity==='PERSONAL'?'temporary_due_to_business':'temporary_due_from_business',reason:'Saved as an inter-entity loan',source:'accounting_record'};
+  return null;
+}
 function paymentRows(store,to){
   const rows=[];
   for(const expense of list(store.expenses).filter(row=>active(row)&&nature(row.nature)==='PERSONAL')){
@@ -44,14 +63,13 @@ function paymentRows(store,to){
 function allocateLoanUsage(store,{from,to}){
   const catalog=loans.catalog(store,to).filter(loan=>loanOwner(store,loan)!=='PERSONAL');
   const reports=new Map(catalog.map(loan=>[loan.id,{id:loan.id,date:loan.date,lender:loan.source||'Lender',account:loan.account,owner:loanOwner(store,loan),borrowed:money(loan.borrowed),outstanding:money(loan.outstanding),businessUse:0,personalUse:0,periodBusinessUse:0,periodPersonalUse:0,remaining:0,events:[]} ]));
-  const lots=new Map(),allocations=new Map(),overrides=state(store).movementSources||{};
+  const lots=new Map(),overrides=state(store).movementSources||{};
   const addLot=(account,loanId,amount)=>{if(!(amount>0))return;if(!lots.has(account))lots.set(account,[]);lots.get(account).push({loanId,amount:money(amount)});};
   const record=(lot,event,amount,bucket)=>{
     const report=reports.get(lot.loanId);if(!report)return;
     report[bucket]=money(report[bucket]+amount);
     if(inRange(event.date,from,to))report['period'+bucket[0].toUpperCase()+bucket.slice(1)]=money(report['period'+bucket[0].toUpperCase()+bucket.slice(1)]+amount);
     report.events.push({id:event.id,date:event.date,kind:event.kind,description:event.description,account:event.account,amount:money(amount),use:bucket==='personalUse'?'Used personally':'Used for business'});
-    if(bucket==='personalUse')allocations.set(event.id,{loanId:lot.loanId,amount:money((allocations.get(event.id)?.amount||0)+amount)});
   };
   const take=(account,amount,event,bucket,destination='',specificLoan='')=>{
     let left=money(amount),source=lots.get(account)||[];
@@ -80,7 +98,17 @@ function allocateLoanUsage(store,{from,to}){
     take(event.account,event.amount,event,'personalUse','',saved.startsWith('LOAN:')?saved.slice(5):'');
   }
   for(const accountLots of lots.values())for(const lot of accountLots){const report=reports.get(lot.loanId);if(report)report.remaining=money(report.remaining+lot.amount);}
-  return{loans:[...reports.values()].sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id)),allocations};
+  for(const report of reports.values()){
+    report.suggestedBusinessUse=report.businessUse;report.suggestedPersonalUse=report.personalUse;report.suggestedUnallocated=report.remaining;report.suggestedEvents=report.events;
+    const confirmed=confirmedLoanAllocation(store,report);
+    if(confirmed){
+      report.businessUse=confirmed.businessUse;report.personalUse=confirmed.personalUse;report.remaining=money(report.borrowed-confirmed.businessUse-confirmed.personalUse);report.allocationStatus='Confirmed';report.allocationReason=confirmed.reason;
+      report.events=[...(confirmed.businessUse?[{id:report.id,date:report.date,kind:'confirmed_allocation',description:confirmed.reason,account:report.account,amount:confirmed.businessUse,use:'Confirmed business use'}]:[]),...(confirmed.personalUse?[{id:report.id,date:report.date,kind:'confirmed_allocation',description:confirmed.reason,account:report.account,amount:confirmed.personalUse,use:'Confirmed personal use'}]:[])];
+    }else{
+      report.businessUse=null;report.personalUse=null;report.remaining=report.borrowed;report.allocationStatus='Needs allocation';report.allocationReason='No owner-confirmed split. Automatic bank-flow suggestions are not used as accounting facts.';report.events=[];
+    }
+  }
+  return{loans:[...reports.values()].sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id))};
 }
 
 function build(store,{from,to,viewer='',spendingRows=[],accounts=[],transfers=[]}){
@@ -93,11 +121,17 @@ function build(store,{from,to,viewer='',spendingRows=[],accounts=[],transfers=[]
   const savedBudgets=settings.budgets?.[budgetMonth]||{},categories=[...new Set([...periodActual.keys(),...Object.keys(savedBudgets)])].sort((a,b)=>a.localeCompare(b));
   const budgets=categories.map(category=>{const actual=money(monthActual.get(category)||0),budget=Object.prototype.hasOwnProperty.call(savedBudgets,category)?money(savedBudgets[category]):null,remaining=budget==null?null:money(budget-actual);return{category,periodActual:money(periodActual.get(category)||0),actual,budget,remaining,status:budget==null?'Set budget':remaining<0?'Over budget':'Within budget'};});
 
-  const permanentRows=[],review=[];
-  for(const transfer of transfers.filter(row=>row.classification==='owner_withdrawal'&&row.toEntity==='PERSONAL'))permanentRows.push({id:transfer.id,date:transfer.date,source:transfer.fromEntity,label:'Taken permanently from '+transfer.fromEntity,account:transfer.from+' → '+transfer.to,amount:money(transfer.amount),treatment:'Permanent — nothing to return'});
+  const permanentRows=[],review=[],transferReview=[],transferSettlements=[],transferDueToBusiness={},transferDueFromBusiness={};
+  for(const transfer of transfers.filter(row=>(row.toEntity==='PERSONAL')!==(row.fromEntity==='PERSONAL'))){
+    const inbound=transfer.toEntity==='PERSONAL',business=inbound?transfer.fromEntity:transfer.toEntity,decision=transferTreatment(store,transfer);
+    if(!decision){transferReview.push({...transfer,direction:inbound?'Business to personal':'Personal to business',business,note:transfer.note||'',options:inbound?[{value:'permanent_withdrawal',label:'Permanent personal withdrawal — nothing to return'},{value:'business_repayment',label:'Business repaid money it owed you'},{value:'temporary_due_to_business',label:'Temporary business money — you must return it'}]:[{value:'permanent_contribution',label:'Permanent contribution to business — nothing to return'},{value:'personal_repayment',label:'You repaid money owed to business'},{value:'temporary_due_from_business',label:'Temporary personal money — business must return it'}]});continue;}
+    if(decision.treatment==='permanent_withdrawal')permanentRows.push({id:transfer.id,date:transfer.date,source:business,label:'Taken permanently from '+business,account:transfer.from+' → '+transfer.to,description:transfer.note||'',amount:money(transfer.amount),treatment:'Confirmed permanent — nothing to return'});
+    if(decision.treatment==='temporary_due_to_business')transferDueToBusiness[business]=money((transferDueToBusiness[business]||0)+transfer.amount);
+    if(decision.treatment==='temporary_due_from_business')transferDueFromBusiness[business]=money((transferDueFromBusiness[business]||0)+transfer.amount);
+    if(['business_repayment','personal_repayment'].includes(decision.treatment))transferSettlements.push({id:transfer.id,date:transfer.date,entity:business,direction:decision.treatment==='business_repayment'?'Business repaid you':'You repaid business',amount:money(transfer.amount),note:transfer.note||'',reason:decision.reason||''});
+  }
   for(const row of spending){
-    const payment=paymentByKey.get(row.id),expense=payment&&payment.expense,saved=sourceChoice(store,movementSources[row.id]?.source),loanAllocation=loanUsage.allocations.get(row.id);
-    if(loanAllocation)continue;
+    const payment=paymentByKey.get(row.id),expense=payment&&payment.expense,saved=sourceChoice(store,movementSources[row.id]?.source);
     let source=saved;
     if(!source&&expense&&hotel.isHotelPersonalUse(expense))source=hotel.UNIT;
     if(!source&&payment?.payment?.crossEntityCompanyPayment&&SANKI_ACCOUNTS.has(payment.account))source='SANKI';
@@ -110,25 +144,21 @@ function build(store,{from,to,viewer='',spendingRows=[],accounts=[],transfers=[]
   for(const expense of list(store.expenses).filter(row=>active(row)&&['SANKI','SAMAST'].includes(nature(row.nature))&&String(row.date||'')<=to&&claimant(row)===you)){
     const position=refunds.reimbursementPosition(store,expense);if(position.pending>0)owesYou.push({id:expense.id,date:expense.date,entity:nature(expense.nature),category:expense.ledger||expense.category||'',description:expense.particulars||expense.vendor||'',amount:money(position.pending)});
   }
-  const interEntity={};
-  for(const row of transfers.filter(item=>item.classification==='inter_entity_loan')){
-    if(row.toEntity==='PERSONAL'&&row.fromEntity!=='PERSONAL')interEntity[row.fromEntity]=money((interEntity[row.fromEntity]||0)+row.amount);
-    if(row.fromEntity==='PERSONAL'&&row.toEntity!=='PERSONAL')interEntity[row.toEntity]=money((interEntity[row.toEntity]||0)-row.amount);
-  }
-  const oweRows=Object.entries(interEntity).filter(([,amount])=>amount>0).map(([entity,amount])=>({entity,reason:'Temporary money received',amount:money(amount)}));
-  const loanPersonalByOwner={};for(const loan of loanUsage.loans)loanPersonalByOwner[loan.owner]=money((loanPersonalByOwner[loan.owner]||0)+loan.personalUse);
+  for(const [entity,amount] of Object.entries(transferDueFromBusiness))if(amount>0)owesYou.push({id:'TRANSFER-DUE-'+entity,date:'',entity,category:'Temporary transfer',description:'Temporary personal money sent to business',amount});
+  const oweRows=Object.entries(transferDueToBusiness).filter(([,amount])=>amount>0).map(([entity,amount])=>({entity,reason:'Temporary business money received',amount:money(amount)}));
+  const loanPersonalByOwner={};for(const loan of loanUsage.loans)loanPersonalByOwner[loan.owner]=money((loanPersonalByOwner[loan.owner]||0)+Number(loan.personalUse||0));
   for(const [entity,amount] of Object.entries(loanPersonalByOwner))if(amount>0)oweRows.push({entity,reason:'Business loan used personally',amount});
 
   const reviewSources=[{value:'PERSONAL',label:'Own personal money'},{value:'SANKI',label:'Taken permanently from SANKI'},{value:'SAMAST',label:'Taken permanently from SAMAST'},{value:hotel.UNIT,label:'Personal use of Sewak Park money'},...loanUsage.loans.map(loan=>({value:'LOAN:'+loan.id,label:loan.owner+' loan · '+loan.lender+' · '+loan.id}))];
   const total=array=>money(array.reduce((sum,row)=>sum+Number(row.amount||0),0));
   return{
-    basis:'Personal spending is counted once. Permanent money taken from an entity is shown separately. Business-loan money used personally is repayable to that business, while ordinary owner withdrawals are not.',
+    basis:'Personal spending is counted once. A business-to-personal transfer is never assumed permanent: its purpose must be confirmed. Loan use comes only from an owner-confirmed split; unallocated loan money is not a bank balance.',
     spending:{total:money(spending.reduce((sum,row)=>sum+Number(row.amount||0),0)),entries:spending,budgetMonth,budgetFrom:monthFrom,budgetTo:to,budgets,budgetTotal:money(budgets.reduce((sum,row)=>sum+Number(row.budget||0),0)),budgetActual:money(budgets.reduce((sum,row)=>sum+Number(row.actual||0),0)),overBudget:money(budgets.reduce((sum,row)=>sum+Math.max(0,-Number(row.remaining||0)),0))},
-    moneyTaken:{permanentRows,bySource:takenBySource,permanentTotal:total(permanentRows),loanPersonalTotal:money(loanUsage.loans.reduce((sum,row)=>sum+row.personalUse,0))},
-    settlements:{businessOwesYou:owesYou,businessOwesYouTotal:total(owesYou),youOweBusiness:oweRows,youOweBusinessTotal:total(oweRows)},
+    moneyTaken:{permanentRows,bySource:takenBySource,permanentTotal:total(permanentRows),loanPersonalTotal:money(loanUsage.loans.reduce((sum,row)=>sum+Number(row.personalUse||0),0))},
+    settlements:{businessOwesYou:owesYou,businessOwesYouTotal:total(owesYou),youOweBusiness:oweRows,youOweBusinessTotal:total(oweRows),recordedSettlements:transferSettlements},
     loanUsage:loanUsage.loans,
     accounts,transfers,
-    review:{rows:review,sources:reviewSources,total:money(review.reduce((sum,row)=>sum+row.amount,0))}
+    review:{rows:review,sources:reviewSources,total:money(review.reduce((sum,row)=>sum+row.amount,0)),transferRows:transferReview,loanRows:loanUsage.loans.filter(row=>row.allocationStatus!=='Confirmed')}
   };
 }
 
@@ -137,7 +167,9 @@ function ensureState(store){
   store.personalReporting.budgets=store.personalReporting.budgets&&typeof store.personalReporting.budgets==='object'?store.personalReporting.budgets:{};
   store.personalReporting.movementSources=store.personalReporting.movementSources&&typeof store.personalReporting.movementSources==='object'?store.personalReporting.movementSources:{};
   store.personalReporting.loanOwners=store.personalReporting.loanOwners&&typeof store.personalReporting.loanOwners==='object'?store.personalReporting.loanOwners:{};
+  store.personalReporting.loanAllocations=store.personalReporting.loanAllocations&&typeof store.personalReporting.loanAllocations==='object'?store.personalReporting.loanAllocations:{};
+  store.personalReporting.transferTreatments=store.personalReporting.transferTreatments&&typeof store.personalReporting.transferTreatments==='object'?store.personalReporting.transferTreatments:{};
   return store.personalReporting;
 }
 
-module.exports={build,ensureState,loanOwner,sourceChoice,movementKey,KNOWN_SANKI_LOANS,VALID_SOURCES};
+module.exports={build,ensureState,loanOwner,sourceChoice,confirmedLoanAllocation,transferTreatment,movementKey,KNOWN_SANKI_LOANS,KNOWN_LOAN_ALLOCATIONS,VALID_SOURCES,INBOUND_TRANSFER_TREATMENTS,OUTBOUND_TRANSFER_TREATMENTS};

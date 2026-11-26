@@ -8657,6 +8657,27 @@ router.post('/api/expenses/personal-report/loan-owner',(req,res)=>{
   audit(s,req,'PERSONAL_REPORT_LOAN_OWNER_UPDATED','loan',loanId,{nature:loan.nature,account:loan.account,before,after,note:reason});saveStore(s);
   res.json({success:true,loanId,owner});
 });
+router.post('/api/expenses/personal-report/loan-allocation',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can confirm how a business loan was used.'});
+  const s=loadStore(),b=req.body||{},loanId=String(b.loanId||'').trim(),businessUse=Number(b.businessUse),personalUse=Number(b.personalUse),reason=String(b.reason||'').trim(),loan=(s.receipts||[]).find(row=>row.id===loanId&&expenseLoans.isLoan(row)&&!row.accountingExcluded&&row.status!=='voided');
+  if(!loan)return res.status(404).json({success:false,error:'Active loan not found.'});
+  if(!Number.isFinite(businessUse)||!Number.isFinite(personalUse)||businessUse<0||personalUse<0||roundMoney(businessUse+personalUse)>roundMoney(loan.amount)||reason.length<3)return res.status(400).json({success:false,error:'Enter confirmed business and personal use within the loan amount, with a short reason.'});
+  const personal=require('./personal-accounting-report');if(personal.loanOwner(s,loan)==='PERSONAL')return res.status(400).json({success:false,error:'A Personal-owned loan does not create money due to a business.'});
+  const settings=personal.ensureState(s),before=settings.loanAllocations[loanId]||personal.confirmedLoanAllocation(s,loan),after={businessUse:roundMoney(businessUse),personalUse:roundMoney(personalUse),reason,by:req.user.username,at:new Date().toISOString()};settings.loanAllocations[loanId]=after;
+  audit(s,req,'PERSONAL_REPORT_LOAN_ALLOCATION_CONFIRMED','loan',loanId,{nature:loan.nature,account:loan.account,before,after,note:'Management allocation only; the loan and bank receipt were not changed. '+reason});saveStore(s);
+  res.json({success:true,loanId,allocation:after,unallocated:roundMoney(loan.amount-businessUse-personalUse)});
+});
+router.post('/api/expenses/personal-report/transfer-treatment',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can confirm whether cross-entity money must be returned.'});
+  const s=loadStore(),b=req.body||{},transferId=String(b.transferId||'').trim(),treatment=String(b.treatment||'').trim(),reason=String(b.reason||'').trim(),transfer=(s.transfers||[]).find(row=>row.id===transferId&&!row.accountingExcluded&&row.status!=='voided');
+  if(!transfer)return res.status(404).json({success:false,error:'Active transfer not found.'});
+  const from=normalizedNature(transfer.fromNature||transfer.nature),to=normalizedNature(transfer.toNature||transfer.nature),inbound=to==='PERSONAL'&&from!=='PERSONAL',outbound=from==='PERSONAL'&&to!=='PERSONAL',personal=require('./personal-accounting-report');
+  if(!inbound&&!outbound)return res.status(400).json({success:false,error:'Choose a transfer between Personal and a business entity.'});
+  if(!(inbound?personal.INBOUND_TRANSFER_TREATMENTS:personal.OUTBOUND_TRANSFER_TREATMENTS).has(treatment)||reason.length<3)return res.status(400).json({success:false,error:'Choose what this transfer means and enter a short reason.'});
+  const settings=personal.ensureState(s),before=settings.transferTreatments[transferId]||null,after={treatment,reason,by:req.user.username,at:new Date().toISOString()};settings.transferTreatments[transferId]=after;
+  audit(s,req,'PERSONAL_REPORT_TRANSFER_TREATMENT_CONFIRMED','transfer',transferId,{nature:'PERSONAL',account:inbound?transfer.toAccount:transfer.fromAccount,before,after,note:'Management treatment only; the transfer and reconciliations were not changed. '+reason});saveStore(s);
+  res.json({success:true,transferId,treatment:after});
+});
 router.get('/api/expenses/compact-report',(req,res)=>{
   try{
     const allowed=approvalNatures(req),entity=String(req.query.entity||'SANKI'),requestedUnit=String(req.query.unit||'').trim(),unit=hotelReporting.normalizeReportingUnit(requestedUnit);
