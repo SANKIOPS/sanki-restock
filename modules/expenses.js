@@ -59,6 +59,7 @@ function gokwikOrderList(){try{return Object.values(JSON.parse(fs.readFileSync(O
 const { registerGoKwikReports } = require('./gokwik-reports-routes');
 const expenseRefunds = require('./expense-refunds');
 const expenseLoans = require('./expense-loans');
+const expenseProofGaps = require('./expense-proof-gaps');
 const expenseRefundRoutes = require('./expense-refunds-routes');
 const { expenseFinancialLock, reconciliationEvidence:expenseReconciliationEvidence } = require('./expense-financial-lock');
 const bankAmountAuthority = require('./bank-amount-authority');
@@ -4098,6 +4099,35 @@ router.get('/api/expenses/list', (req, res) => {
   const blockedRefs=unpayBlockedReferences(s);
   list=list.map(e=>decoratedEditableExpense(s,req,e,blockedRefs));
   res.json({ success: true, expenses: list, totals, totalCount, hasMore: totalCount > list.length });
+});
+
+// One compact queue for documentary evidence that can be attached later.
+// This never changes money, dates, accounts, categories or reconciliation.
+router.get('/api/expenses/missing-proofs',(req,res)=>{
+  if(!canApprove(req))return res.status(403).json({success:false,error:'Only accounting, Admin or Owner can review missing proofs.'});
+  const s=loadStore(),nature=req.query.nature?normalizedNature(req.query.nature):'',from=String(req.query.from||''),to=String(req.query.to||''),search=String(req.query.search||'').trim().toLowerCase();
+  if(nature&&!approvalNatures(req).includes(nature))return res.status(403).json({success:false,error:'You cannot view this accounting entity.'});
+  const rows=Object.values(s.expenses||{}).filter(expense=>{
+    if(!canViewExpense(req,expense)||nature&&normalizedNature(expense.nature)!==nature)return false;
+    if(from&&String(expense.date||'')<from||to&&String(expense.date||'')>to)return false;
+    if(search&&searchRank(expenseSearchFields(expense),search)===99)return false;
+    return true;
+  }).map(expenseProofGaps.missingProofRow).filter(Boolean).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)));
+  res.json({success:true,rows,count:rows.length,gapCount:rows.reduce((sum,row)=>sum+row.gaps.length,0),amount:roundMoney(rows.reduce((sum,row)=>sum+num(row.amount),0))});
+});
+
+router.post('/api/expenses/:id/proofs',(req,res)=>{
+  if(!canApprove(req))return res.status(403).json({success:false,error:'Only accounting, Admin or Owner can attach proof to an existing expense.'});
+  const s=loadStore(),expense=(s.expenses||{})[String(req.params.id||'')];
+  if(!expense)return res.status(404).json({success:false,error:'Expense not found.'});
+  if(!canViewExpense(req,expense)||!canApproveExpenseNature(req,expense))return res.status(403).json({success:false,error:'You cannot update proof for this accounting entity.'});
+  const body=req.body||{},kind=String(body.kind||'').trim().toLowerCase(),paymentId=String(body.paymentId||'').trim(),proofs=expenseProofGaps.proofs(body.proofs),pending=expenseProofGaps.proofGaps(expense),selected=pending.find(gap=>gap.kind===kind&&String(gap.paymentId||'')===paymentId);
+  if(!selected)return res.status(409).json({success:false,error:'This proof is no longer missing. Refresh the queue; nothing was changed.'});
+  if(!proofs.length||proofs.some(url=>{const name=path.basename(String(url||''));return url!=='/api/expenses/photo/'+name||!name||!fs.existsSync(path.join(PROOF_DIR,name));}))return res.status(400).json({success:false,error:'One or more uploaded proof files are unavailable. Upload them again; nothing was attached.'});
+  let result;try{result=expenseProofGaps.attachProofs(expense,body,req.user.username,new Date().toISOString());}catch(error){return res.status(400).json({success:false,error:error.message});}
+  audit(s,req,'PROOF_ATTACHED','expense',expense.id,{nature:expense.nature,before:result.before,after:result.after,proofKind:kind,paymentId,proofs:result.added,note:String(body.note||'').trim()||'Proof uploaded later from Missing Proofs'});
+  saveStore(s);
+  res.json({success:true,row:expenseProofGaps.missingProofRow(expense),remaining:result.after.length,added:result.added.length});
 });
 
 // Approved vendor bills that still require a full or partial company payment.

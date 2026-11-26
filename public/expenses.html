@@ -247,6 +247,7 @@
       <div class="tab-group-panels">
         <section class="tab-group-panel" id="tabGroupAccounting" data-tab-group="accounting" aria-label="Accounting pages">
           <button data-t="list">All expenses</button>
+          <button data-t="proofs" id="missingProofsTab" style="display:none">Missing proofs</button>
           <button data-t="pending" id="pendingTab" style="display:none">Payables</button>
           <button data-t="receivables" id="receivablesTab" style="display:none">Receivables</button>
           <button data-t="spending" id="spendingTab" style="display:none">Spending dashboard</button>
@@ -693,7 +694,7 @@
     var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:1,maximumFractionDigits:2}); };
     var fmtBank = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
-    var cfg = null, tab = 'log', openTabGroup = '', payId = null, payUrls = [], payMode = 'vendor', payVendorCreditAvailable = 0, payRefundCredits=[], payRequestId='', paySubmitting=false, payCandidatesReady=false, payOpenRevision=0, historicalReimburseIds=[], approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', bankNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, spendingView='expenses', missingBillOnly=false, ccData=null, ccStatements=[], ccReviewId='', bankReconForm=null, vendorManageState=null, listRequestSeq=0;
+    var cfg = null, tab = 'log', openTabGroup = '', payId = null, payUrls = [], payMode = 'vendor', payVendorCreditAvailable = 0, payRefundCredits=[], payRequestId='', paySubmitting=false, payCandidatesReady=false, payOpenRevision=0, historicalReimburseIds=[], approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, missingProofRows = {}, selectedNature = 'SANKI', bankNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, spendingView='expenses', missingBillOnly=false, ccData=null, ccStatements=[], ccReviewId='', bankReconForm=null, vendorManageState=null, listRequestSeq=0, missingProofRequestSeq=0;
     function updatePaytmChargeSplit(){if(!bankReconForm||el('brKind').value!=='paytm')return;var row=bankReconRow(bankReconForm.rowId),net=Number(row&&row.bank&&row.bank.credit||0),gross=Number(el('brGross').value||0),hidden=Number(el('brHiddenCharge').value||0);el('brPaytmNet').value=net;el('brPaytmCharge').value=Math.max(0,Number((gross-net-hidden).toFixed(2)));saveBankReconForm();}
     el('brHiddenCharge').addEventListener('input',updatePaytmChargeSplit);el('brGross').addEventListener('input',updatePaytmChargeSplit);el('brPaytmCharge').addEventListener('input',saveBankReconForm);el('brChargeCategory').addEventListener('change',saveBankReconForm);
 
@@ -790,6 +791,7 @@
       setMsg('');
       if(tab==='log') return renderLog();
       if(tab==='list') return renderList();
+      if(tab==='proofs') return renderMissingProofs();
       if(tab==='pending') return renderPendingPayments();
       if(tab==='receivables') return renderReceivables();
       if(tab==='spending') return renderSpendingDashboard();
@@ -1307,6 +1309,55 @@
     }
     window.filterExpenseSummary=function(status){missingBillOnly=false;el('lf_status').value=status;loadList();};
     window.filterMissingBills=function(){missingBillOnly=true;el('lf_status').value='';loadList();};
+
+    // ── MISSING PROOFS ──
+    // Documentary evidence may be added later without reopening or changing
+    // the accounting transaction. Bank-linked payments are already evidence.
+    function renderMissingProofs(){
+      el('panel').innerHTML='<div class="card"><h2 style="margin-top:0">Missing proofs</h2><p class="sub">Shows exactly which bill, payment or reimbursement proof is missing. Uploading here only adds evidence and an audit entry; it does not change the amount, date, account, category or reconciliation.</p><div class="filters" id="proofFilters"></div><div class="stats" id="proofStats"></div><div id="proofQueue" class="muted">Loading…</div></div>';
+      el('proofFilters').innerHTML='<div class="fld"><label>Entity</label><select id="pf_nature"><option value="">All permitted entities</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From (optional)</label><input type="date" id="pf_from"></div><div class="fld"><label>To (optional)</label><input type="date" id="pf_to"></div><div class="fld"><label>Search</label><input id="pf_search" placeholder="Expense, vendor, category or details"></div><button type="button" class="btn mini green" id="pf_go">Refresh</button>';
+      el('pf_go').addEventListener('click',loadMissingProofs);
+      el('pf_nature').addEventListener('change',loadMissingProofs);
+      el('pf_search').addEventListener('keydown',function(event){if(event.key==='Enter')loadMissingProofs();});
+      loadMissingProofs();
+    }
+    function missingProofGap(row,gap){
+      var context=[gap.date,gap.account,gap.amount?fmt(gap.amount):''].filter(Boolean).join(' · ');
+      return '<div class="payment-entry"><span><b>'+esc(gap.label)+'</b>'+(context?'<br><span class="muted">'+esc(context)+'</span>':'')+'</span><label class="btn mini green">Upload proof<input type="file" accept="image/*" multiple hidden data-missing-proof="1" data-expense="'+esc(row.id)+'" data-kind="'+esc(gap.kind)+'" data-payment="'+esc(gap.paymentId||'')+'"></label></div>';
+    }
+    function missingProofCard(row,index){
+      var existing=proofGallery(row.billPhotos||[],'Bill')+proofGallery(row.paymentProofs||[],'Payment');
+      return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date"><b>#'+index+'</b> · '+esc(row.date)+' · '+esc(row.id)+' · '+esc(row.nature)+'</div><span class="badge b-'+esc(row.status)+'">'+esc(row.status||'recorded')+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(row.vendor||row.particulars||'Expense')+'<div class="claim-vendor">'+esc(row.particulars||'')+' · '+esc(row.category||'Uncategorised')+'</div></div><div class="claim-amount">'+fmt(row.amount)+'</div></div></summary><div class="claim-detail"><div class="payment-history">'+row.gaps.map(function(gap){return missingProofGap(row,gap);}).join('')+'</div>'+(existing?'<div class="claim-proofs"><b>Proofs already on this expense</b><br>'+existing+'</div>':'')+'<div class="hint">The financial entry remains finalised. Only the selected missing proof is appended.</div></div></details>';
+    }
+    function bindMissingProofUploads(){
+      Array.prototype.forEach.call(document.querySelectorAll('input[data-missing-proof]'),function(input){
+        input.addEventListener('change',function(){uploadMissingProof(input);});
+      });
+    }
+    function loadMissingProofs(){
+      var requestSeq=++missingProofRequestSeq,host=el('proofQueue');if(!host)return;
+      host.innerHTML='<span class="muted">Checking expenses…</span>';
+      var q='?nature='+encodeURIComponent(el('pf_nature').value)+'&from='+encodeURIComponent(el('pf_from').value)+'&to='+encodeURIComponent(el('pf_to').value)+'&search='+encodeURIComponent(el('pf_search').value);
+      api('/api/expenses/missing-proofs'+q,{cache:'no-store'}).then(function(data){
+        if(requestSeq!==missingProofRequestSeq||!el('proofQueue'))return;
+        if(!data.success){el('proofStats').innerHTML='';host.innerHTML='<span class="muted">'+esc(data.error||'Could not load missing proofs.')+'</span>';return;}
+        missingProofRows={};(data.rows||[]).forEach(function(row){missingProofRows[row.id]=row;});
+        var tabButton=el('missingProofsTab');if(tabButton)tabButton.textContent='Missing proofs'+(data.gapCount?' ('+data.gapCount+')':'');
+        el('proofStats').innerHTML='<div class="stat"><div class="k">Expenses needing proof</div><div class="v">'+Number(data.count||0)+'</div></div><div class="stat"><div class="k">Missing proof items</div><div class="v '+(data.gapCount?'neg':'')+'">'+Number(data.gapCount||0)+'</div></div>';
+        host.innerHTML=(data.rows||[]).length?'<div class="claim-list">'+data.rows.map(missingProofCard).join('')+'</div>':'<div class="msg ok" style="display:block">No proofs are missing for this selection.</div>';
+        bindMissingProofUploads();
+      });
+    }
+    function uploadMissingProof(input){
+      var row=missingProofRows[input.dataset.expense],files=input.files;if(!row||!files||!files.length)return;
+      input.disabled=true;setMsg('Uploading proof for '+row.id+'…',true);
+      uploadFiles(files,row.nature).then(function(urls){
+        return api('/api/expenses/'+encodeURIComponent(row.id)+'/proofs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:input.dataset.kind,paymentId:input.dataset.payment||'',proofs:urls,note:'Uploaded later from Missing Proofs'})});
+      }).then(function(data){
+        if(!data.success)throw new Error(data.error||'Could not attach proof.');
+        setMsg('Proof added to '+row.id+'. The accounting transaction was not changed.',true);loadMissingProofs();
+      }).catch(function(error){input.disabled=false;input.value='';setMsg(error&&error.message||'Could not upload proof.',false);});
+    }
     function expenseActions(e,options){
       if(!expenseOperatorAllowed(e)) return '';
       var edit=cfg.isAdmin?' <button class="btn mini ghost" onclick="editExpense(\''+e.id+'\')">Edit</button>':'';
@@ -3632,6 +3683,7 @@
       selectedNature=(cfg.natures&&cfg.natures[0])||'SANKI';
       selectedNature=SankiNavigation.choice('nature',cfg.approvalNatures||cfg.natures,selectedNature);
       bankNature=selectedNature;
+      if(cfg.canApprove){el('missingProofsTab').style.display='';}
       if(cfg.isAdmin){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';el('approvalsTab').style.display='';el('auditTab').style.display='';}
       if(!cfg.isAdmin){ // every non-Owner/Admin user: log + view own list only
         var cashBtn = el('tabs').querySelector('[data-t="cash"]');

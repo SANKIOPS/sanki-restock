@@ -13,7 +13,8 @@ function enrich(store,row,resolver){
  const reconciled=(Array.isArray(store.reconciliationExpenses)?store.reconciliationExpenses:Object.values(store.reconciliationExpenses||{})).find(e=>refs.some(ref=>String(ref)===e.id||String(ref).startsWith(e.id+'/'))&&!e.accountingExcluded&&String(e.nature||'SANKI').toUpperCase()===row.entity);
  if(reconciled)return {...row,appRecord:{id:reconciled.id,date:reconciled.date,...require('../public/expense-report-presentation').present({...reconciled,ledger:reconciled.category}),source:'Reconciliation expense'}};
  for(const ref of refs){const id=String(ref).split('/')[0],e=store.expenses?.[id];if(!e||e.accountingExcluded||String(e.reportingNature||e.nature||'SANKI').toUpperCase()!==row.entity)continue;
- return {...row,appExpense:{id:e.id,date:e.date,...(resolver||require('./report-description-recovery').createResolver(store))(e),status:e.status||'',amount:e.amount,searchNarration:[e.narration,e.note,e.reconciliationSource?.bankDescription].filter(Boolean).join(' ')}};
+ const paymentId=String(ref).startsWith(id+'/')?String(ref).slice(id.length+1):'',classification=require('./finalized-report-classification').resolve(store,e,paymentId);
+ return {...row,appExpense:{id:e.id,date:e.date,...(resolver||require('./report-description-recovery').createResolver(store))(e),savedCategory:e.ledger||e.category||'',ledger:classification.category,category:classification.category,classificationSource:classification.source,classificationEvidence:classification.evidence||null,status:e.status||'',amount:e.amount,searchNarration:[e.narration,e.note,e.reconciliationSource?.bankDescription].filter(Boolean).join(' ')}};
  }return row;
 }
 function evidence(store,expense,{canAccess,bookKey,natureForAccount=(nature)=>nature}){

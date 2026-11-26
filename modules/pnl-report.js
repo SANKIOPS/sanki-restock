@@ -5,6 +5,7 @@
 const purchaseCosts = require('../public/purchase-costs');
 const { velocityCompletion } = require('./pnl-delivery');
 const { resolveOrder, manualHash, resolveExpenseConfirmation } = require('./pnl-line-corrections');
+const finalizedClassification = require('./finalized-report-classification');
 const START = '2026-08-22';
 const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const money = value => Math.round((number(value) + Number.EPSILON) * 100) / 100;
@@ -324,7 +325,9 @@ function buildReport(sources = {}, options = {}) {
     paidIds.add(id);
     if (date >= start && date <= to && amount > 0) refundPayments.set(expense.id + '/' + (payment.refundPaymentId || payment.id), { date, remaining: money(amount) });
     const type = ['fixed', 'running', 'variable', 'marketing'].includes(expense.type) ? expense.type : 'variable';
-    add(row({ id, date, kind, category: expense.ledger || expense.category || 'Unclassified paid expense', group: type, channel: ['POS', 'Website'].includes(expense.channel) ? expense.channel : 'Shared', particulars: expense.particulars || expense.vendor || '', reference: expense.id + '/' + payment.id, expenseDate: day(expense.date), account: payment.account || expense.account || '', method: payment.paymentType || '', proof: payment.proof || expense.billPhoto || '', source: 'Expenses', expenses: money(amount), details: [{ vendor: expense.vendor || '', paymentAmount: money(payment.amount), includedAmount: money(amount), note: payment.note || '' }] }));
+    const classification=finalizedClassification.resolve(books,expense,payment.id);
+    if(classification.conflict)warning(expense.id,'Conflicting finalized reconciliation categories exist for this Suspense payment. It remains in Suspense until the exact history is corrected.',date,'expense');
+    add(row({ id, date, kind, category: classification.category, classificationSource:classification.source, classificationEvidence:classification.evidence||null, group: type, channel: ['POS', 'Website'].includes(expense.channel) ? expense.channel : 'Shared', particulars: expense.particulars || expense.vendor || '', reference: expense.id + '/' + payment.id, expenseDate: day(expense.date), account: payment.account || expense.account || '', method: payment.paymentType || '', proof: payment.proof || expense.billPhoto || '', source: 'Expenses', expenses: money(amount), details: [{ vendor: expense.vendor || '', paymentAmount: money(payment.amount), includedAmount: money(amount), note: payment.note || '' }] }));
   }
   for (const expense of list(books.expenses)) {
     if (!business(expense.nature) || expense.accountingExcluded || expense.nonExpenseReimbursement || expense.salaryAdvanceId || expense.inventoryPurchase || expense.procurementPoId || expense.purchaseOrderId || !['approved', 'partially_paid', 'paid'].includes(expense.status)) continue;
@@ -345,7 +348,8 @@ function buildReport(sources = {}, options = {}) {
       const fact=confirmation.entry,type=['fixed','running','variable','marketing'].includes(expense.type)?expense.type:'variable';
       // Management-report evidence only. Do not add a payment ID, refund
       // allocation, salary link, account debit or reconciliation marker.
-      add(row({id:'RESULTS-CONFIRMATION/'+expense.id,date:confirmation.date,kind:'expense_confirmation',category:expense.ledger||expense.category||'Unclassified paid expense',group:type,channel:['POS','Website'].includes(expense.channel)?expense.channel:'Shared',particulars:expense.particulars||expense.vendor||'',reference:expense.id+'/RESULTS-CONFIRMED',expenseDate:day(expense.date),method:'User-confirmed reimbursement/payment; report only',source:'Results-only paid-expense confirmation',expenses:confirmation.amount,details:[{expenseId:expense.id,reportOnly:true,confirmedTotal:fact.amount,includedAmount:confirmation.amount,eligibleSourcePaidAmount:confirmation.eligiblePaidAmount,confirmedPaymentDate:fact.paymentDate,adjustmentReference:fact.adjustmentReference||'',adjustmentReferenceBasis:'User-reported only; not verified bank or adjustment evidence',actor:fact.updatedBy||'',confirmedAt:fact.updatedAt||'',reason:fact.note||'',sourceFinancialRecordsUnchanged:true}]}));
+      const classification=finalizedClassification.resolve(books,expense);
+      add(row({id:'RESULTS-CONFIRMATION/'+expense.id,date:confirmation.date,kind:'expense_confirmation',category:classification.category,classificationSource:classification.source,classificationEvidence:classification.evidence||null,group:type,channel:['POS','Website'].includes(expense.channel)?expense.channel:'Shared',particulars:expense.particulars||expense.vendor||'',reference:expense.id+'/RESULTS-CONFIRMED',expenseDate:day(expense.date),method:'User-confirmed reimbursement/payment; report only',source:'Results-only paid-expense confirmation',expenses:confirmation.amount,details:[{expenseId:expense.id,reportOnly:true,confirmedTotal:fact.amount,includedAmount:confirmation.amount,eligibleSourcePaidAmount:confirmation.eligiblePaidAmount,confirmedPaymentDate:fact.paymentDate,adjustmentReference:fact.adjustmentReference||'',adjustmentReferenceBasis:'User-reported only; not verified bank or adjustment evidence',actor:fact.updatedBy||'',confirmedAt:fact.updatedAt||'',reason:fact.note||'',sourceFinancialRecordsUnchanged:true}]}));
     }
     const evidenceTotal=money(payments.reduce((sum,p)=>sum+number(p.amount),0)+confirmation.amount);
     if (number(expense.paidAmount) > evidenceTotal) warning(expense.id, 'Paid total exceeds available payment evidence. Only documented payments or an audited Results-only confirmation are included.', day(expense.date), 'expense');
