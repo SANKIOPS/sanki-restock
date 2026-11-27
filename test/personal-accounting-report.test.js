@@ -105,6 +105,17 @@ test('Sewak Park operating costs stay out of Personal spending while personal us
   assert.equal(result.moneyTaken.personalUseBySource.SEWAK_PARK_HOTEL,600);
 });
 
+test('a Sewak Park tag on a non-hotel account needs an actual transfer trail',()=>{
+  const store=fixture(),personalUse={id:'HOTEL-TAG-ON-0993',date:'2026-10-23',nature:'PERSONAL',sourceReportingUnit:'SEWAK_PARK_HOTEL',reportingTreatment:'personal_use',status:'paid',ledger:'Fuel',amount:600,payments:[{id:'PAY-001',date:'2026-10-23',amount:600,account:'ICICI Bank 0993'}]};
+  store.expenses[personalUse.id]=personalUse;
+  const result=report.build(store,{from:'2026-10-01',to:'2026-10-31',spendingRows:[{id:'HOTEL-TAG-ON-0993/PAY-001',date:'2026-10-23',kind:'expense',amount:600,account:'ICICI Bank 0993',category:'Fuel',appExpense:personalUse}],transfers:[]});
+  assert.equal(result.moneyTaken.personalUseBySource.SEWAK_PARK_HOTEL,undefined,'a saved label cannot override the paying account');
+  assert.equal(result.moneyTaken.personalUseTotal,0);
+  assert.deepEqual(result.moneyTaken.unlinkedRows.map(row=>[row.id,row.source,row.label,row.amount]),[['HOTEL-TAG-ON-0993/PAY-001','SEWAK_PARK_HOTEL','Needs transfer evidence',600]]);
+  assert.match(result.moneyTaken.unlinkedRows[0].treatment,/not backed by a payment from 0992 or a recorded Sewak Park transfer/);
+  assert.equal(result.integrity.status,'needs_review');
+});
+
 test('a reconciled shared-account deficit is the SAMAST amount outstanding, while an unreconciled equation stays unassumed',()=>{
   const store=fixture(),position={account:'IndusInd Bank 7883',proven:true,personalDeficitClosing:275000,periodIncrease:25000,periodRestored:0,basis:'Entity sub-ledgers reconcile'};
   const proven=report.build(store,{from:'2026-10-01',to:'2026-10-31',spendingRows:spending(),transfers:[],sharedAccountPositions:{'IndusInd Bank 7883':position}});

@@ -198,17 +198,22 @@ function build(store,{from,to,viewer='',spendingRows=[],monthSpendingRows=spendi
   }
   for(const row of spending){
     const payment=paymentByKey.get(row.id),expense=payment&&payment.expense;
+    const account=payment?.account||row.account||'',hotelPersonalTag=!!(expense&&hotel.isHotelPersonalUse(expense)),paidFromHotelAccount=hotel.isHotelAccount(account);
     let source='';
-    if(!source&&expense&&hotel.isHotelPersonalUse(expense))source=hotel.UNIT;
+    // A saved Sewak Park personal-use tag proves the treatment, but the bank
+    // account still has to prove the funding source. A tag on 0993 (or any
+    // other Personal account) cannot turn that account's money into 0992
+    // hotel money without a recorded transfer trail.
+    if(hotelPersonalTag&&paidFromHotelAccount)source=hotel.UNIT;
     // Only the saved paying account and configured ownership can attribute a
     // direct business-funded personal expense. Historical owner-entered
     // funding labels are intentionally ignored: they are not bank evidence.
     // Shared accounts remain subject to their separate fund equations.
     if(!source&&expense)source=exclusiveBusinessOwner(payment?.account);
-    if(source&&source!=='PERSONAL'&&!source.startsWith('LOAN:'))personalUseRows.push({...row,source,label:source===hotel.UNIT?'Personal expense using Sewak Park money':'Personal expense using '+source+' money',account:row.account||payment&&payment.account||'',category:row.category,description:row.description,treatment:'Used for a personal expense'});
-    else if(!source&&expense&&!hotel.isHotelExpense(expense)){
-      const account=payment?.account||row.account||'',candidate=hotel.isHotelAccount(account)?hotel.UNIT:'';
-      if(candidate)unlinkedRows.push({...row,source:candidate,label:'Needs account evidence',account,category:row.category,description:row.description,treatment:'The paying account is related to this source, but no saved transaction treatment proves personal use'});
+    if(source&&source!=='PERSONAL'&&!source.startsWith('LOAN:'))personalUseRows.push({...row,source,label:source===hotel.UNIT?'Personal expense using Sewak Park money':'Personal expense using '+source+' money',account,category:row.category,description:row.description,treatment:'Used for a personal expense'});
+    if(expense&&!hotel.isHotelExpense(expense)){
+      if(hotelPersonalTag&&!paidFromHotelAccount)unlinkedRows.push({...row,source:hotel.UNIT,label:'Needs transfer evidence',account,category:row.category,description:row.description,treatment:'The saved Sewak Park tag is not backed by a payment from 0992 or a recorded Sewak Park transfer into this account'});
+      else if(!source&&paidFromHotelAccount)unlinkedRows.push({...row,source:hotel.UNIT,label:'Needs account evidence',account,category:row.category,description:row.description,treatment:'The payment came from 0992, but no saved transaction treatment proves whether it was hotel operating cost or personal use'});
     }
     // A posted PERSONAL expense is already personal spending. The paying
     // account does not require a second funding-source decision here.
@@ -234,7 +239,7 @@ function build(store,{from,to,viewer='',spendingRows=[],monthSpendingRows=spendi
     ...pendingAccountPositions.flatMap(row=>(row.blockers||[]).map(message=>row.account+': '+message)),
     ...loanUsage.pools.filter(row=>!row.calculationProven).flatMap(row=>row.blockers.map(message=>row.account+': '+message)),
     ...(transferReview.length?[transferReview.length+' cross-entity transfer purpose(s) still need accounting treatment.']:[]),
-    ...(unlinkedRows.length?[unlinkedRows.length+' Sewak Park account payment(s) still need saved transaction evidence.']:[])
+    ...(unlinkedRows.length?[unlinkedRows.length+' potential Sewak Park funding payment(s) still need transaction evidence.']:[])
   ];
   const integrityChecks=[
     {name:'Personal spending entries',amount:total(spending),expected:money(spending.reduce((sum,row)=>sum+Number(row.amount||0),0))},
