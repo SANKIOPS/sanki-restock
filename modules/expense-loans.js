@@ -7,7 +7,7 @@ const CATEGORY = 'Loan received (liability)';
 const text = v => String(v == null ? '' : v).trim();
 const cents = v => Math.round(Number(v) * 100);
 const money = v => cents(v) / 100;
-const active = r => r && !r.accountingExcluded && r.status !== 'voided';
+const active = r => r && !r.accountingExcluded && !r.deletedAt && !r.voided && !r.voidedAt && !r.reversedAt && r.active !== false && !['void', 'voided', 'deleted', 'reversed', 'rejected', 'cancelled', 'canceled'].includes(String(r.status || '').toLowerCase());
 const isLoan = r => r && r.receiptType === TYPE;
 const loans = s => (s.receipts || []).filter(r => isLoan(r) && active(r));
 const repayments = s => (s.loanRepayments || []).filter(active);
@@ -30,13 +30,15 @@ function principal(value, account) {
   return valueMoney;
 }
 function date(value) { if (!validDate(value)) fail('Enter a valid transaction date.'); return text(value); }
-function terms(body, receivedDate) {
+function terms(body, receivedDate, defaultBorrowerNature = '') {
   const b = body.loanTerms || {}, lenderKind = text(b.lenderKind), dueDate = text(b.dueDate);
   if (!['person', 'company', 'entity'].includes(lenderKind)) fail('Choose whether the lender is a person, company or other entity.');
+  const borrowerNature = text(b.borrowerNature || defaultBorrowerNature).toUpperCase();
+  if (borrowerNature && !['SANKI', 'SAMAST', 'PERSONAL'].includes(borrowerNature)) fail('Choose who must repay this loan: SANKI, SAMAST or PERSONAL.');
   if (dueDate && (!validDate(dueDate) || dueDate < receivedDate)) fail('The repayment due date must be on or after the loan receipt date.');
   const method = text(b.interestMethod || 'none').toLowerCase();
   if (!['none', 'flat', 'reducing', 'interest_only'].includes(method)) fail('Choose reducing, flat, or interest-only with principal at maturity.');
-  const result = { lenderKind, dueDate, lenderReference: text(b.lenderReference), interestMethod: method };
+  const result = { lenderKind, dueDate, lenderReference: text(b.lenderReference), interestMethod: method, ...(borrowerNature ? { borrowerNature } : {}) };
   if (method === 'none') return result;
   const annualRate = Number(b.annualRate), frequency = text(b.frequency || 'monthly').toLowerCase();
   const installmentCount = Number(b.installmentCount), firstPaymentDate = text(b.firstPaymentDate);
@@ -195,7 +197,7 @@ function prepareReceipt(s, body, base, movements) {
     date: date(base.date), source: text(base.source), note: text(base.note), bankReference: historicalOpening ? '' : reference(base), historicalOpening });
   if (!candidate.source) fail('Enter the lender name.');
   if (!candidate.note) fail('Enter a note explaining the loan and repayment arrangement.');
-  candidate.loanTerms = terms(body, candidate.date);
+  candidate.loanTerms = terms(body, candidate.date, candidate.nature);
   if (!historicalOpening && !/cash/i.test(candidate.account) && !candidate.bankReference && !candidate.bankReconciliationEvidence)
     fail('Enter the bank transaction reference for this loan receipt.');
   const existing = replay(s, body, candidate, s.receipts || []);

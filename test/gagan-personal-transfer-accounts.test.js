@@ -158,11 +158,19 @@ for (const role of ['owner', 'admin']) for (const account of accounts) for (cons
     const business = invoke('/api/expenses/account-ledger', { role: 'owner', query: { nature: 'SANKI', account: bank } }).body;
     const personal = invoke('/api/expenses/account-ledger', { role: 'owner', query: { nature: 'PERSONAL', account } }).body;
     assert.equal(business.entries.filter(entry => entry.id === saved[0].id).length, 1);
-    assert.equal(personal.entries.filter(entry => entry.id === saved[0].id).length, 1);
     const samast = invoke('/api/expenses/account-ledger', { role: 'owner', query: { nature: 'SAMAST', account } }).body;
-    assert.equal(samast.entries.some(entry => entry.id === saved[0].id), false, 'the same physical bank account must not receive a SAMAST movement');
+    if(account==='IndusInd Bank 7883'){
+      assert.equal(personal.physicalBalance,true);
+      assert.equal(samast.physicalBalance,true);
+      assert.deepEqual(personal.entries,samast.entries,'7883 must expose one physical statement, not duplicate PERSONAL and SAMAST bank books');
+      assert.equal(personal.balance,samast.balance);
+      assert.equal(personal.entries.some(entry=>entry.id===saved[0].id),false,'an unverified manual counterpart must not change the physical 7883 statement balance');
+    }else{
+      assert.equal(personal.entries.filter(entry => entry.id === saved[0].id).length, 1);
+      assert.equal(samast.entries.some(entry => entry.id === saved[0].id), false, 'a PERSONAL-only account must not receive a SAMAST movement');
+    }
     assert.equal(business.balance, incoming ? 10123.45 : 9876.55);
-    assert.equal(personal.balance, incoming ? 876.55 : 1123.45);
+    assert.equal(personal.balance, account==='IndusInd Bank 7883'?1000:(incoming ? 876.55 : 1123.45));
     assertProfitTreatment();
     assertPreserved();
   });
@@ -231,7 +239,7 @@ for (const account of accounts) test('reviewing a bank withdrawal to ' + account
   assert.equal(posted.reconciliationExpenses.find(expense => expense.adjustmentId === posted.adjustments[0].id).category, 'BANK CHARGES');
   assert.equal(posted.bankStatements[bank].imports.at(-1).reconciliationRows[0].bank.debit, 1005.9);
   assert.equal(invoke('/api/expenses/account-ledger', { role: 'owner', query: { nature: 'SANKI', account: bank } }).body.balance, 8994.1);
-  assert.equal(invoke('/api/expenses/account-ledger', { role: 'owner', query: { nature: 'PERSONAL', account } }).body.balance, 2000);
+  assert.equal(invoke('/api/expenses/account-ledger', { role: 'owner', query: { nature: 'PERSONAL', account } }).body.balance, account==='IndusInd Bank 7883'?1000:2000);
   applyFinalizedInternalTransfers({ ...draft, resolutions: { 'bank-0': decision } }, 'owner-user');
   assert.equal(read().transfers.length, 1, 'replaying the finalized decision cannot duplicate the principal');
   assert.equal(read().adjustments.length, 1, 'replaying cannot duplicate bank charges');
@@ -341,7 +349,7 @@ for (const changedPart of ['counterpart', 'bank reference']) test('Owner approva
   write(changed);
   const rejected = await dispatch('/api/expenses/bank-statements/finalize', { role: 'owner', body: { draftId: draft.id, approveRequestId: requested.body.approval.id } });
   assert.equal(rejected.status, 409, JSON.stringify(rejected.body));
-  assert.match(rejected.body.error, /changed since review|resubmit/i);
+  assert.match(rejected.body.error, /changed since review|changed after .*submitted|resubmit|approve again/i);
   const unchanged = read();
   for (const key of ['transfers', 'receipts', 'adjustments', 'reconciliationExpenses', 'bankTruthMovements', 'bankStatements', 'bankReconciliationApprovals']) {
     assert.deepEqual(unchanged[key], changed[key], key + ' must remain unchanged when submitted evidence is stale');

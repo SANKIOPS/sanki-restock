@@ -94,17 +94,17 @@
 </section>
 <section id="view-personal-money" role="tabpanel" aria-labelledby="tab-personal-money" hidden>
 <div class="section-heading"><h2>Money taken from entities</h2></div>
-<h3>Business money received and used personally</h3><p class="muted section-note">SANKI, SAMAST and Sewak Park are shown separately. “Received / taken” is based on confirmed transfers into Personal. “Used personally” includes only the personal expenses linked to that source. Click either amount to expand its exact entries. The report does not guess a source.</p>
+<h3>Entity receipts, movement and personal use</h3><p class="muted section-note">SANKI, SAMAST and Sewak Park are shown separately. Source receipts are actual finalized SAMAST rent and Sewak Park income; they are not automatically personal money. “Moved to Personal” uses finalized or directly recorded transfers. For shared account 7883, “Used personally” is shown only when the separate Personal and SAMAST sub-ledgers reconcile exactly to the physical bank balance. No verbal funding-source choice changes these figures. Anything not proven remains “Needs review.” Click an amount to expand its exact entries and calculation.</p>
 <div id="personalMoneyTaken" class="panel scroll"></div>
 </section>
 <section id="view-personal-settle" role="tabpanel" aria-labelledby="tab-personal-settle" hidden>
 <div class="section-heading"><h2>Money to settle</h2></div>
 <div class="personal-settlement-grid"><section><h3>Business has to return to you</h3><div id="personalBusinessOwes" class="panel scroll"></div></section><section><h3>You have to return to business</h3><div id="personalYouOwe" class="panel scroll"></div></section></div>
-<h3>Recorded repayments</h3><p class="muted section-note">These show repayment history. They do not reduce another balance unless the source accounting workflow links them.</p><div id="personalSettlements" class="panel scroll"></div>
+<h3>Recorded repayments</h3><p class="muted section-note">A repayment reduces only an earlier temporary balance for the same entity, in date order, and never below zero. Any excess remains visibly unmatched.</p><div id="personalSettlements" class="panel scroll"></div>
 </section>
 <section id="view-personal-loans" role="tabpanel" aria-labelledby="tab-personal-loans" hidden>
 <div class="section-heading"><h2>Loans and their use</h2></div>
-<p class="muted section-note">Sent to business is calculated only from actual transfers out of the loan’s receiving Personal account to the borrowing business. Principal repaid is separate. Personal portion = loan received − principal repaid − sent to business.</p>
+<p class="muted section-note">Sent to business is calculated only from actual transfers out of the loan’s receiving Personal account to the borrowing business. Loans received in the same account for the same business are pooled so the total is correct without inventing a lender-by-lender split. Personal portion = loan received − sent to business − principal repaid from a proven Personal account. Principal paid by the business does not reduce the Personal portion. An unverified receiving or repayment account shows the calculation for review but does not add it to Money to Settle.</p>
 <div id="personalLoans" class="panel scroll"></div>
 </section>
 <section id="view-personal-accounts" role="tabpanel" aria-labelledby="tab-personal-accounts" hidden>
@@ -117,8 +117,6 @@
 <h3>Transfers needing a purpose</h3><p class="muted section-note">Choose whether the money is permanent, temporary, or a repayment. The old owner-withdrawal label alone is not treated as proof.</p>
 <div id="personalTransferReview" class="personal-review-list"></div>
 <div id="personalLoanReview" class="personal-review-list" hidden></div>
-<h3>Payments needing a funding source</h3>
-<div id="personalSourceReview" class="personal-review-list"></div>
 <h3>Other accounting checks</h3><div id="personalWarnings" class="panel scroll"></div>
 </div></details>
 </section>

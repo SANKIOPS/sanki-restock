@@ -4,11 +4,15 @@ const loans=require('./expense-loans');
 const {money}=require('./physical-bank-balance');
 const hotel=require('./sewak-park-reporting');
 const START='2026-08-22', list=v=>Array.isArray(v)?v:Object.values(v||{}), nature=v=>String(v||'SANKI').toUpperCase();
-const active=r=>r&&!r.accountingExcluded&&!r.balanceSheetOnly&&!r.voided&&!r.voidedAt&&!r.reversedAt&&r.status!=='voided';
+const active=r=>r&&!r.accountingExcluded&&!r.balanceSheetOnly&&!r.deletedAt&&!r.voided&&!r.voidedAt&&!r.reversedAt&&r.active!==false&&!['void','voided','deleted','reversed','rejected','cancelled','canceled'].includes(String(r.status||'').toLowerCase());
 // Transfers are balance-sheet movements by definition. `balanceSheetOnly`
 // excludes them from income/expense, but must never hide them from the
 // Transfers report.
-const activeTransfer=r=>r&&!r.accountingExcluded&&!r.voided&&!r.voidedAt&&!r.reversedAt&&r.status!=='voided';
+const activeTransfer=r=>r&&!r.accountingExcluded&&!r.deletedAt&&!r.voided&&!r.voidedAt&&!r.reversedAt&&r.active!==false&&!['void','voided','deleted','reversed','rejected','cancelled','canceled'].includes(String(r.status||'').toLowerCase());
+const reconciliationDraftId=r=>String(r&&(
+  r.bankReconciliationDraft||r.reconciliationDraft||r.bankReconciliationEvidence&&r.bankReconciliationEvidence.draftId
+)||'');
+const finalizedTransfer=(s,r)=>activeTransfer(r)&&(!reconciliationDraftId(r)||!s.bankReconciliationDrafts?.[reconciliationDraftId(r)]);
 const inRange=(r,from,to)=>r.date>=from&&r.date<=to;
 const incomeTypes=new Set(['rental_income','hotel_income','sewak_park_hotel_income','other_income','bank_interest','bank_interest_received','asset_sale','product_sale','rental_dealer_commission','rental_documentation_fee','other']);
 const balanceCost=/security|deposit|loan principal|salary advance|gst payment|gst paid|capital|asset purchase|credit[ -]?card|card repayment|\bemi\b|loan repayment|owner withdrawal|owner contribution|internal transfer/i;
@@ -64,7 +68,8 @@ function buildHotel(sources,{entity,from,to,accounts=[]}){
   }
 
   const transfers=[];
-  for(const transfer of list(s.transfers).filter(r=>activeTransfer(r)&&inRange(r,from,to))){
+  const pendingHotelTransfers=list(s.transfers).filter(r=>activeTransfer(r)&&!finalizedTransfer(s,r)&&inRange(r,from,to)&&(hotel.isHotelAccount(r.fromAccount)||hotel.isHotelAccount(r.toAccount)));
+  for(const transfer of list(s.transfers).filter(r=>finalizedTransfer(s,r)&&inRange(r,from,to))){
     const base={id:transfer.id,date:transfer.date,from:transfer.fromAccount,to:transfer.toAccount,fromEntity:nature(transfer.fromNature||transfer.nature),toEntity:nature(transfer.toNature||transfer.nature),amount:money(transfer.amount)};
     if(hotel.isHotelInternalTransfer(transfer)){
       const row={...base,classification:'hotel_internal_transfer'};hotelInternalTransfers.push(row);transfers.push(row);
@@ -76,6 +81,7 @@ function buildHotel(sources,{entity,from,to,accounts=[]}){
       unclassified0992Movements.push(hotelMovement('unclassified',{...transfer,account:hotel.isHotelAccount(transfer.fromAccount)?transfer.fromAccount:transfer.toAccount,description:(transfer.fromAccount||'')+' → '+(transfer.toAccount||'')},transfer.amount,{direction:hotel.isHotelAccount(transfer.fromAccount)?'out':'in',sourceType:'transfer'}));
     }
   }
+  if(pendingHotelTransfers.length)warnings.push(pendingHotelTransfers.length+' Sewak Park transfer(s) from an unfinished bank reconciliation were excluded until finalization.');
 
   const usage={};
   for(const expense of list(s.expenses).filter(taggedExpense))for(const payment of list(expense.payments).filter(p=>active(p)&&!p.provisional&&inRange(p,from,to))){const account=payment.account||expense.account;if(account)usage[account]=money((usage[account]||0)+Number(payment.amount||0));}
@@ -98,7 +104,7 @@ function buildHotel(sources,{entity,from,to,accounts=[]}){
   };
 }
 
-function build(sources,{entity,from,to,today,accounts=[],unit='',viewer=''}){
+function build(sources,{entity,from,to,today,accounts=[],unit='',viewer='',sharedAccountPositions={},personalMonthSpendingRows=null,accountOwners={}}){
   if(!['SANKI','SAMAST','PERSONAL'].includes(entity)||!validDate(from)||!validDate(to)||from<START||from>to||to>today)throw Object.assign(Error('Select an entity and valid dates from 22 August 2026 through today.'),{status:400});
   const s=sources.expenses, warnings=[], rows=[], match=r=>nature(r.reportingNature||r.nature)===entity;
   if(!s||typeof s.expenses!=='object')throw Object.assign(Error('Accounting records are unavailable. No totals were assumed.'),{status:409});
@@ -154,11 +160,16 @@ function build(sources,{entity,from,to,today,accounts=[],unit='',viewer=''}){
       basis='Recorded income received minus approved paid costs. Transfers, loan principal and refundable security are excluded. This is a cash management view, not earned or tax-adjusted profit.';
     }
   }
+  const transferRow=r=>({id:r.id,date:r.date,from:r.fromAccount,to:r.toAccount,fromEntity:nature(r.fromNature||r.nature),toEntity:nature(r.toNature||r.nature),fromReportingUnit:hotel.normalizeReportingUnit(r.fromReportingUnit),toReportingUnit:hotel.normalizeReportingUnit(r.toReportingUnit),classification:r.classification||'internal_transfer',amount:money(r.amount),note:r.note||''});
   const transfers=[];
-  for(const r of list(s.transfers).filter(r=>activeTransfer(r)&&inRange(r,from,to))){
+  const pendingTransfers=list(s.transfers).filter(r=>activeTransfer(r)&&reconciliationDraftId(r)&&s.bankReconciliationDrafts?.[reconciliationDraftId(r)]&&inRange(r,from,to));
+  for(const r of list(s.transfers).filter(r=>finalizedTransfer(s,r)&&inRange(r,from,to))){
     const outgoing=nature(r.fromNature||r.nature)===entity,incoming=nature(r.toNature||r.nature)===entity;if(!outgoing&&!incoming)continue;
-    transfers.push({id:r.id,date:r.date,from:r.fromAccount,to:r.toAccount,fromEntity:nature(r.fromNature||r.nature),toEntity:nature(r.toNature||r.nature),classification:r.classification||'internal_transfer',amount:money(r.amount),note:r.note||''});
+    transfers.push(transferRow(r));
   }
+  const allTransfers=entity==='PERSONAL'?list(s.transfers).filter(r=>finalizedTransfer(s,r)&&r.date>=START&&r.date<=to&&((nature(r.fromNature||r.nature)==='PERSONAL')!==(nature(r.toNature||r.nature)==='PERSONAL'))).map(transferRow):transfers;
+  const pendingEntityTransfers=pendingTransfers.filter(r=>[nature(r.fromNature||r.nature),nature(r.toNature||r.nature)].includes(entity));
+  if(pendingEntityTransfers.length)warnings.push(pendingEntityTransfers.length+' transfer(s) from an unfinished bank reconciliation were excluded until finalization.');
   const loanRows=loans.catalog(s,to).filter(match).map(r=>({id:r.id,description:r.source,account:r.account,borrowed:r.borrowed,repaid:r.repaid,outstanding:r.outstanding,interestPaid:r.interestPaid}));
   const security=[];
   if(entity==='SAMAST'){
@@ -177,12 +188,15 @@ function build(sources,{entity,from,to,today,accounts=[],unit='',viewer=''}){
   const transactions=require('./report-expense-entries').enrichMany(s,rows).sort((a,b)=>b.date.localeCompare(a.date));
   const response={success:true,entity,from,to,basis,resultLabel,otherMovements,...(unitEconomics?{unitEconomics}:{}),...(samastProfit?{samastProfit}:{}),totals:{income:income==null?null:money(income),expenses:money(expenses),costOfSales:money(cogs),result:result==null?null:money(result)},accounts,transactions,transfers,paidFrom:Object.entries(usage).map(([account,amount])=>({account,amount})),obligations:{loans:loanRows,security,securityKnown:entity!=='SAMAST'||!!s.rentals,loanTotal:money(loanRows.reduce((n,r)=>n+r.outstanding,0)),securityTotal:money(security.reduce((n,r)=>n+r.amount,0))},warnings:[...new Set(warnings)],note:'Account balances cover all money held in those accounts, including borrowed money and deposits. Shared bank money is not allocated to an entity by this report. Personal spending by paying account does not prove that rental income funded it. Transfers are shown once and are not additional expenses. No automatic debts are created.'};
   if(entity==='PERSONAL'){
-    const loanAccountChecks=Object.fromEntries(accounts.map(row=>[row.name,{matched:row.balance!=null&&!row.warnings?.length&&String(row.reconciledThrough||'')>=to,reconciledThrough:row.reconciledThrough||'',closingBalance:row.balance,warnings:row.warnings||[]} ]));
-    response.personal=require('./personal-accounting-report').build(s,{from,to,viewer,spendingRows:transactions,accounts,transfers,loanAccountChecks});
+    const loanAccountChecks=Object.fromEntries(accounts.map(row=>[row.name,{matched:row.reconciled===true&&row.balance!=null,reconciledThrough:row.reconciledThrough||'',closingBalance:row.balance,warnings:row.warnings||[]} ]));
+    response.personal=require('./personal-accounting-report').build(s,{from,to,viewer,spendingRows:transactions,monthSpendingRows:personalMonthSpendingRows||transactions,accounts,transfers,allTransfers,loanAccountChecks,sharedAccountPositions,accountOwners});
     response.basis=response.personal.basis;
     response.note='Personal spending is counted once. Permanent owner withdrawals stay separate from repayable business money. Source reviews affect this management report only; bank evidence, amounts, dates and reconciliations remain unchanged.';
     if(response.personal.review.rows.length)response.warnings.unshift(response.personal.review.rows.length+' personal payment source(s) need review before money taken by entity is complete.');
     if(response.personal.review.transferRows.length)response.warnings.unshift(response.personal.review.transferRows.length+' cross-entity transfer purpose(s) need confirmation; none were assumed permanent.');
+    if(response.personal.moneyTaken.pendingAccountPositions.length)response.warnings.unshift(response.personal.moneyTaken.pendingAccountPositions.length+' shared-account source equation(s) do not yet reconcile; no business money was assumed used personally from those equations.');
+    if(response.personal.settlements.unappliedSettlements.length)response.warnings.unshift(response.personal.settlements.unappliedSettlements.length+' repayment(s) exceed the earlier linked temporary balance; the excess remains unmatched and changes no due amount.');
+    response.warnings.unshift(...response.personal.integrity.blockers);
   }
   return response;
 }

@@ -2827,20 +2827,26 @@ router.use((req,res,next)=>{
             if(x.bankAmountAuthority&&(after.bankAmountAuthorityApplications||{})[x.bankAmountAuthority.fingerprint]&&x.bank&&x.app)x={...x,app:{...x.app,originalAmount:x.bankAmountAuthority.originalAmount,debit:num(x.bank.debit),credit:num(x.bank.credit),date:x.bank.date,bankAmountAuthority:x.bankAmountAuthority}};
             if(x.gokwikSettlementId){const posting=(after.gokwikPostings||{})[x.gokwikSettlementId];if(posting)x={...x,app:{...x.app,id:posting.transferId,pendingPosting:false,description:'Transfer from '+gokwikAccounting.CLEARING},resolution:{action:'gokwik_settlement',reason:'GoKwik settlement and charges finalized with 0437',by:posting.postedBy,at:posting.postedAt}};}
             const r=x.resolution||{},tx=bankTransaction(x),adjustment=x.bank&&adjustments.find(a=>a.date===x.bank.date&&Math.abs(num(a.amount)-(num(x.bank.credit)-num(x.bank.debit)))<.01),settlement=x.bank&&settlements.find(a=>a.date===x.bank.date&&Math.abs(num(a.netAmount)-num(x.bank.credit))<.01);
-            let decision='Reviewed',linked=[];
+            let decision='Reviewed',linked=[],ledger=x.app?Object.assign({},x.app):null;
             if(x.status==='matched')decision='Matched automatically';
             if(x.gokwikSettlementId)decision='GoKwik settlement and charges finalized with 0437';
             else if(r.action==='accept_match')decision='Matched with ledger entry';
             else if(r.action==='create_adjustment'){decision=r.category?'Created and assigned to '+r.category:'Bank balance entry created';if(adjustment)linked.push(adjustment.id);}
             else if(r.action==='paytm_settlement'){decision='Created and assigned to Paytm Settlement Clearing';if(settlement)linked.push(settlement.id);}
             else if(r.action==='split_allocation')decision='Split between existing entry and Bank Charges';
+            else if(r.action==='create_internal_transfer'){
+              const transfer=(after.transfers||[]).find(value=>!value.accountingExcluded&&value.reconciliationDraft===draft.id&&value.bankRowId===x.id),charge=transfer&&(after.adjustments||[]).find(value=>!value.accountingExcluded&&value.transferChargeFor===transfer.id&&value.reconciliationDraft===draft.id&&value.bankRowId===x.id);
+              decision='Created bank-confirmed internal transfer';
+              if(transfer){linked.push(transfer.id);ledger={id:transfer.id,date:transfer.date,description:'Bank-confirmed '+String(transfer.classification||'internal transfer').replaceAll('_',' '),reference:transfer.bankReference||transfer.id,debit:num(x.bank&&x.bank.debit)>0?num(transfer.amount):0,credit:num(x.bank&&x.bank.credit)>0?num(transfer.amount):0};}
+              if(charge)linked.push(charge.id);
+            }
             else if(r.action==='timing_difference')decision='Timing difference';
             else if(r.action==='exclude')decision='Excluded';
             else if(r.action==='bank_reversal_pair')decision='Failed payment + bank reversal (net ₹0)';
             if(x.app&&x.app.bankAmountAuthority)decision='Matched using bank amount and date · original values retained in audit';
             if(r.rentalBankSplitId){decision='Recorded rent ₹'+num(r.rentAmount)+' + held security ₹'+num(r.securityAmount);(r.appIds||[]).forEach(id=>{if(!linked.includes(id))linked.push(id);});}
             else if(x.app&&x.app.id&&!linked.includes(x.app.id))linked.push(x.app.id);
-            return{id:x.id,originalStatus:x.originalStatus||x.status,bank:x.bank?Object.assign({},x.bank,{transactionId:tx&&tx.id||'',...(x.entityTag?{entityTag:JSON.parse(JSON.stringify(x.entityTag)),transactionNature:reconciliationLinkedOwnershipNature(x.entityTag.nature)}:{})}):null,ledger:x.app?Object.assign({},x.app):null,entityTag:x.entityTag?JSON.parse(JSON.stringify(x.entityTag)):null,transactionNature:reconciliationLinkedOwnershipNature(x.entityTag&&x.entityTag.nature),decision,reason:r.reason||'',category:r.category||'',resolvedBy:r.by||record.finalizedBy,resolvedAt:r.at||record.finalizedAt,linkedRecordIds:linked,orderIds:r.orderIds||[],...(r.action==='bank_reversal_pair'?{resolutionAction:r.action,groupId:r.groupId,bankRowIds:(r.bankRowIds||[]).slice(),reversalReference:r.reference,reversalAmount:r.amount}: {})};
+            return{id:x.id,originalStatus:x.originalStatus||x.status,bank:x.bank?Object.assign({},x.bank,{transactionId:tx&&tx.id||'',...(x.entityTag?{entityTag:JSON.parse(JSON.stringify(x.entityTag)),transactionNature:reconciliationLinkedOwnershipNature(x.entityTag.nature)}:{})}):null,ledger,entityTag:x.entityTag?JSON.parse(JSON.stringify(x.entityTag)):null,transactionNature:reconciliationLinkedOwnershipNature(x.entityTag&&x.entityTag.nature),decision,reason:r.reason||'',category:r.category||'',resolvedBy:r.by||record.finalizedBy,resolvedAt:r.at||record.finalizedAt,linkedRecordIds:linked,orderIds:r.orderIds||[],...(r.action==='bank_reversal_pair'?{resolutionAction:r.action,groupId:r.groupId,bankRowIds:(r.bankRowIds||[]).slice(),reversalReference:r.reference,reversalAmount:r.amount}: {})};
           });
           saveStore(after);
         }
@@ -5159,7 +5165,7 @@ router.post('/api/expenses/loans/:id/terms',(req,res)=>{
   if(!approvalNatures(req).includes(normalizedNature(loan.nature))||!accountVisibleToReq(req,loan.account))return res.status(403).json({success:false,error:'You cannot manage this loan.'});
   const reason=String(b.reason||'').trim();if(reason.length<5)return res.status(400).json({success:false,error:'Enter a clear reason for setting or changing the loan terms.'});
   try{
-    const next=expenseLoans.terms({loanTerms:Object.assign({},loan.loanTerms||{},b.loanTerms||{},{lenderKind:b.loanTerms&&b.loanTerms.lenderKind||loan.loanTerms&&loan.loanTerms.lenderKind||'person'})},loan.date);
+    const next=expenseLoans.terms({loanTerms:Object.assign({},loan.loanTerms||{},b.loanTerms||{},{lenderKind:b.loanTerms&&b.loanTerms.lenderKind||loan.loanTerms&&loan.loanTerms.lenderKind||'person'})},loan.date,loan.loanTerms&&loan.loanTerms.borrowerNature||loan.nature);
     const preview=expenseLoans.schedule(Object.assign({},loan,{loanTerms:next}));
     const totalScheduled=roundMoney(preview.reduce((n,row)=>n+num(row.amount),0));
     if(expenseLoans.repayments(s).some(p=>p.loanId===loan.id)&&totalScheduled+0.01<expenseLoans.position(s,loan).totalPaid)return res.status(409).json({success:false,error:'These terms are lower than payments already recorded. Correct the repayment history first.'});
@@ -7823,7 +7829,14 @@ function applyFinalizedInternalTransfers(draft,username){
       if(existingFees.length===1){existingFees[0].record.transferChargeFor=transfer.id;transfer.confirmedBankSplit={gross:split.gross,principal:split.principal,charge:split.charge,chargeId:existingFees[0].id,reason:r.reason,by:username,at:now};}
     }
     if(created){audit(s,null,'BANK_CONFIRMED_TRANSFER_CREATED','transfer',transfer.id,{user:username,device:'Web',nature:reconciledNature,account:draft.account,after:transfer,note:r.reason});result.created.push(transfer.id);}
-  });saveStore(s);return result;
+  });
+  // The transfer and any confirmed bank charge are created after the generic
+  // reconciliation finalizer has written its immutable bank row. Link those
+  // newly-created records back to that exact finalized row in the same save,
+  // so audit, undo and evidence screens never depend on a later application
+  // restart or unrelated ledger read to repair the provenance.
+  ledgerConnections.repairCreatedTransferLinks(s,({transfer,record,row,key,before})=>audit(s,null,'BANK_CREATED_TRANSFER_LINK_RESTORED','transfer',transfer.id,{nature:transfer.nature,account:key,before,after:{recordId:record.id,rowId:row.id,linkedRecordIds:row.linkedRecordIds},note:'Linked the transfer and confirmed bank charge to their exact finalized bank row; no additional money movement was created.'}));
+  saveStore(s);return result;
 }
 router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];if(!draft)return next();const original=res.json.bind(res);res.json=payload=>{if(payload&&payload.success)applyFinalizedInternalTransfers(draft,req.user.username);return original(payload);};next();});
 function applyFinalizedCompositeLinks(draft,username){
@@ -8680,25 +8693,6 @@ router.post('/api/expenses/personal-report/budget',(req,res)=>{
   audit(s,req,'PERSONAL_BUDGET_UPDATED','personal_budget',month+'/'+category,{nature:'PERSONAL',before:{amount:before==null?null:before},after:{amount:amount===0?null:roundMoney(amount)},note:'Personal monthly budget only; no accounting movement changed'});saveStore(s);
   res.json({success:true,month,category,amount:amount===0?null:roundMoney(amount)});
 });
-router.post('/api/expenses/personal-report/source',(req,res)=>{
-  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can classify a personal funding source.'});
-  const s=loadStore(),b=req.body||{},movementId=String(b.movementId||'').trim(),reason=String(b.reason||'').trim(),parts=movementId.split('/'),expense=s.expenses&&s.expenses[parts[0]],payment=expense&&(Array.isArray(expense.payments)?expense.payments:[]).find(row=>row.id===parts[1]);
-  if(!expense||normalizedNature(expense.nature)!=='PERSONAL'||!payment)return res.status(404).json({success:false,error:'Personal payment not found.'});
-  if(reason.length<3)return res.status(400).json({success:false,error:'Enter a short reason for this source.'});
-  const personal=require('./personal-accounting-report'),source=personal.sourceChoice(s,b.source);if(!source)return res.status(400).json({success:false,error:'Choose a valid personal funding source.'});
-  const settings=personal.ensureState(s),before=settings.movementSources[movementId]||null,after={source,reason,by:req.user.username,at:new Date().toISOString()};settings.movementSources[movementId]=after;
-  audit(s,req,'PERSONAL_FUNDING_SOURCE_CLASSIFIED','expense_payment',movementId,{nature:'PERSONAL',account:payment.account||expense.account,before,after,note:reason});saveStore(s);
-  res.json({success:true,movementId,classification:after});
-});
-router.post('/api/expenses/personal-report/loan-owner',(req,res)=>{
-  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can assign a loan to an entity.'});
-  const s=loadStore(),b=req.body||{},loanId=String(b.loanId||'').trim(),owner=normalizedNature(b.owner),reason=String(b.reason||'').trim(),loan=(s.receipts||[]).find(row=>row.id===loanId&&expenseLoans.isLoan(row)&&!row.accountingExcluded&&row.status!=='voided');
-  if(!loan)return res.status(404).json({success:false,error:'Active loan not found.'});
-  if(!NATURES.includes(owner)||reason.length<3)return res.status(400).json({success:false,error:'Choose SANKI, SAMAST or PERSONAL and enter a short reason.'});
-  const personal=require('./personal-accounting-report'),settings=personal.ensureState(s),before={owner:personal.loanOwner(s,loan)},after={owner,reason,by:req.user.username,at:new Date().toISOString()};settings.loanOwners[loanId]=owner;
-  audit(s,req,'PERSONAL_REPORT_LOAN_OWNER_UPDATED','loan',loanId,{nature:loan.nature,account:loan.account,before,after,note:reason});saveStore(s);
-  res.json({success:true,loanId,owner});
-});
 router.post('/api/expenses/personal-report/transfer-treatment',(req,res)=>{
   if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can confirm whether cross-entity money must be returned.'});
   const s=loadStore(),b=req.body||{},transferId=String(b.transferId||'').trim(),treatment=String(b.treatment||'').trim(),reason=String(b.reason||'').trim(),transfer=(s.transfers||[]).find(row=>row.id===transferId&&!row.accountingExcluded&&row.status!=='voided');
@@ -8722,12 +8716,28 @@ router.get('/api/expenses/compact-report',(req,res)=>{
     if(!s||!s.expenses)throw Object.assign(Error('Accounting data could not be read safely.'),{status:409});
     const salaryPath=path.join(DATA_DIR,'salary-samast.json');
     try{sources.samastSalary=JSON.parse(fs.readFileSync(salaryPath,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;sources.samastSalary={};}
-    const names=Array.from(new Set(ownTransferAccountsForReq(req).filter(row=>row.nature===entity).map(row=>row.account).concat(entity==='SAMAST'?[SHARED_BANK_RECONCILIATION_ACCOUNT]:[]))).filter(name=>accountVisibleToReq(req,name)&&(isBankLedgerName(name)||/cash/i.test(name))).filter(name=>!unit||hotelReporting.isHotelAccount(name));
-    const accounts=names.map(name=>{try{const physical=isSharedBankReconciliationAccount(name)?sharedPhysicalBankView(s,name,to):null;return{name,balance:physical?physical.balance:recordedAccountBalance(s,entity,name,to),shared:!!physical,reconciledThrough:physical?physical.reconciledThrough:((s.bankStatements||{})[bankStatementBookKey(entity,name)]||{}).reconciledThrough||'',warnings:physical?physical.warnings:[]};}catch(error){return{name,balance:null,shared:isSharedBankReconciliationAccount(name),warnings:[error.message]};}});
+    const availableAccounts=ownTransferAccountsForReq(req),ownershipAccounts=availableAccounts.concat(NATURES.flatMap(n=>transferAccountsForNature(n).map(account=>({nature:n,account})))),accountNatureSets={};for(const row of ownershipAccounts){accountNatureSets[row.account]=accountNatureSets[row.account]||new Set();accountNatureSets[row.account].add(normalizedNature(row.nature));}
+    const accountOwners=Object.fromEntries(Object.entries(accountNatureSets).map(([account,natures])=>[
+      account,
+      isSharedBankReconciliationAccount(account)?'SHARED':OWNER_PERSONAL_TRANSFER_ACCOUNTS.includes(account)?'PERSONAL':natures.size===1?[...natures][0]:'SHARED'
+    ]));
+    const names=Array.from(new Set(availableAccounts.filter(row=>row.nature===entity).map(row=>row.account).concat(entity==='SAMAST'?[SHARED_BANK_RECONCILIATION_ACCOUNT]:[]))).filter(name=>accountVisibleToReq(req,name)&&(isBankLedgerName(name)||/cash/i.test(name))).filter(name=>!unit||hotelReporting.isHotelAccount(name));
+    const accounts=names.map(name=>{try{const physical=isSharedBankReconciliationAccount(name)?sharedPhysicalBankView(s,name,to):null,reconciledThrough=physical?physical.reconciledThrough:((s.bankStatements||{})[bankStatementBookKey(entity,name)]||{}).reconciledThrough||'',warnings=physical?physical.warnings:reconciliationIssues(s,entity,name,to).map(issue=>issue.message||String(issue));return{name,balance:physical?physical.balance:recordedAccountBalance(s,entity,name,to),shared:!!physical,reconciledThrough,warnings,reconciled:reconciledThrough>=to&&!warnings.length};}catch(error){return{name,balance:null,shared:isSharedBankReconciliationAccount(name),reconciled:false,warnings:[error.message]};}});
+    const sharedAccountPositions={};
+    if(entity==='PERSONAL')for(const accountRow of accounts.filter(row=>row.shared)){
+      try{
+        const raw=appBankMovements(s,accountRow.name,'SAMAST',{physical:true,raw:true}),projected=bankMovementAuthority.project(s,accountRow.name,'SAMAST',raw);
+        sharedAccountPositions[accountRow.name]=require('./shared-account-entity-position').build(s,{account:accountRow.name,from,to,movements:projected,physicalBalance:accountRow.balance,conflicts:projected.bankMovementAuthorityConflicts||[],verificationThrough:accountRow.reconciledThrough});
+      }catch(error){
+        sharedAccountPositions[accountRow.name]={account:accountRow.name,from,to,proven:false,status:'needs_review',personalDeficitClosing:0,periodIncrease:0,periodRestored:0,blockers:[error.message]};
+      }
+    }
     // Existing visibility policy also applies to every report source row.
     const visible=r=>!r.ownerOnly||isOwner(req),accountAllowed=r=>!r.account||accountVisibleToReq(req,r.account);
     sources.expenses={...s,expenses:Object.fromEntries(Object.entries(s.expenses||{}).filter(([,r])=>visible(r)&&accountAllowed(r))),receipts:(s.receipts||[]).filter(r=>visible(r)&&accountAllowed(r)),loanRepayments:(s.loanRepayments||[]).filter(accountAllowed),transfers:(s.transfers||[]).filter(r=>accountVisibleToReq(req,r.fromAccount)&&accountVisibleToReq(req,r.toAccount)&& (canManagePersonalAccounting(req)||![r.fromNature,r.toNature].includes('PERSONAL')))};
-    const viewer=String(req.user&&req.user.username||''),report=require('./compact-accounting-report').build(sources,{entity,unit,from,to,today,accounts,viewer});const days=Math.round((Date.parse(to)-Date.parse(from))/86400000)+1,previousTo=new Date(Date.parse(from)-86400000).toISOString().slice(0,10),previousFrom=new Date(Date.parse(from)-days*86400000).toISOString().slice(0,10);if(previousTo>='2026-08-22'){const prior=require('./compact-accounting-report').build(sources,{entity,unit,from:previousFrom<'2026-08-22'?'2026-08-22':previousFrom,to:previousTo,today,viewer});report.previous={from:prior.from,to:prior.to,partial:previousFrom<'2026-08-22',totals:prior.totals,...(prior.unitEconomics?{unitEconomics:{values:prior.unitEconomics.values,stats:prior.unitEconomics.stats}}:{})};}report.allowedEntities=allowed.filter(n=>n!=='PERSONAL'||canManagePersonalAccounting(req));
+    const viewer=String(req.user&&req.user.username||''),compactReport=require('./compact-accounting-report'),budgetMonthStart=[to.slice(0,7)+'-01','2026-08-22'].sort().at(-1);let personalMonthSpendingRows=null;
+    if(entity==='PERSONAL'&&!unit&&budgetMonthStart<from)personalMonthSpendingRows=compactReport.build(sources,{entity,from:budgetMonthStart,to,today,viewer,accountOwners}).transactions;
+    const report=compactReport.build(sources,{entity,unit,from,to,today,accounts,viewer,sharedAccountPositions,personalMonthSpendingRows,accountOwners});const days=Math.round((Date.parse(to)-Date.parse(from))/86400000)+1,previousTo=new Date(Date.parse(from)-86400000).toISOString().slice(0,10),previousFrom=new Date(Date.parse(from)-days*86400000).toISOString().slice(0,10);if(previousTo>='2026-08-22'){const prior=compactReport.build(sources,{entity,unit,from:previousFrom<'2026-08-22'?'2026-08-22':previousFrom,to:previousTo,today,viewer,accountOwners});report.previous={from:prior.from,to:prior.to,partial:previousFrom<'2026-08-22',totals:prior.totals,...(prior.unitEconomics?{unitEconomics:{values:prior.unitEconomics.values,stats:prior.unitEconomics.stats}}:{})};}report.allowedEntities=allowed.filter(n=>n!=='PERSONAL'||canManagePersonalAccounting(req));
     res.set('Cache-Control','no-store').json(report);
   }catch(error){res.status(error.status||409).json({success:false,error:error.status?error.message:'Report sources could not be read safely. No records were changed.'});}
 });

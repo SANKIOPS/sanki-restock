@@ -32,7 +32,7 @@ test('strict principal, lender and real calendar validation',()=>{
   reset();for(const changes of [{source:''},{note:''},{loanTerms:{}},{loanTerms:{lenderKind:'person',dueDate:'2098-10-09'}},{date:'2098-02-30'},{amount:'200junk'},{reference:''}]){const r=borrow(changes);assert.equal(r.status,400,JSON.stringify(r));assert.equal(store().receipts.length,0);}
 });
 test('normal loan receipt credits bank once and creates an equal liability without profit',()=>{
-  reset();const before=position(),r=borrow();assert.equal(r.status,200,JSON.stringify(r));const l=r.body.receipt;assert.equal(l.receiptType,'loan_received');assert.equal(l.category,loans.CATEGORY);assert.equal(l.source,'Example Company');assert.equal(l.loanTerms.lenderKind,'company');
+  reset();const before=position(),r=borrow();assert.equal(r.status,200,JSON.stringify(r));const l=r.body.receipt;assert.equal(l.receiptType,'loan_received');assert.equal(l.category,loans.CATEGORY);assert.equal(l.source,'Example Company');assert.equal(l.loanTerms.lenderKind,'company');assert.equal(l.loanTerms.borrowerNature,'SANKI');
   const after=position();assert.equal(after.liabilities.loans,500000);assert.equal(after.liabilities.loanDetails[0].lender,l.source);assert.equal(after.assets.bankAndCash-before.assets.bankAndCash,500000);assert.equal(after.equity.recordedNetPosition,before.equity.recordedNetPosition);
   const ledger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account,from:day,to:'2098-12-31'}}).body;assert.equal(ledger.entries.filter(e=>e.id===l.id).length,1);assert.equal(ledger.entries.find(e=>e.id===l.id).editable,false);assert.equal(ledger.balance,500000);
   const legacy=summaryForPL(day,'2098-12-31');assert.equal(legacy.Shared.variable,0);

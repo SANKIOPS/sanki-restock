@@ -2749,7 +2749,8 @@
       host._bankContext={account:account,nature:nature};
       function currentBankRequest(){if(token!==bankStatementLoadGeneration)return false;return el('bs_table')===host&&el('bs_account')&&el('bs_account').value===account&&bankNature===nature&&(!selector||el('lg_account')===selector&&selector.value===account)&&(typeof selectedNature==='undefined'||selectedNature===ledgerNature);}
       if(!account){host.textContent='No bank account is available for this entity.';if(el('bs_history'))el('bs_history').innerHTML='';return Promise.resolve();}
-      if(!quiet){bankDraftId='';bankReconView=null;bankDraftOptions=[];el('bs_finalize').style.display='none';el('bs_discard').style.display='none';host.textContent='Loading saved reconciliation for '+account+'…';if(el('bs_history'))el('bs_history').innerHTML='';if(contextChanged&&el('bs_msg'))el('bs_msg').textContent='';}
+      var preserveLoadedDraft=!!selectedDraftId&&!!bankDraftId&&!contextChanged;
+      if(!quiet){if(!preserveLoadedDraft){bankDraftId='';bankReconView=null;bankDraftOptions=[];if(el('bs_history'))el('bs_history').innerHTML='';}el('bs_finalize').style.display='none';el('bs_discard').style.display='none';host.textContent='Loading saved reconciliation for '+account+'…';if(contextChanged&&el('bs_msg'))el('bs_msg').textContent='';}
       var url='/api/expenses/bank-statements?nature='+encodeURIComponent(nature)+'&account='+encodeURIComponent(account)+(selectedDraftId?'&draftId='+encodeURIComponent(selectedDraftId):'');
       host._bankLoad=request;
       if(request.controller&&typeof setTimeout==='function')request.timer=setTimeout(function(){request.controller.abort();},60000);

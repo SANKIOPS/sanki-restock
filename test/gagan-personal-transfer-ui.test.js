@@ -172,8 +172,9 @@ test('incoming transfer derives PERSONAL source and owner contribution from the 
   h.context.el('biFromAccount').value = 'PERSONAL|' + personal[0];
   h.context.syncBankIncomingSource();
   assert.equal(h.nodes.biClassification.value, 'owner_contribution');
-  assert.match(line('window.openBankIncoming=function'), /bankIncomingNature=bankRowNature\(row\)/);
-  assert.doesNotMatch(line('window.openBankIncoming=function'), /biFromNature/);
+  const openIncoming=section('    window.openBankIncoming=function(rowId){', "    el('biSourceKind').addEventListener");
+  assert.match(openIncoming, /bankIncomingNature=bankRowNature\(row\)/);
+  assert.doesNotMatch(openIncoming, /biFromNature/);
   assert.match(line("el('biSave').addEventListener"), /fromNature:ownerSource\?ownerSource\.nature:source\.nature/);
   assert.ok(!h.nodes.biFromNature, 'no separate source entity control is read');
 });
