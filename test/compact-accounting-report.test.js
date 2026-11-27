@@ -52,6 +52,8 @@ test('Sewak Park Hotel report separates operating result, personal use, funding 
   HOTELOTHER:{id:'HOTELOTHER',nature:'PERSONAL',reportingUnit:'SEWAK_PARK_HOTEL',status:'paid',date:'2026-10-05',amount:400,ledger:'Hotel supplies',payments:[{id:'P1',date:'2026-10-05',amount:400,account:'ICICI Bank 0993'}]},
   PERSONALUSE:{id:'PERSONALUSE',nature:'PERSONAL',reportingTreatment:'personal_use',status:'paid',date:'2026-10-06',amount:600,ledger:'Personal food',payments:[{id:'P1',date:'2026-10-06',amount:600,account:'ICICI Bank 0992'}]},
   PERSONALUSESOURCE:{id:'PERSONALUSESOURCE',nature:'PERSONAL',sourceReportingUnit:'SEWAK_PARK_HOTEL',status:'paid',date:'2026-10-06',amount:400,ledger:'Personal travel',payments:[{id:'P1',date:'2026-10-06',amount:400,account:'ICICI Bank 0992'}]},
+  PENDINGPERSONALUSE:{id:'PENDINGPERSONALUSE',nature:'PERSONAL',reportingTreatment:'personal_use',status:'paid',date:'2026-10-06',amount:160,ledger:'Personal food',payments:[{id:'P1',date:'2026-10-06',amount:160,account:'ICICI Bank 0992',bankReconciliationDraft:'PENDING'}]},
+  PENDINGUNCLASSIFIED:{id:'PENDINGUNCLASSIFIED',nature:'PERSONAL',status:'paid',date:'2026-10-06',amount:170,ledger:'Needs review',payments:[{id:'P1',date:'2026-10-06',amount:170,account:'ICICI Bank 0992',bankReconciliationDraft:'PENDING'}]},
   UNCLASSIFIEDOUT:{id:'UNCLASSIFIEDOUT',nature:'PERSONAL',status:'paid',date:'2026-10-06',amount:250,ledger:'Needs review',payments:[{id:'P1',date:'2026-10-06',amount:250,account:'ICICI Bank 0992'}]},
   PERSONALOTHER:{id:'PERSONALOTHER',nature:'PERSONAL',status:'paid',date:'2026-10-06',amount:500,ledger:'Personal food',payments:[{id:'P1',date:'2026-10-06',amount:500,account:'ICICI Bank 0993'}]},
   CARD:{id:'CARD',nature:'PERSONAL',status:'paid',date:'2026-10-07',amount:2000,ledger:'Credit Card repayment',payments:[{id:'P1',date:'2026-10-07',amount:2000,account:'ICICI Bank 0992'}]}
@@ -69,6 +71,8 @@ test('Sewak Park Hotel report separates operating result, personal use, funding 
  assert.equal(r.resultLabel,'Cash operating surplus');assert.deepEqual(r.accounts.map(x=>x.name),['ICICI Bank 0992']);
  assert.deepEqual(r.transactions.filter(x=>x.kind==='income').map(x=>x.id).sort(),['HOTEL-EXPLICIT','HOTEL-LEGACY-SOURCE','HOTEL-LEGACY-TYPE']);
  assert.equal(r.personalUse.length,3);assert.equal(r.fundsIntroduced.length,1);assert.equal(r.hotelInternalTransfers.length,1);assert.equal(r.unclassified0992Movements.length,3);
+ assert.equal(r.personalUse.some(x=>String(x.id).startsWith('PENDINGPERSONALUSE/')),false,'unfinished reconciliation payments cannot become final personal use');
+ assert.equal(r.unclassified0992Movements.some(x=>String(x.id).startsWith('PENDINGUNCLASSIFIED/')),false,'unfinished reconciliation payments cannot enter the final review total');
  assert.match(r.warnings.join('\n'),/3 ICICI Bank 0992 movement/);assert.equal(JSON.stringify(src),before);
 
  const personal=build(src,options);

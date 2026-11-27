@@ -12,6 +12,7 @@ const activeTransfer=r=>r&&!r.accountingExcluded&&!r.deletedAt&&!r.voided&&!r.vo
 const reconciliationDraftId=r=>String(r&&(
   r.bankReconciliationDraft||r.reconciliationDraft||r.bankReconciliationEvidence&&r.bankReconciliationEvidence.draftId
 )||'');
+const finalizedMovement=(s,r)=>active(r)&&(!reconciliationDraftId(r)||!s.bankReconciliationDrafts?.[reconciliationDraftId(r)]);
 const finalizedTransfer=(s,r)=>activeTransfer(r)&&(!reconciliationDraftId(r)||!s.bankReconciliationDrafts?.[reconciliationDraftId(r)]);
 const inRange=(r,from,to)=>r.date>=from&&r.date<=to;
 const incomeTypes=new Set(['rental_income','hotel_income','sewak_park_hotel_income','other_income','bank_interest','bank_interest_received','asset_sale','product_sale','rental_dealer_commission','rental_documentation_fee','other']);
@@ -61,7 +62,7 @@ function buildHotel(sources,{entity,from,to,accounts=[]}){
   // that treatment is selected explicitly. Untagged 0992 debits remain in the
   // review queue; the bank account alone never determines their accounting.
   for(const expense of list(s.expenses).filter(r=>active(r)&&isPersonal(r)&&!hotel.isHotelExpense(r)&&!balanceCost.test(r.ledger||r.category||''))){
-    for(const payment of list(expense.payments).filter(p=>active(p)&&!p.provisional&&inRange(p,from,to)&&hotel.isHotelAccount(p.account||expense.account))){
+    for(const payment of list(expense.payments).filter(p=>finalizedMovement(s,p)&&!p.provisional&&inRange(p,from,to)&&hotel.isHotelAccount(p.account||expense.account))){
       const row=hotelMovement(hotel.isHotelPersonalUse(expense)?'personal_use':'unclassified',{...expense,id:expense.id+'/'+payment.id,date:payment.date,account:payment.account||expense.account},payment.amount,{direction:'out',sourceType:'expense'});
       if(hotel.isHotelPersonalUse(expense))personalUse.push(row);else unclassified0992Movements.push(row);
     }
@@ -84,7 +85,7 @@ function buildHotel(sources,{entity,from,to,accounts=[]}){
   if(pendingHotelTransfers.length)warnings.push(pendingHotelTransfers.length+' Sewak Park transfer(s) from an unfinished bank reconciliation were excluded until finalization.');
 
   const usage={};
-  for(const expense of list(s.expenses).filter(taggedExpense))for(const payment of list(expense.payments).filter(p=>active(p)&&!p.provisional&&inRange(p,from,to))){const account=payment.account||expense.account;if(account)usage[account]=money((usage[account]||0)+Number(payment.amount||0));}
+  for(const expense of list(s.expenses).filter(taggedExpense))for(const payment of list(expense.payments).filter(p=>finalizedMovement(s,p)&&!p.provisional&&inRange(p,from,to))){const account=payment.account||expense.account;if(account)usage[account]=money((usage[account]||0)+Number(payment.amount||0));}
   if(unclassified0992Movements.length)warnings.push(unclassified0992Movements.length+' ICICI Bank 0992 movement(s) still need Hotel / Personal / Transfer classification. They are excluded from hotel income and expenses.');
   const personalUseTotal=money(personalUse.reduce((sum,row)=>sum+Number(row.amount||0),0));
   const fundsIntroducedTotal=money(fundsIntroduced.reduce((sum,row)=>sum+Number(row.amount||0),0));
