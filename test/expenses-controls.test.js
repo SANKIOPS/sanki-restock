@@ -4109,6 +4109,23 @@ test('later reconciliation periods use the finalized cutoff and do not re-reconc
   assert.equal(view.rows.find(x=>x.id==='bank-1').status,'matched');
 });
 
+test('a reversal wholly inside finalized overlap cannot create a hidden remaining entry',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),account='Overlap Reversal Test Bank',id='BRD-FINALIZED-REVERSAL-OVERLAP';
+  const finalizedReversal={date:'2026-09-03',description:'BANK REVERSAL',reference:'REV-OLD',debit:0,credit:100,balance:1000,reversal:true};
+  stored.accounts=Array.from(new Set([].concat(stored.accounts||[],account)));
+  stored.openingBalances=stored.openingBalances||{};stored.openingBalances[account]=900;
+  stored.adjustments=stored.adjustments||[];stored.adjustments.push({id:'ADJ-REV-NEXT',nature:'SANKI',account,date:'2026-09-04',amount:-50,note:'New period debit'});
+  stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={reconciledThrough:'2026-09-03',transactions:{old:{...finalizedReversal,id:'BTX-REV-OLD'}},imports:[],lastReconciliation:{through:'2026-09-03',closingBalance:1000}};
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[id]={id,nature:'SANKI',account,transactions:[finalizedReversal,{date:'2026-09-04',description:'New debit',reference:'NEW',debit:50,credit:0,balance:950}],summary:{from:'2026-09-03',to:'2026-09-04',openingBalance:900,closingBalance:950,totalDebits:50,totalCredits:100,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',createdAt:new Date().toISOString()};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId:id,account}}).body;
+  assert.equal(view.rows.find(x=>x.id==='bank-0').status,'already_reconciled');
+  assert.equal(view.rows.find(x=>x.id==='bank-0').reversalReviewRequired,false);
+  assert.equal(view.rows.find(x=>x.id==='bank-1').status,'matched');
+  assert.equal(view.transactionUnresolved,0);assert.equal(view.reconciliationConflictCount,0);assert.deepEqual(view.reconciliationConflicts,[]);
+  assert.equal(view.unresolved,0);assert.equal(view.balanceDifference,0);assert.equal(view.canFinalize,true);
+});
+
 test('an already-finalized cutoff deposit is not added to the next reconciliation closing balance again',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),account='Cutoff Overlap Test Bank',id='BRD-INDUS-CUTOFF-OVERLAP';
   stored.transfers=(stored.transfers||[]).filter(x=>x.id!=='TR-CUTOFF-7000');stored.transfers.push({id:'TR-CUTOFF-7000',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:account,amount:7000,date:'2026-10-05',bankReference:'627816014112',createdAt:'2026-10-06T07:00:00.000Z'});
